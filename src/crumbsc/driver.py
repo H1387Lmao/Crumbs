@@ -39,11 +39,12 @@ def make_plan(mods):
     return plan
 
 
-def compile_to_c(path, include_dirs=(), color=None, quiet_warnings=False, strict=False, entry="main", gc=False):
+def compile_to_c(path, include_dirs=(), color=None, quiet_warnings=False, strict=False, entry="main", gc=True,
+                 nostd=False, overflow_panic=False):
     """Returns (c_source or None, diagnostics, link plan)."""
     d = Diagnostics()
     try:
-        mods = Loader(d, include_dirs).load_entry(path)
+        mods = Loader(d, include_dirs, nostd=nostd).load_entry(path)
     except CompileError as e:
         print(f"error: {e}", file=sys.stderr)
         return None, d, LinkPlan()
@@ -51,10 +52,10 @@ def compile_to_c(path, include_dirs=(), color=None, quiet_warnings=False, strict
     if d.has_errors:
         return None, d, plan
     externs = {it.name for m in mods if m.is_std for it in m.ast.items if it.kind == "Fn" and it.extern}
-    ck = Checker(mods, d, C_RESERVED | externs, strict=strict, entry_name=entry).run()
+    ck = Checker(mods, d, C_RESERVED | externs, strict=strict, entry_name=entry, nostd=nostd).run()
     if d.has_errors:
         return None, d, plan
-    cg = CodeGen(ck, gc=gc)
+    cg = CodeGen(ck, gc=gc, nostd=nostd, overflow_panic=overflow_panic)
     return cg.generate(mods[-1].src.path), d, plan
 
 
@@ -125,7 +126,8 @@ def build(args, run_after=False):
     if run_after and not args.entry:
         print("error: `run` needs an entry point (this build has --entry=)", file=sys.stderr)
         return 1
-    c_src, d, plan = compile_to_c(args.file, args.include, strict=args.strict_casts, entry=args.entry, gc=args.gc)
+    c_src, d, plan = compile_to_c(args.file, args.include, strict=args.strict_casts, entry=args.entry, gc=args.gc,
+                                 nostd=args.no_stdruntime, overflow_panic=args.overflow_panic)
     report(d, args.no_warn)
     if c_src is None:
         return 1
@@ -185,13 +187,18 @@ def main(argv=None):
                        help="treat implicit-conversion and signedness warnings as errors")
         p.add_argument("--entry", default="main", metavar="NAME",
                        help="entry function (default main); `--entry=` builds an object file with no entry point")
-        p.add_argument("--gc", action="store_true",
-                       help="use the conservative garbage collector for alloc()/String (free() stays optional)")
+        p.add_argument("--gc", action=argparse.BooleanOptionalAction, default=True,
+                       help="conservative garbage collector for alloc()/String/List (default: on); --no-gc uses plain malloc "
+                            "and you must free() everything")
+        p.add_argument("--no-stdruntime", action="store_true",
+                       help="freestanding build: only the integer/bounds helpers, no libc (no print, String, alloc, std.* imports)")
+        p.add_argument("--overflow-panic", action="store_true",
+                       help="panic on integer overflow in + - * and negation (default: wrap around like C)")
 
     def cc_opts(p):
         p.add_argument("-O", dest="opt", default="2", choices=["0", "1", "2", "3", "s"], help="C optimization level (default 2)")
         p.add_argument("--unchecked", action="store_true",
-                       help="disable overflow/bounds/div-by-zero checks for maximum speed")
+                       help="remove bounds, null, division and conversion checks (and overflow panics) for maximum speed")
         p.add_argument("--cc", help="C compiler to use (default: $CC, gcc, clang)")
         p.add_argument("--cflag", action="append", help="extra flag passed to the C compiler")
         p.add_argument("--keep-c", metavar="PATH", help="also write the generated C to PATH")
@@ -229,11 +236,13 @@ def main(argv=None):
 
 def _dispatch(a):
     if a.cmd == "check":
-        c, d, _ = compile_to_c(a.file, a.include, strict=a.strict_casts, entry=a.entry, gc=a.gc)
+        c, d, _ = compile_to_c(a.file, a.include, strict=a.strict_casts, entry=a.entry, gc=a.gc,
+                                 nostd=a.no_stdruntime, overflow_panic=a.overflow_panic)
         report(d, a.no_warn)
         return 0 if c is not None else 1
     if a.cmd == "emit":
-        c, d, _ = compile_to_c(a.file, a.include, strict=a.strict_casts, entry=a.entry, gc=a.gc)
+        c, d, _ = compile_to_c(a.file, a.include, strict=a.strict_casts, entry=a.entry, gc=a.gc,
+                                 nostd=a.no_stdruntime, overflow_panic=a.overflow_panic)
         report(d, a.no_warn)
         if c is None:
             return 1

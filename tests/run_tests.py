@@ -76,7 +76,8 @@ def test_err(path, extra=()):
     expect = []
     for f in import_closure(path):
         expect += markers(f)
-    r = run(["check", path, *extra])
+    fl = re.match(r"//\s*FLAGS:\s*(.*)", open(path).readline())
+    r = run(["check", path, *extra, *(fl.group(1).split() if fl else [])])
     got = [(k, os.path.basename(f), int(ln), msg) for k, msg, f, ln in DIAG.findall(r.stderr)]
     problems = []
     used = set()
@@ -102,10 +103,10 @@ def test_err(path, extra=()):
 
 def test_panic(path):
     name = os.path.relpath(path, HERE)
-    first = open(path).readline()
-    m = re.match(r"//\s*PANIC:\s*(.*?)\s*$", first)
-    want = m.group(1)
-    r = run(["run", path])
+    head = open(path).read().split("\n")[:3]
+    want = next(m.group(1) for m in (re.match(r"//\s*PANIC:\s*(.*?)\s*$", l) for l in head) if m)
+    flags = next((m.group(1).split() for m in (re.match(r"//\s*FLAGS:\s*(.*)", l) for l in head) if m), [])
+    r = run(["run", path, *flags])
     code = 1 if want.startswith("error:") else 101
     ok = r.returncode == code and want in r.stderr
     report(name, ok, f"exit={r.returncode} stderr={r.stderr!r} (wanted {want!r})")
@@ -147,6 +148,11 @@ def main():
     for p in sorted(glob.glob(os.path.join(HERE, "panic", "*.cb"))):
         if sel(p):
             test_panic(p)
+    if not only or "cookie" in " ".join(only):
+        print("== cookie build tool")
+        sys.path.insert(0, HERE)
+        import test_cookie
+        test_cookie.run_all(lambda name, ok, detail="": report(name, ok, detail))
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
 

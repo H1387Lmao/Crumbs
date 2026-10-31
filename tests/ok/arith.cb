@@ -3,9 +3,9 @@ fn main() {
     let b: i32 = -3;
     println(a / b, " ", a % b, " ", -a / 2, " ", -a % 4);
     let x: u8 = 200;
-    println(x +% 100, " ", x -% 201, " ", x *% 2);
+    println(x + 100, " ", x - 201, " ", x * 2);
     let y: i32 = 2147483647;
-    println(y +% 1, " ", (y as i64) + 1);
+    println(y + 1, " ", (y as i64) + 1);
     println(1 << 4, " ", 256 >> 3, " ", -16 >> 2, " ", 5 & 3, " ", 5 | 3, " ", 5 ^ 3, " ", ~5);
     let u: u8 = 0b1100;
     println(~u, " ", u << 2, " ", u >> 2);

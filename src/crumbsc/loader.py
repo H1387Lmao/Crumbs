@@ -31,8 +31,9 @@ class Module:
 
 
 class Loader:
-    def __init__(self, diags, include_dirs=()):
+    def __init__(self, diags, include_dirs=(), nostd=False):
         self.d = diags
+        self.nostd = nostd
         self.include_dirs = list(include_dirs)
         self.by_path = {}
         self.order = []
@@ -51,6 +52,9 @@ class Loader:
     def load_entry(self, path):
         path = os.path.abspath(path)
         self.root = os.path.dirname(path)
+        if not self.nostd:          # the prelude: `List` and the `String` / `str` methods need no import
+            for name in ("list", "str"):
+                self._load(os.path.join(STD_DIR, name + ".cb"), "std." + name, [], None)
         stem = os.path.splitext(os.path.basename(path))[0]
         m = self._load(path, stem, [], display=None)
         m.is_entry = True
@@ -136,6 +140,11 @@ class Loader:
         dotted = ".".join(it.path)
         roots = []
         if it.path[0] == "std":
+            if self.nostd and dotted != "std.mem":
+                self.d.error(it.span, f"`{dotted}` needs the standard runtime, which `--no-stdruntime` removes",
+                             label="not available in this build",
+                             help="only `std.mem` works without it; drop --no-stdruntime or bind the C functions you need with `extern fn`")
+                return None
             roots.append(STD_DIR)
             rel = os.path.join(*it.path[1:]) + ".cb" if len(it.path) > 1 else rel
         else:

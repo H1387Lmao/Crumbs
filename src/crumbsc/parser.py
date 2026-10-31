@@ -25,11 +25,11 @@ BIN_PREC = {
     "||": 2, "&&": 3,
     "==": 4, "!=": 4, "<": 4, ">": 4, "<=": 4, ">=": 4,
     "|": 5, "^": 6, "&": 7, "<<": 8, ">>": 8,
-    "+": 9, "-": 9, "+%": 9, "-%": 9,
+    "+": 9, "-": 9,
     "*": 10, "/": 10, "%": 10, "*%": 10,
 }
 CMP_OPS = {"==", "!=", "<", ">", "<=", ">="}
-ASSIGN_OPS = {"=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "+%=", "-%=", "*%="}
+ASSIGN_OPS = {"=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="}
 ITEM_START = {"fn", "struct", "enum", "const", "import", "pub", "extern", "error", "export"}
 TYPE_ARG_BUILTINS = {"alloc"}
 TYPE_ONLY_BUILTINS = {"size_of"}
@@ -44,6 +44,7 @@ class Parser:
         self.p = 0
         self.no_struct = False
         self.undo = None
+        self.impl_ty = None          # type node of the `impl` block being parsed (for `self` / `Self`)
 
     # ------------------------------------------------------------ helpers
     @property
@@ -256,6 +257,28 @@ class Parser:
                  extern=False, tparams=tparams, full_span=self.sp(start), export=False, cname_str=None,
                  variadic=False, drop_for=ty.path[0])
 
+    def parse_impl(self):
+        start = self.advance()                      # `impl`
+        tparams = self.parse_tparams()
+        ty = self.parse_type()
+        if ty.kind != "TName":
+            self.fail("methods can only be declared for a named type: `impl Point { ... }`", tok=start,
+                      label="expected a struct, enum or built-in type name")
+        self.expect_op("{", "after the type of an `impl` block")
+        saved, self.impl_ty = self.impl_ty, ty
+        fns = []
+        while not self.is_op("}"):
+            if self.tok.kind == "eof":
+                self.fail("unclosed `impl` block", tok=start, label="this block is never closed")
+            pub = bool(self.accept_kw("pub"))
+            if not self.is_kw("fn"):
+                self.fail(f"only functions can be declared inside `impl`, found {self.describe(self.tok)}",
+                          label="expected `fn`")
+            fns.append(self.parse_fn(pub, extern=False))
+        self.expect_op("}")
+        self.impl_ty = saved
+        return N("Impl", self.sp(start), tparams=tparams, tyn=ty, fns=fns)
+
     def parse_item(self):
         start = self.tok
         pub = bool(self.accept_kw("pub"))
@@ -264,8 +287,12 @@ class Parser:
             return self.parse_directive()
         if t.kind == "ident" and t.val == "drop" and (self.peek().kind == "ident" or self.peek().kind == "op" and self.peek().val == "<"):
             return self.parse_drop(pub)
+        if t.kind == "ident" and t.val == "impl" and (self.peek().kind == "ident" or self.peek().kind == "op" and self.peek().val == "<"):
+            if pub:
+                self.fail("`pub` is not allowed on `impl` blocks; mark the functions inside as `pub`", tok=start)
+            return self.parse_impl()
         if t.kind != "kw":
-            self.fail(f"expected an item (`fn`, `struct`, `enum`, `const`, `error`, `import`), found {self.describe(t)}",
+            self.fail(f"expected an item (`fn`, `struct`, `enum`, `const`, `error`, `import`, `impl`), found {self.describe(t)}",
                       label="not a valid top-level item")
         v = t.val
         if v == "import":
@@ -326,6 +353,14 @@ class Parser:
                 break
             is_mut = bool(self.accept_kw("mut"))
             nm = self.expect_ident("parameter name")
+            if nm.val == "self" and not self.is_op(":"):
+                if self.impl_ty is None or params:
+                    self.fail("`self` can only be the first parameter of a function inside an `impl` block", tok=nm)
+                params.append(N("Param", nm.span, name="self", tyn=N("TPtr", nm.span, inner=self.impl_ty),
+                                name_span=nm.span, mut=False, self_param=True, self_mut=is_mut))
+                if not self.accept_op(","):
+                    break
+                continue
             self.expect_op(":", "after parameter name")
             ty = self.parse_type()
             params.append(N("Param", nm.span.join(self.prev.span), name=nm.val, tyn=ty, name_span=nm.span, mut=is_mut))
@@ -460,6 +495,8 @@ class Parser:
             if self.is_op("<") and path[-1] not in PRIMS and path[-1] != "error":
                 self.advance()
                 args = self.parse_type_args()
+            if path == ["Self"] and not args and self.impl_ty is not None:
+                return self.impl_ty
             return N("TName", self.sp(t), path=path, args=args)
         self.fail(f"expected a type, found {self.describe(t)}", label="expected a type")
 
@@ -842,6 +879,11 @@ class Parser:
             return N("Bool", t.span, value=(t.val == "true"))
         if k == "ident":
             self.advance()
+            if t.val == "Self" and self.impl_ty is not None:      # `Self.new(..)` inside an impl block
+                node = N("Ident", t.span, name=self.impl_ty.path[0])
+                for part in self.impl_ty.path[1:]:
+                    node = N("Field", t.span, obj=node, name=part, name_span=t.span)
+                return node
             return N("Ident", t.span, name=t.val)
         if k == "op" and t.val == "(":
             self.advance()

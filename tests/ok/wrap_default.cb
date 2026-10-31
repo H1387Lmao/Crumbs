@@ -1,0 +1,17 @@
+// Plain + - * and -x wrap around (two's complement) unless --overflow-panic is given.
+fn main() {
+    let mut a: i32 = 2147483647;
+    a += 1;
+    println(a);
+    let mut b: u8 = 250;
+    b += 10;
+    println(b);
+    let c: u8 = 3;
+    println(c - 5, " ", (c as i32) - 5);
+    let mut d: i64 = -9223372036854775807 - 1;
+    println(-d, " ", d / -1, " ", d % -1);
+    d *= 2;
+    println(d);
+    let e: i32 = 65536;
+    println(e * e);
+}

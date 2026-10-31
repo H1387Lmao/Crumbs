@@ -1,2 +1,3 @@
+// FLAGS: --overflow-panic
 // PANIC: integer overflow in negation
 fn main() { let x: i8 = -128; let y = -x; println(y); }

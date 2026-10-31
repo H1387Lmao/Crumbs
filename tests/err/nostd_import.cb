@@ -1,0 +1,3 @@
+// FLAGS: --no-stdruntime
+import std.list; // ERROR: needs the standard runtime
+fn main() {}

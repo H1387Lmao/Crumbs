@@ -1,3 +1,4 @@
+// FLAGS: --overflow-panic
 // PANIC: integer overflow in multiplication
 fn f(a: i64) -> i64 { return a * a; }
 fn main() { println(f(5000000000)); }

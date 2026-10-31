@@ -13,7 +13,7 @@ pub fn next(r: *Rng) -> u64 {
     x = x ^ (x << 25);
     x = x ^ (x >> 27);
     r.state = x;
-    return x *% 2685821657736338717;
+    return x * 2685821657736338717;
 }
 
 // uniform-ish integer in [0, n)

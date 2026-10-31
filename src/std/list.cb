@@ -178,3 +178,31 @@ pub fn find_by<T>(l: *List<T>, pred: fn(*T) -> bool) -> i64! {
     }
     throw NotFound;
 }
+
+// ---- methods: `xs.push(1)`, `List.new()` -- no import needed --------------------------------
+// `self` borrows the list; the ones that change it are declared `mut self`, so the variable
+// must be declared `let mut`.
+impl<T> List<T> {
+    pub fn new() -> List<T> { return new<T>(); }
+    pub fn with_capacity(n: i64) -> List<T> { return with_capacity<T>(n); }
+    pub fn from(xs: []T) -> List<T> { return from_slice<T>(xs); }
+
+    pub fn push(mut self, v: T) { push(self, v); }
+    pub fn pop(mut self) -> T! { return try pop(self); }
+    pub fn insert(mut self, i: i64, v: T) { insert(self, i, v); }
+    pub fn remove(mut self, i: i64) -> T { return remove(self, i); }
+    pub fn swap_remove(mut self, i: i64) -> T { return swap_remove(self, i); }
+    pub fn set(mut self, i: i64, v: T) { set(self, i, v); }
+    pub fn extend(mut self, xs: []T) { extend(self, xs); }
+    pub fn clear(mut self) { clear(self); }
+    pub fn release(mut self) { release(self); }
+    pub fn reverse(mut self) { reverse(self); }
+    pub fn sort_by(mut self, cmp: fn(*T, *T) -> i32) { sort_by(self, cmp); }
+
+    pub fn at(self, i: i64) -> *T { return at(self, i); }
+    pub fn get(self, i: i64) -> T { return get(self, i); }
+    pub fn view(self) -> []T { return view(self); }
+    pub fn is_empty(self) -> bool { return self.len == 0; }
+    pub fn for_each(self, f: fn(*T)) { for_each(self, f); }
+    pub fn find_by(self, pred: fn(*T) -> bool) -> i64! { return try find_by(self, pred); }
+}

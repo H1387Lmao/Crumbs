@@ -155,3 +155,58 @@ pub fn split(s: str, sep: str) -> list.List<str> {
     list.push(&parts, s[start..]);
     return parts;
 }
+
+// ---- methods: `s.trim()`, `String.new("hi")` -- no import needed -------------------------------
+// Methods on `str` also work on a `String` (it is borrowed as a view). A few `String` methods of
+// the same name return a new `String` instead, so `a = a.strip();` works on an owned string.
+impl str {
+    pub fn join(parts: []str, sep: str) -> String { return join(parts, sep); }
+
+    pub fn starts_with(self: str, prefix: str) -> bool { return starts_with(self, prefix); }
+    pub fn ends_with(self: str, suffix: str) -> bool { return ends_with(self, suffix); }
+    pub fn find(self: str, needle: str) -> i64 { return find(self, needle); }
+    pub fn rfind(self: str, needle: str) -> i64 { return rfind(self, needle); }
+    pub fn contains(self: str, needle: str) -> bool { return contains(self, needle); }
+    pub fn count_byte(self: str, b: u8) -> i64 { return count_byte(self, b); }
+    pub fn compare(self: str, other: str) -> i32 { return compare(self, other); }
+    pub fn eq_ignore_case(self: str, other: str) -> bool { return eq_ignore_case(self, other); }
+
+    // views into the original text
+    pub fn strip(self: str) -> str { return trim(self); }
+    pub fn trim(self: str) -> str { return trim(self); }
+    pub fn lstrip(self: str) -> str { return trim_start(self); }
+    pub fn rstrip(self: str) -> str { return trim_end(self); }
+
+    // new owned text
+    pub fn upper(self: str) -> String { return to_upper(self); }
+    pub fn lower(self: str) -> String { return to_lower(self); }
+    pub fn reverse(self: str) -> String { return reverse(self); }
+    pub fn repeat(self: str, n: i64) -> String { return repeat(self, n); }
+    pub fn replace(self: str, from: str, to: str) -> String { return replace(self, from, to); }
+    pub fn to_string(self: str) -> String { return string_from(self); }
+    pub fn split(self: str, sep: str) -> list.List<str> { return split(self, sep); }
+}
+
+impl String {
+    pub fn new(s: str) -> String { return string_from(s); }
+    pub fn empty() -> String { return string_new(); }
+    pub fn from(s: str) -> String { return string_from(s); }
+    pub fn with_capacity(n: i64) -> String {
+        let mut s = string_new();
+        let pad = repeat(" ", n);
+        s += pad;
+        free(pad);
+        string_clear(&s);
+        return s;
+    }
+
+    pub fn push(mut self, c: u8) { *self += c; }
+    pub fn append(mut self, s: str) { *self += s; }
+    pub fn clear(mut self) { string_clear(self); }
+
+    // these return a new String (the original is untouched)
+    pub fn strip(self) -> String { return string_from(trim(*self)); }
+    pub fn trim(self) -> String { return string_from(trim(*self)); }
+    pub fn lstrip(self) -> String { return string_from(trim_start(*self)); }
+    pub fn rstrip(self) -> String { return string_from(trim_end(*self)); }
+}

@@ -1,0 +1,63 @@
+// Methods and static functions declared in `impl` blocks; String and List work without imports.
+struct Point { x: i32, y: i32 }
+
+impl Point {
+    pub fn new(x: i32, y: i32) -> Point { return Point { x: x, y: y }; }
+    pub fn origin() -> Point { return Self.new(0, 0); }
+    pub fn sum(self) -> i32 { return self.x + self.y; }
+    pub fn shift(mut self, d: i32) { self.x += d; self.y += d; }
+    pub fn plus(self, o: Point) -> Point { return Point.new(self.x + o.x, self.y + o.y); }
+}
+
+struct Pair<T> { a: T, b: T }
+
+impl<T> Pair<T> {
+    pub fn of(a: T, b: T) -> Pair<T> { return Pair { a: a, b: b }; }
+    pub fn first(self) -> T { return self.a; }
+    pub fn swap(mut self) { let t = self.a; self.a = self.b; self.b = t; }
+}
+
+struct Handler { f: fn(i32) -> i32 }
+impl Handler { pub fn f(self) -> i32 { return -1; } }   // the field wins over a method of the same name
+
+fn twice(x: i32) -> i32 { return x * 2; }
+
+fn main() {
+    let mut p = Point.new(3, 4);
+    p.shift(1);
+    println(p.sum(), " ", p.plus(Point.origin()).x, " ", (&p).sum());
+
+    let mut pr = Pair.of(1, 2);
+    pr.swap();
+    println(pr.first(), " ", Pair.of("a", "b").a);
+
+    let h = Handler { f: twice };
+    println(h.f(21));
+
+    // String: constructors, methods that return a new String, and every `str` function
+    let mut a = String.new("  Hello  ");
+    a = a.strip();
+    println("[", a, "] ", a.len, " ", a.starts_with("He"), " ", a.find("l"), " ", a.contains("xyz"));
+    a.push('!');
+    a.append(" ok");
+    println(a, " ", a.upper(), " ", a.replace("l", "L"), " ", a.repeat(2).len);
+    let e = String.empty();
+    println(e.len, " ", String.with_capacity(32).cap >= 32);
+    println("  padded ".trim() + "|", " ", "abc".reverse(), " ", "x".to_string() + "y");
+
+    // List
+    let mut xs: List<str> = List.new();
+    xs.push("Hi");
+    xs.push("there");
+    xs.push("you");
+    println(xs.len, " ", xs.get(1), " ", xs.at(0).len, " ", xs.is_empty());
+    println(str.join(xs.view(), "+"), " ", xs.remove(0), " ", xs.len);
+    let mut ns: List<i32> = List.new();
+    for i in 0..5 { ns.push(i * i); }
+    ns.reverse();
+    println(ns.pop() catch -1, " ", ns.pop() catch -1, " ", ns.len);
+    let words = "one,two,three".split(",");
+    println(words.len, " ", words.get(2));
+    let mut empty: List<i32> = List.new();
+    println(empty.pop() catch -7);
+}

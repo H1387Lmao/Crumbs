@@ -2,12 +2,14 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#ifndef CB_NOSTD            /* --no-stdruntime: only the freestanding headers above are used */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #ifdef CB_GC
 #include <setjmp.h>
+#endif
 #endif
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -21,6 +23,13 @@
 
 typedef struct { const uint8_t *ptr; int64_t len; } cb_str;
 
+#ifdef CB_NOSTD
+/* no libc: a panic just traps (there is nothing to print with) */
+CB_COLD static void cb_panic(const char *loc, const char *msg) { (void)loc; (void)msg; __builtin_trap(); }
+CB_COLD static void cb_panic_str(const char *loc, cb_str m) { (void)loc; (void)m; __builtin_trap(); }
+CB_COLD static void cb_panic_idx(const char *loc, int64_t i, int64_t n) { (void)loc; (void)i; (void)n; __builtin_trap(); }
+CB_COLD static void cb_panic_rng(const char *loc, int64_t lo, int64_t hi, int64_t n) { (void)loc; (void)lo; (void)hi; (void)n; __builtin_trap(); }
+#else
 CB_COLD static void cb_panic(const char *loc, const char *msg) {
     fflush(stdout);
     fprintf(stderr, "panic: %s\n  at %s\n", msg, loc);
@@ -47,6 +56,8 @@ CB_COLD static void cb_panic_rng(const char *loc, int64_t lo, int64_t hi, int64_
     exit(101);
 }
 
+#endif
+
 #ifdef CB_UNCHECKED
 static inline int64_t cb_idx(int64_t i, int64_t n, const char *loc) { (void)n; (void)loc; return i; }
 static inline void cb_chk_rng(int64_t lo, int64_t hi, int64_t n, const char *loc) { (void)lo; (void)hi; (void)n; (void)loc; }
@@ -60,24 +71,23 @@ static inline void cb_chk_rng(int64_t lo, int64_t hi, int64_t n, const char *loc
 }
 #endif
 
-/* checked integer arithmetic */
-#ifdef CB_UNCHECKED
-#define CB_CHK_ADD(T) r = (T)(a + b);
-#define CB_CHK_SUB(T) r = (T)(a - b);
-#define CB_CHK_MUL(T) r = (T)(a * b);
+/* integer arithmetic: wraps (two's complement) by default; --overflow-panic makes overflow a panic */
+#if defined(CB_OVERFLOW_PANIC) && !defined(CB_UNCHECKED)
+#define CB_OVF 1
+#define CB_CHK_ADD(T, UT) if (CB_UNLIKELY(__builtin_add_overflow(a, b, &r))) cb_panic(l, "integer overflow in addition");
+#define CB_CHK_SUB(T, UT) if (CB_UNLIKELY(__builtin_sub_overflow(a, b, &r))) cb_panic(l, "integer overflow in subtraction");
+#define CB_CHK_MUL(T, UT) if (CB_UNLIKELY(__builtin_mul_overflow(a, b, &r))) cb_panic(l, "integer overflow in multiplication");
 #else
-#define CB_CHK_ADD(T) if (CB_UNLIKELY(__builtin_add_overflow(a, b, &r))) cb_panic(l, "integer overflow in addition");
-#define CB_CHK_SUB(T) if (CB_UNLIKELY(__builtin_sub_overflow(a, b, &r))) cb_panic(l, "integer overflow in subtraction");
-#define CB_CHK_MUL(T) if (CB_UNLIKELY(__builtin_mul_overflow(a, b, &r))) cb_panic(l, "integer overflow in multiplication");
+#define CB_OVF 0
+#define CB_CHK_ADD(T, UT) r = (T)(UT)((uint64_t)(UT)a + (uint64_t)(UT)b);
+#define CB_CHK_SUB(T, UT) r = (T)(UT)((uint64_t)(UT)a - (uint64_t)(UT)b);
+#define CB_CHK_MUL(T, UT) r = (T)(UT)((uint64_t)(UT)a * (uint64_t)(UT)b);
 #endif
 
 #define CB_INT_COMMON(N, T, UT, BITS) \
-static inline T cb_add_##N(T a, T b, const char *l) { T r; CB_CHK_ADD(T) return r; } \
-static inline T cb_sub_##N(T a, T b, const char *l) { T r; CB_CHK_SUB(T) return r; } \
-static inline T cb_mul_##N(T a, T b, const char *l) { T r; CB_CHK_MUL(T) return r; } \
-static inline T cb_wadd_##N(T a, T b) { return (T)(UT)((uint64_t)(UT)a + (uint64_t)(UT)b); } \
-static inline T cb_wsub_##N(T a, T b) { return (T)(UT)((uint64_t)(UT)a - (uint64_t)(UT)b); } \
-static inline T cb_wmul_##N(T a, T b) { return (T)(UT)((uint64_t)(UT)a * (uint64_t)(UT)b); } \
+static inline T cb_add_##N(T a, T b, const char *l) { T r; CB_CHK_ADD(T, UT) return r; } \
+static inline T cb_sub_##N(T a, T b, const char *l) { T r; CB_CHK_SUB(T, UT) return r; } \
+static inline T cb_mul_##N(T a, T b, const char *l) { T r; CB_CHK_MUL(T, UT) return r; } \
 static inline T cb_shl_##N(T a, int64_t n, const char *l) { \
     if (CB_UNLIKELY((uint64_t)n >= (uint64_t)(BITS))) cb_panic(l, "shift amount out of range"); \
     return (T)(UT)((uint64_t)(UT)a << n); } \
@@ -95,15 +105,19 @@ static inline T cb_shr_##N(T a, int64_t n, const char *l) { \
 CB_INT_COMMON(N, T, UT, BITS) \
 static inline T cb_div_##N(T a, T b, const char *l) { \
     CB_DIVCHK_Z(l) \
-    if (CB_UNLIKELY(a == (MINV) && b == (T)-1)) cb_panic(l, "integer overflow in division"); \
+    if (CB_UNLIKELY(b == (T)-1)) { \
+        if (CB_OVF && a == (MINV)) cb_panic(l, "integer overflow in division"); \
+        return (T)(UT)(0 - (uint64_t)(UT)a); } \
     return (T)(a / b); } \
 static inline T cb_rem_##N(T a, T b, const char *l) { \
     CB_DIVCHK_Z(l) \
-    if (CB_UNLIKELY(a == (MINV) && b == (T)-1)) cb_panic(l, "integer overflow in remainder"); \
+    if (CB_UNLIKELY(b == (T)-1)) { \
+        if (CB_OVF && a == (MINV)) cb_panic(l, "integer overflow in remainder"); \
+        return 0; } \
     return (T)(a % b); } \
 static inline T cb_neg_##N(T a, const char *l) { \
-    if (CB_UNLIKELY(a == (MINV))) cb_panic(l, "integer overflow in negation"); \
-    return (T)-a; }
+    if (CB_OVF && CB_UNLIKELY(a == (MINV))) cb_panic(l, "integer overflow in negation"); \
+    return (T)(UT)(0 - (uint64_t)(UT)a); }
 
 #define CB_INT_U(N, T, UT, BITS) \
 CB_INT_COMMON(N, T, UT, BITS) \
@@ -157,9 +171,10 @@ CB_F2I(u32, uint32_t, 0, UINT32_MAX)
 CB_F2I(u64, uint64_t, 0, UINT64_MAX)
 
 static inline bool cb_str_eq(cb_str a, cb_str b) {
-    return a.len == b.len && (a.len == 0 || memcmp(a.ptr, b.ptr, (size_t)a.len) == 0);
+    return a.len == b.len && (a.len == 0 || __builtin_memcmp(a.ptr, b.ptr, (size_t)a.len) == 0);
 }
 
+#ifndef CB_NOSTD
 /* ---- memory: plain malloc, or a conservative mark-and-sweep collector (--gc) ----------------
    cb_mem_alloc(n, atomic)  zeroed memory; `atomic` = contains no pointers, so the collector never scans it
    cb_mem_realloc / cb_mem_free  explicit release is always allowed (and optional under --gc)       */
@@ -434,21 +449,25 @@ static cb_String cb_string_catv(const cb_str *p, int n, const char *loc) {
 }
 static void cb_string_free(cb_String s) { cb_mem_free(s.ptr); }
 
+#endif /* !CB_NOSTD */
+
 /* ---- C interop ----------------------------------------------------------- */
 #ifdef __APPLE__
 #define CB_ASM(n) __asm__("_" n)
 #else
 #define CB_ASM(n) __asm__(n)
 #endif
+#ifndef CB_NOSTD
 static uint8_t *cb_cstr(cb_str s, const char *loc) {      /* NUL-terminated copy in the arena */
     uint8_t *b = cb_arena_alloc((size_t)s.len + 1, loc);
     if (s.len) memcpy(b, s.ptr, (size_t)s.len);
     b[s.len] = 0;
     return b;
 }
+#endif
 static inline cb_str cb_from_cstr(const char *p) {
     if (!p) return (cb_str){(const uint8_t *)"", 0};
-    return (cb_str){(const uint8_t *)p, (int64_t)strlen(p)};
+    return (cb_str){(const uint8_t *)p, (int64_t)__builtin_strlen(p)};
 }
 static inline int64_t cb_slice_len(int64_t n, const char *loc) {
     if (CB_UNLIKELY(n < 0)) cb_panic(loc, "negative slice length");
@@ -463,7 +482,9 @@ CB_COLD static void cb_panic_null(const char *loc) { cb_panic(loc, "null pointer
 static inline void *cb_nn(void *p, const char *loc) { if (CB_UNLIKELY(!p)) cb_panic_null(loc); return p; }
 #endif
 
+#ifndef CB_NOSTD
 /* helpers behind std.io */
 static int cb_peekc(void) { int c = getchar(); if (c != EOF) ungetc(c, stdin); return c; }
 static void cb_flush(void) { fflush(stdout); }
+#endif
 /* ---- end runtime ----------------------------------------------------- */

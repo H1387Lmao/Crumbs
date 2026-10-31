@@ -1,0 +1,17 @@
+struct P { x: i32 }
+impl P {
+    pub fn get(self) -> i32 { return self.x; }
+    pub fn set(mut self, v: i32) { self.x = v; }
+    pub fn get(self) -> i32 { return 0; } // ERROR: already has a method named `get`
+}
+impl Missing { fn f() {} } // ERROR: cannot find the type `Missing`
+impl<T> P { fn g() {} } // ERROR: is not generic
+fn main() {
+    let p = P { x: 1 };
+    p.set(2); // ERROR: cannot take the address of an immutable binding
+    p.nothing(); // ERROR: type `P` has no method `nothing`
+    P.nope(); // ERROR: has no function `nope`
+    let n = 5;
+    n.foo(); // ERROR: type `i32` has no method `foo`
+    println(p.get(1)); // ERROR: takes 0 arguments but 1 was supplied
+}

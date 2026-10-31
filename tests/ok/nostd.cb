@@ -1,0 +1,12 @@
+// FLAGS: --no-stdruntime
+// Freestanding build: arithmetic wraps, arrays and recursion work, no libc is used.
+fn fib(n: i64) -> i64 { if n < 2 { return n; } return fib(n - 1) + fib(n - 2); }
+fn main() -> i32 {
+    let mut a: i32 = 2147483647;
+    a += 1;
+    let xs = [1, 2, 3];
+    let mut t = 0;
+    for i in 0..3 { t += xs[i]; }
+    if a == -2147483648 && t == 6 && fib(20) == 6765 { return 0; }
+    return 1;
+}

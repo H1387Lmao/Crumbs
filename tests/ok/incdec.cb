@@ -8,7 +8,7 @@ fn countdown(mut n: i32) -> i32 {
     while n > 0 { n--; steps++; }
     return steps;
 }
-fn clamp_add(mut a: u8, b: u8) -> u8 { a +%= b; return a; }
+fn clamp_add(mut a: u8, b: u8) -> u8 { a += b; return a; }
 fn bump_all(mut v: [3]i32) -> i32 { v[0]++; v[1] += 10; v[2]--; return v[0] + v[1] + v[2]; }
 
 fn main() {
@@ -44,15 +44,15 @@ fn main() {
 
     // wrapping compound assignment (e.g. brainf*** cells)
     let mut cell: u8 = 255;
-    cell +%= 1;
+    cell += 1;
     println(cell);
-    cell -%= 1;
+    cell -= 1;
     println(cell);
-    cell *%= 2;
+    cell *= 2;
     println(cell);
     let mut p = 0;
     let mut tape = [0u8; 8];
-    for _ in 0..300 { tape[p] +%= 1; }
+    for _ in 0..300 { tape[p] += 1; }
     println(tape[0]);
     p++;
     println(p);

@@ -1,0 +1,6 @@
+// FLAGS: --no-stdruntime
+fn main() {
+    println("hi"); // ERROR: `println` needs the standard runtime
+    let s = "a" + "b"; // ERROR: joining strings
+    let t: String = s; // ERROR: `String` needs the standard runtime
+}

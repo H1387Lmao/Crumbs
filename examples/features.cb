@@ -83,7 +83,7 @@ fn main() -> i32! {
 
     // bit ops & wrapping
     let h: u32 = 2166136261;
-    let h2 = (h ^ 97) *% 16777619;
-    println("hash ", h2, " ", 1u8 << 7, " ", 255u8 +% 1);
+    let h2 = (h ^ 97) * 16777619;
+    println("hash ", h2, " ", 1u8 << 7, " ", 255u8 + 1);
     return 0;
 }

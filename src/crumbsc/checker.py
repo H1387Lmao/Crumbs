@@ -3,6 +3,7 @@
 The checker annotates the AST in place (node.ty, node.local, node.sym, ...) so the
 code generator never has to re-derive types.
 """
+import copy
 import re
 from .diag import suggest
 from .parser import N
@@ -14,7 +15,6 @@ BUILTINS = {"print", "println", "panic", "assert", "alloc", "free", "exit", "to_
             "cstr", "from_cstr", "slice_of", "size_of", "drop", "drop_at", "write_at", "read_at",
             "gc_collect", "gc_bytes"}
 ARITH = {"+", "-", "*", "/", "%"}
-WRAP = {"+%", "-%", "*%"}
 BITWISE = {"&", "|", "^"}
 SHIFT = {"<<", ">>"}
 CMP = {"==", "!=", "<", ">", "<=", ">="}
@@ -83,12 +83,16 @@ class FnInfo:
         self.ret = sym.ret if sym else VOID
         self.names = set()
         self.loops = 0
+        self.is_method = False
+        self.has_self = False
+        self.self_mut = False
         self.loop_stack = []     # frames {"breaks": [...], "conts": [...]} for move analysis
 
 
 class Checker:
-    def __init__(self, mods, diags, c_reserved=(), strict=False, entry_name="main"):
+    def __init__(self, mods, diags, c_reserved=(), strict=False, entry_name="main", nostd=False):
         self.strict = strict
+        self.nostd = nostd                 # --no-stdruntime: no libc-backed features
         self.entry_name = entry_name       # "" = no entry point (library / object-file mode)
         self.mods = mods
         self.d = diags
@@ -109,6 +113,8 @@ class Checker:
         self.n_inst = 0
         self.glue = {}
         self.glue_busy = set()
+        self.methods = {}        # type key -> {method name: Sym}
+        self.prelude_types = {}  # names usable without an import (`List`)
         self.moved = {}          # Local -> span where it was moved (flow-sensitive)
         self.reinit_ok = None
 
@@ -116,6 +122,8 @@ class Checker:
     def run(self):
         for m in self.mods:
             self.declare(m)
+            if m.name == "std.list" and m.is_std and not self.nostd and "List" in m.syms:
+                self.prelude_types["List"] = m.syms["List"]
         for m in self.mods:
             self.resolve_sigs(m)
         self.check_ffi()
@@ -208,6 +216,77 @@ class Checker:
                         s.code = len(self.errors)
         for it in drops:
             self.declare_drop(m, it)
+        for it in m.ast.items:
+            if it.kind == "Impl":
+                self.declare_impl(m, it)
+
+    # ---------------------------------------------------------------- methods
+    def type_key(self, t):
+        """The key under which methods of the type `t` are registered (None if the type has none)."""
+        if t.kind == "prim":
+            return t.name
+        if t.kind in ("struct", "enum"):
+            sym = t.sym.base if getattr(t.sym, "base", None) is not None else t.sym
+            return sym.full
+        return None
+
+    def declare_impl(self, m, it):
+        tyn = it.tyn
+        path = tyn.path
+        sym = None
+        key = None
+        if len(path) == 1 and path[0] in PRIMS and path[0] != "void":
+            key = path[0]
+            if tyn.args or it.tparams:
+                self.d.error(tyn.span, f"`{key}` is not generic, so its `impl` takes no type parameters")
+                return
+        else:
+            if len(path) == 1:
+                sym = m.syms.get(path[0]) or self.prelude_types.get(path[0])
+            elif len(path) == 2 and path[0] in m.imports:
+                m.imports[path[0]].used = True
+                sym = m.imports[path[0]].mod.syms.get(path[1])
+            if sym is None or sym.kind not in ("struct", "enum"):
+                self.d.error(tyn.span, f"cannot find the type `{'.'.join(path)}` to attach methods to",
+                             label="not a struct, enum or built-in type")
+                return
+            if sym.kind == "struct" and sym.opaque:
+                self.d.error(tyn.span, f"`{sym.name}` is an opaque C type and cannot have methods",
+                             help="wrap it in a Crumbs struct and put the methods there")
+                return
+            key = sym.full
+            ok = len(tyn.args) == len(getattr(sym, "tparams", [])) == len(it.tparams) and all(
+                a.kind == "TName" and len(a.path) == 1 and not a.args and a.path[0] == tp
+                for a, tp in zip(tyn.args, it.tparams))
+            if not ok:
+                want = f"<{', '.join(sym.tparams)}>" if sym.tparams else ""
+                self.d.error(tyn.span, f"an `impl` for `{sym.name}` must be generic over exactly its type parameters"
+                             if sym.tparams else f"`{sym.name}` is not generic, so its `impl` takes no type parameters",
+                             help=f"write `impl{want} {sym.name}{want} {{ ... }}`")
+                return
+        table = self.methods.setdefault(key, {})
+        tname = path[-1]
+        for fn in it.fns:
+            if fn.name in table:
+                old = table[fn.name]
+                self.d.error(fn.span, f"`{tname}` already has a method named `{fn.name}`",
+                             notes=[f"the first one is at line {old.node.span.line}"])
+                continue
+            node = copy.copy(fn)
+            node.name = f"{tname}.{fn.name}"
+            node.tparams = list(it.tparams) + list(fn.tparams)
+            s = Sym("fn", node.name, m, node, fn.pub)
+            s.tparams = node.tparams
+            s.cname = f"{m.cprefix}__{tname}__m_{fn.name}"
+            s.is_method = True
+            s.method_name = fn.name
+            s.has_self = bool(fn.params) and fn.params[0].name == "self"
+            s.self_mut = s.has_self and getattr(fn.params[0], "self_mut", False)
+            s.owner_key = key
+            if self.define(m, s, fn.span):
+                table[fn.name] = s
+                if not s.tparams:
+                    self.fns.append(s)
 
     def declare_drop(self, m, it):
         st = m.syms.get(it.drop_for)
@@ -263,10 +342,15 @@ class Checker:
                     if n == "void" and not allow_void:
                         self.d.error(tn.span, "`void` is not allowed here", help="`void` can only be a return type")
                         return POISON
+                    if self.nostd and n == "String":
+                        self.need_std(tn.span, "`String`")
+                        return POISON
                     return PRIMS[n]
                 if n == "error":
                     return ERR
                 sym = m.syms.get(n)
+                if sym is None and n in self.prelude_types and n not in m.imports:
+                    sym = self.prelude_types[n]
                 if sym and sym.kind in ("struct", "enum"):
                     return self.use_type_sym(sym, args, tn, m)
                 if n in m.imports:
@@ -541,11 +625,11 @@ class Checker:
                     if op == "!=":
                         return a != b
                     raise NotConst(e.span, "operator not allowed on strings in a constant expression")
-                if op in ("+", "+%"):
+                if op == "+":
                     return a + b
-                if op in ("-", "-%"):
+                if op == "-":
                     return a - b
-                if op in ("*", "*%"):
+                if op == "*":
                     return a * b
                 if op == "/":
                     if isinstance(a, float) or isinstance(b, float):
@@ -832,8 +916,9 @@ class Checker:
     def instantiate_call(self, e, sym, exp):
         tps, params = sym.tparams, sym.node.params
         if len(e.args) != len(params):
-            self.d.error(e.span, f"function `{sym.name}` takes {len(params)} argument{'s' if len(params) != 1 else ''} "
-                         f"but {len(e.args)} {'was' if len(e.args) == 1 else 'were'} supplied", label="wrong number of arguments")
+            off = 1 if getattr(e, "method_recv", False) else 0
+            self.d.error(e.span, f"function `{sym.name}` takes {len(params) - off} argument{'s' if len(params) - off != 1 else ''} "
+                         f"but {len(e.args) - off} {'was' if len(e.args) - off == 1 else 'were'} supplied", label="wrong number of arguments")
             for a in e.args:
                 self.check(a)
             return None
@@ -1017,7 +1102,7 @@ class Checker:
             return not e.suffix
         if k == "Unary" and e.op == "-":
             return self.untyped(e.expr)
-        if k == "Binary" and (e.op in ARITH or e.op in BITWISE or e.op in WRAP):
+        if k == "Binary" and (e.op in ARITH or e.op in BITWISE):
             return self.untyped(e.l) and self.untyped(e.r)
         return False
 
@@ -1138,6 +1223,8 @@ class Checker:
             sym = self.m.syms.get(e.name)
             if sym and sym.kind in ("struct", "enum", "fn"):
                 return ("sym", sym)
+            if sym is None and e.name in self.prelude_types:
+                return ("sym", self.prelude_types[e.name])
             return None
         if e.kind == "Field":
             base = self.entity(e.obj)
@@ -1200,7 +1287,7 @@ class Checker:
             return POISON
         base = ot
         e.mode = "field"
-        if ot.kind == "ptr" and (ot.inner.kind in ("struct", "arr", "slice") or ot.inner == STRING):
+        if ot.kind == "ptr" and (ot.inner.kind in ("struct", "arr", "slice") or ot.inner in (STR, STRING)):
             base = ot.inner
             e.mode = "ptrfield"
         if base.kind in ("arr", "slice") or base in (STR, STRING):
@@ -1287,7 +1374,7 @@ class Checker:
                 self.d.error(e.span, "cannot take the address of a temporary value",
                              help="store it in a `let mut` variable first")
                 return POISON
-            err = self.place_mut(e.expr)
+            err = None if getattr(e, "auto_ref", False) else self.place_mut(e.expr)
             if err:
                 self.d.error(e.span, "cannot take the address of an immutable binding", label=err[0], help=err[1])
                 return POISON
@@ -1345,7 +1432,7 @@ class Checker:
                                  help="compare explicitly, e.g. `x != 0`" if t.is_numeric else None)
                     return BOOL
             return BOOL
-        arith_like = op in ARITH or op in WRAP or op in BITWISE
+        arith_like = op in ARITH or op in BITWISE
         if op in SHIFT:
             lt = self.check(l, exp if exp is not None and exp.is_int else None)
             rt = self.check(r, None)
@@ -1368,6 +1455,9 @@ class Checker:
             return BOOL if op in CMP else POISON
         if lt in (STR, STRING) and rt in (STR, STRING) and op in ("+", "==", "!="):
             if op == "+":
+                if self.nostd:
+                    self.need_std(e.op_span, "joining strings with `+`")
+                    return POISON
                 res = STRING if STRING in (lt, rt) else STR
                 e.strk = "String" if res == STRING else "str"
                 e.opty = res
@@ -1406,7 +1496,7 @@ class Checker:
             if op in ("/", "%") and t.is_int and r.kind == "Int" and r.value == 0:
                 self.d.error(r.span, "division by zero", label="the divisor is the literal 0")
             return t
-        if op in WRAP or op in BITWISE:
+        if op in BITWISE:
             if not t.is_int:
                 self.d.error(e.op_span, f"cannot apply `{op}` to type `{t}`", help="this operator needs integer operands")
                 return POISON
@@ -1586,7 +1676,7 @@ class Checker:
                 self.lint(e.op_span, f"comparing signed `{sg}` with unsigned `{us}`",
                           label=f"both operands are converted to `{ct}`",
                           help="cast one side explicitly (e.g. `x as i32`) to make the intent clear")
-            elif op in BITWISE or op in WRAP:
+            elif op in BITWISE:
                 self.lint(e.op_span, f"`{op}` mixes signed `{sg}` and unsigned `{us}` operands",
                           label=f"both operands are converted to `{ct}` (the signed one is sign-extended)",
                           help="cast one side explicitly to make the bit pattern you want unambiguous")
@@ -1750,9 +1840,10 @@ class Checker:
         n = len(params)
         bad = len(e.args) < n or (len(e.args) > n and not variadic)
         if bad:
-            plural = "s" if n != 1 else ""
-            self.d.error(e.span, f"{name} takes {'at least ' if variadic else ''}{n} argument{plural} "
-                         f"but {len(e.args)} {'was' if len(e.args) == 1 else 'were'} supplied",
+            off = 1 if getattr(e, "method_recv", False) else 0       # the receiver is not written in the call
+            plural = "s" if n - off != 1 else ""
+            self.d.error(e.span, f"{name} takes {'at least ' if variadic else ''}{n - off} argument{plural} "
+                         f"but {len(e.args) - off} {'was' if len(e.args) - off == 1 else 'were'} supplied",
                          label="wrong number of arguments", notes=[f"signature: {sig}"] if sig else None)
         for i, a in enumerate(e.args):
             if i < n:
@@ -1796,6 +1887,16 @@ class Checker:
             for a in e.args:
                 self.check(a)
             return POISON
+        if c.kind == "Field" and (ent is None or (ent[0] == "sym" and ent[1].kind != "fn")):
+            if not hasattr(e, "orig_args"):
+                e.orig_args = list(e.args)
+            e.args = list(e.orig_args)
+            e.method_recv = False
+            hit = self.find_method(e)
+            if hit == "bad":
+                return POISON
+            if hit is not None:
+                ent = ("sym", hit)
         if ent is None or ent[0] != "sym" or ent[1].kind != "fn":
             if self.callee_is_value(c, ent):
                 return self.indirect_call(e)
@@ -1829,11 +1930,121 @@ class Checker:
         self.check_args(e, sym.params, f"function `{sym.name}`", sig=sig, variadic=sym.variadic)
         return sym.ret
 
+    def find_method(self, e):
+        """`Type.f(args)` / `value.f(args)`: look the function up among the methods of the type.
+        Returns the method Sym (with the receiver already prepended to e.args), "bad", or None."""
+        c = e.callee
+        obj = c.obj
+        sym = None
+        tent = self.entity(obj) if obj.kind in ("Ident", "Field") else None
+        if tent == ("bad",):
+            return "bad"
+        key = None
+        recv_t = None
+        if tent is not None:
+            if tent[0] == "sym" and tent[1].kind in ("struct", "enum"):
+                key = tent[1].full
+            else:
+                return None
+        elif obj.kind == "Ident" and obj.name in PRIMS and not self.lookup(obj.name) and obj.name != "void":
+            key = obj.name
+        if key is not None:
+            meth = self.methods.get(key, {}).get(c.name)
+            if meth is None:
+                tn = obj.name if obj.kind == "Ident" else obj.name
+                avail = sorted(self.methods.get(key, {}))
+                sg = suggest(c.name, avail) if avail else None
+                self.d.error(c.name_span, f"type `{tn}` has no function `{c.name}`",
+                             help=f"did you mean `{sg}`?" if sg else None)
+                for a in e.args:
+                    self.check(a)
+                return "bad"
+            if not self.method_visible(meth, c):
+                return "bad"
+            return meth
+        if obj.kind == "Ident" and not self.lookup(obj.name):
+            return None                             # unknown name: the caller reports it
+        # an expression: a struct field holding a function pointer wins over a method of the same name
+        ot = self.check(obj, None)
+        if ot.poison:
+            for a in e.args:
+                self.check(a)
+            return "bad"
+        base = ot.inner if (ot.kind == "ptr" and ot.inner != VOID) else ot
+        if base.kind == "struct" and c.name in base.sym.field_map:
+            return None
+        chain = [base]
+        if base == STRING:
+            chain.append(STR)                       # a String can use every `str` function (as a borrowed view)
+        for cand in chain:
+            k = self.type_key(cand)
+            meth = self.methods.get(k, {}).get(c.name) if k else None
+            if meth is None or not meth.has_self:
+                continue
+            if not self.method_visible(meth, c):
+                return "bad"
+            arg = self.receiver_arg(obj, ot, cand, meth, base)
+            if arg is None:
+                for a in e.args:
+                    self.check(a)
+                return "bad"
+            e.args = [arg] + e.args
+            e.method_recv = True
+            return meth
+        avail = sorted({n for cand in chain for n, mm in self.methods.get(self.type_key(cand), {}).items() if mm.has_self}) \
+            if self.type_key(base) else []
+        sg = suggest(c.name, avail) if avail else None
+        if base.kind in ("struct", "enum", "prim") or ot.kind == "ptr":
+            self.d.error(c.name_span, f"type `{base}` has no method `{c.name}`",
+                         help=f"did you mean `{sg}`?" if sg else None)
+            for a in e.args:
+                self.check(a)
+            return "bad"
+        return None
+
+    def method_visible(self, meth, c):
+        if meth.pub or meth.mod is self.m:
+            return True
+        self.d.error(c.name_span, f"method `{meth.method_name}` is private to module `{meth.mod.name}`",
+                     label="private item", help="mark it `pub` in its `impl` block")
+        return False
+
+    def receiver_arg(self, obj, ot, cand, meth, base):
+        """Adapt the receiver expression to the method's first parameter (auto-borrow / auto-deref)."""
+        p0 = meth.node.params[0]
+        by_ptr = p0.tyn.kind == "TPtr"
+        if by_ptr:
+            if ot.kind == "ptr":
+                return obj                                          # already a pointer
+            if cand != base:                                        # String -> str needs a by-value view, not a pointer
+                return obj
+            if not self.is_place(obj) and getattr(obj, "kind", "") != "Ident":
+                pass
+            node = N("Unary", obj.span, op="&", expr=obj)
+            node.auto_ref = not meth.self_mut                       # `self` may borrow immutable bindings; `mut self` may not
+            return node
+        if ot.kind == "ptr":
+            return N("Unary", obj.span, op="*", expr=obj)
+        return obj
+
     PRINTABLE_KINDS = ("enum", "ptr", "fn")
+
+    NOSTD_BANNED = {"print", "println", "alloc", "free", "exit", "to_str", "string_new", "string_from",
+                    "string_clear", "cstr", "gc_collect", "gc_bytes"}
+
+    def need_std(self, span, what):
+        self.d.error(span, f"{what} needs the standard runtime, which `--no-stdruntime` removes",
+                     label="not available in this build",
+                     help="drop --no-stdruntime, or call the C library yourself through `extern fn`")
 
     def builtin(self, e, name):
         e.builtin = name
         args = e.args
+        if self.nostd and name in self.NOSTD_BANNED:
+            self.need_std(e.span, f"`{name}`")
+            for a in args:
+                self.check(a)
+            return POISON
 
         def arity(n_min, n_max=None):
             n_max = n_min if n_max is None else n_max

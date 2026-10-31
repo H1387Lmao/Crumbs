@@ -1,2 +1,3 @@
+// FLAGS: --overflow-panic
 // PANIC: integer overflow in addition
 fn main() { let mut x: u8 = 255; x++; println(x); }
