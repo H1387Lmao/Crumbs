@@ -4,26 +4,58 @@
     "tagline": "A small language. Straight to C.",
     "description": "Crumbs is a small, statically typed, C-style toy programming language implemented in Python. It compiles Crumbs source into a single C translation unit, then builds that output with GCC or Clang.",
     "logo": "../resources/crumbs-logo.svg",
+    "repository": "https://github.com/H1387Lmao/crumbs",
     "quickstart": [
       {
-        "command": "python3 crumbs.py run examples/hello.cb",
+        "command": "crumbs run examples/hello.cb",
         "description": "Compile and run a source file."
       },
       {
-        "command": "python3 crumbs.py build examples/hello.cb -o hello",
+        "command": "crumbs build examples/hello.cb -o hello",
         "description": "Build a native executable."
       },
       {
-        "command": "python3 crumbs.py emit examples/hello.cb",
+        "command": "crumbs emit examples/hello.cb",
         "description": "Print the generated C source."
       },
       {
-        "command": "python3 crumbs.py check examples/hello.cb",
+        "command": "crumbs check examples/hello.cb",
         "description": "Run the type checker without building."
       }
     ]
   },
   "sections": [
+    {
+      "id": "cookie",
+      "title": "Cookie",
+      "description": "The Crumbs Build system",
+      "subsections": [
+        {
+          "id": "project_management",
+          "title": "Managing your projects",
+          "features": [
+            {
+              "id": "init",
+              "title": "Creation",
+              "desc": "To initialize a project, run the `init` command",
+              "command": "cookie init my_project"
+            },
+            {
+              "id": "build",
+              "title": "Build",
+              "desc": "To compile your project, go to your projects root directory and run the `build` command",
+              "command": "cookie build"
+            },
+            {
+              "id": "init",
+              "title": "Run",
+              "desc": "To run your current project, either build it or run the `run` command",
+              "command": "cookie run"
+            }      
+          ]
+        }
+      ]
+    },
     {
       "id": "basics",
       "title": "Basics",

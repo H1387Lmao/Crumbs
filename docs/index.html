@@ -249,9 +249,10 @@
       .hero { padding: 30px 24px 28px; }
       .hero::after { width: 5px; }
       .hero-tagline { font-size: 16px; }
-      .intro-grid { grid-template-columns: 1fr; margin-bottom: 53px; }
+      .intro-grid { grid-template-columns: 1fr }
       .section-heading h2 { font-size: 25px; }
       .feature { padding: 16px 15px 17px; }
+      section { padding: 16px; }
       pre { font-size: 11px; padding: 12px; }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -284,14 +285,29 @@
 
     <main>
       <div class="content">
-        <section class="hero" aria-labelledby="hero-title">
+        <section class="hero" aria-labelledby="hero-title", id="crumbs-intro">
           <div class="eyebrow">Language documentation</div>
           <h1 id="hero-title">Crumbs</h1>
           <p class="hero-tagline" id="hero-tagline">A small language. Straight to C.</p>
           <p class="hero-description" id="hero-description">A statically typed, C-style toy programming language implemented in Python and compiled to C.</p>
           <div class="hero-actions">
             <a class="button" href="#quickstart">Get started</a>
-            <a class="button secondary" id="hero-repository" target="_blank" rel="noreferrer" hidden>View source</a>
+            <a class="button secondary" href="https://github.com/H1387Lmao/crumbs/">View Source</a>
+          </div>
+        </section>
+
+        <section class="intro-grid" id="install">
+          <div class="panel">
+            <h2>Installation</h2>
+
+            <div class="quickstart-item">
+              <code>
+                curl -fsSL https://github.com/H1387Lmao/crumbs/resources/install.sh | sh
+              </code>
+              <span>
+                Note: Shell script has not been tested thoroughly and might fail! If it does please make a github issue!
+              </span>
+            </div>
           </div>
         </section>
 
@@ -360,7 +376,7 @@
       return node;
     }
 
-    function renderCode(code) {
+    function renderCode(code, highlight=true) {
       const wrap = element("div", "code-wrap");
       const top = element("div", "code-top");
       top.append(element("span", "", "CRUMBS"));
@@ -378,7 +394,7 @@
       top.append(copy);
       const pre = document.createElement("pre");
       const codeNode = document.createElement("code");
-      codeNode.innerHTML = highlightCrumbs(code);
+      codeNode.innerHTML = highlight ? highlightCrumbs(code) : code;
       pre.append(codeNode);
       wrap.append(top, pre);
       return wrap;
@@ -391,13 +407,6 @@
       document.getElementById("hero-title").textContent = project.name;
       document.getElementById("hero-tagline").textContent = project.tagline;
       document.getElementById("hero-description").textContent = project.description;
-      for (const id of ["repository-link", "hero-repository", "footer-repository"]) {
-        const link = document.getElementById(id);
-        if (project.repository) {
-          link.href = project.repository;
-          link.hidden = false;
-        }
-      }
 
       const quickstart = document.getElementById("quickstart-list");
       for (const item of project.quickstart || []) {
@@ -442,6 +451,7 @@
             featureNode.append(element("p", "", feature.desc));
             if (feature.code) featureNode.append(renderCode(feature.code));
             if (feature.note) featureNode.append(element("div", "feature-note", feature.note));
+            if (feature.command) featureNode.append(element("code", "", feature.command))
             featureList.append(featureNode);
 
             const featureLink = element("a", "nav-feature", feature.title);
@@ -540,7 +550,7 @@
       })
       .then(data => { render(data); setupInteractions(); })
       .catch(error => {
-        document.getElementById("documentation").textContent = "The documentation content could not be loaded. Serve this folder over HTTP so the page can fetch features.json.";
+        document.getElementById("documentation").textContent = "The documentation content could not be loaded. Serve this folder over HTTP so the page can fetch features.json.\n"+error;
         console.error(error);
       });
   </script>

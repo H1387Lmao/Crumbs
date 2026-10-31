@@ -1,12 +1,11 @@
 # Crumbs
-
 <p align="center">
-  <img src="https://img.shields.io/badge/4%2C000%2B-Lines%20of%20code-white?style=flat&labelColor=black&logo=github" alt="4,000+ lines of code" />
-  <img src="https://img.shields.io/badge/Written%20in-Python-yellow?style=flat&labelColor=blue&logo=python&logoColor=white&logoSize=auto" alt="Written in Python" />
+  <img src="resources/crumbs-logo.svg" alt="Crumbs programming language logo" width="220" />
 </p>
 
 <p align="center">
-  <img src="resources/crumbs-logo.svg" alt="Crumbs programming language logo" width="220" />
+  <img src="https://img.shields.io/badge/4%2C000%2B-Lines%20of%20code-white?style=flat&labelColor=black&logo=github" alt="5,000+ lines of code" />
+  <img src="https://img.shields.io/badge/Written%20in-Python-yellow?style=flat&labelColor=blue&logo=python&logoColor=white&logoSize=auto" alt="Written in Python" />
 </p>
 
 A small, statically typed, C-style toy programming language that compiles to C.
