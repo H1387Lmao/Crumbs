@@ -1,0 +1,3 @@
+// PANIC: null pointer dereference
+struct N { v: i32 }
+fn main() { let p: *N = null; println(p.v); }

@@ -1,0 +1,3 @@
+link "does_not_exist.o";                  // ERROR: linked file `does_not_exist.o` not found
+link "";                                  // ERROR: invalid `link` string
+fn main() { }

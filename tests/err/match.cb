@@ -1,0 +1,28 @@
+enum C { R, G, B }
+fn main() {
+    let c = C.R;
+    match c {                                // ERROR: non-exhaustive match
+        C.R => { }
+        C.G => { }
+    }
+    let n = 5;
+    match n {                                // ERROR: non-exhaustive match on an integer
+        1 => { }
+    }
+    match n {
+        "a" => { }                           // ERROR: pattern type does not match
+        _ => { }
+    }
+    match c {
+        C.R => { }
+        C.R => { }                           // WARNING: unreachable pattern
+        _ => { }
+    }
+    match "s" {                              // ERROR: cannot match on a value of type `str`
+        _ => { }
+    }
+    let flag = true;
+    match flag {                             // ERROR: non-exhaustive match
+        true => { }
+    }
+}

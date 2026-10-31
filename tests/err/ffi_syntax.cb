@@ -1,0 +1,1 @@
+fn v(...) {}                                                        // ERROR: only `extern fn` declarations can be variadic

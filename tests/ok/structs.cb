@@ -1,0 +1,35 @@
+struct Vec2 { x: f64, y: f64 }
+struct Line { a: Vec2, b: Vec2 }
+struct Tri { pts: [3]Vec2, label: str }
+struct Node { value: i32, next: *i32 }
+
+fn len2(v: Vec2) -> f64 { return v.x * v.x + v.y * v.y; }
+fn add(a: Vec2, b: Vec2) -> Vec2 { return Vec2 { x: a.x + b.x, y: a.y + b.y }; }
+fn scale(v: *Vec2, k: f64) { v.x *= k; v.y *= k; }
+fn first(t: Tri) -> Vec2 { return t.pts[0]; }
+
+fn main() {
+    let mut v = Vec2 { x: 3.0, y: 4.0 };
+    println(len2(v));
+    scale(&v, 2.0);
+    println(v.x, " ", v.y);
+    let l = Line { a: Vec2 { x: 0.0, y: 0.0 }, b: add(v, v) };
+    println(l.b.x, " ", l.b.y);
+    let mut t = Tri { pts: [v, v, l.b], label: "tri" };
+    t.pts[1].x = -1.0;
+    println(t.label, " ", t.pts[1].x, " ", first(t).y, " ", t.pts.len);
+    // linked list via pointers to stack nodes
+    let mut anchor = 5;
+    let mut n3 = Node { value: 3, next: &anchor };
+    *n3.next += 1;
+    println(n3.value, " ", anchor);
+    let mut grid = [[0; 3]; 2];
+    grid[1][2] = 7;
+    let mut s = 0;
+    for row in grid { for c in row { s += c; } }
+    println(s, " ", grid.len, " ", grid[0].len);
+    let p = &v;
+    println((*p).x, " ", p.y);
+    n3.value = 4;
+    println(n3.value);
+}

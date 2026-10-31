@@ -1,0 +1,2 @@
+// PANIC: integer overflow in subtraction
+fn main() { let a: u32 = 1; let b: u32 = 2; println(a - b); }

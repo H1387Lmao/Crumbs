@@ -1,0 +1,35 @@
+// CPU benchmark: recursive fib, sieve of primes, and a matrix-ish nested loop
+fn fib(n: i32) -> i64 {
+    if n < 2 { return n as i64; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn sieve(n: i64) -> i64 {
+    let flags = alloc(bool, n + 1);
+    let mut count: i64 = 0;
+    for i in 2..=n {
+        if !flags[i] {
+            count += 1;
+            let mut j = i * i;
+            while j <= n { flags[j] = true; j += i; }
+        }
+    }
+    free(flags);
+    return count;
+}
+
+fn mix(n: i32) -> i64 {
+    let mut acc: i64 = 0;
+    for i in 0..n {
+        for j in 0..n {
+            acc += ((i * j) % 7) as i64;
+        }
+    }
+    return acc;
+}
+
+fn main() {
+    println("fib(40)      = ", fib(40));
+    println("primes<=5e7  = ", sieve(50000000));
+    println("mix(8000)    = ", mix(8000));
+}

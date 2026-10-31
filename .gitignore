@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so.dbg
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Crumbs / C build products
+*.o
+*.out.bin
+/tests/ok/_build/
+*.keep.c
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

@@ -1,0 +1,28 @@
+import std.list;
+import std.mem;
+
+struct Pair<A, B> { first: A, second: B }
+
+fn map_sum<T>(s: []T) -> T {
+    let mut acc = s[0];
+    for i in 1..s.len { acc += s[i]; }
+    return acc;
+}
+
+fn main() {
+    let mut xs: list.List<i32> = list.new();
+    for v in [5, 3, 9, 1, 7] { list.push(&xs, v); }
+    mem.sort(list.view(&xs));
+    for v in list.view(&xs) { print(v, " "); }
+    println();
+
+    let mut names: list.List<f64> = list.new();
+    list.push(&names, 2.5); list.push(&names, -1.0);
+    mem.sort(list.view(&names));
+    println(list.get(&names, 0), " ", map_sum(list.view(&names)));
+
+    let p = Pair { first: "x", second: 42 };
+    println(p.first, "=", p.second, "  max=", mem.max(p.second, 7));
+    list.release(&xs);
+    list.release(&names);
+}

@@ -1,0 +1,2 @@
+// PANIC: negative allocation size
+fn main() { let n = -5; let s = alloc(i32, n); println(s.len); }

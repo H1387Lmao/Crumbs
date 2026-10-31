@@ -1,0 +1,16 @@
+fn a() {
+    let x = ;                                // ERROR: expected an expression
+    let y 5;                                 // ERROR: variables must be initialized
+    let z = 1                                // ERROR: expected `;`
+    let w = (1 + 2;                          // ERROR: expected `)`
+}
+fn b( {                                      // ERROR: expected parameter name
+}
+fn c() {
+    let u = 0x;                              // ERROR: missing digits
+    let v = 12abc;                           // ERROR: invalid suffix `abc`
+    let w = 99999999999999999999999;         // ERROR: integer literal is too large
+    let q = "bad \q escape";                 // ERROR: unknown escape sequence
+    let r = 5 # 3;                           // ERROR: unexpected character `#`
+    let i = 1 < 2 > 3;                       // ERROR: cannot be chained
+}

@@ -1,0 +1,38 @@
+enum Mood { Happy, Sad }
+
+fn greet(name: str) -> str { return "Hello, " + name + "!"; }
+
+fn main() {
+    let a = "foo";
+    let b = "bar";
+    let c = a + b;
+    println(c, " ", c.len, " ", c == "foobar");
+    println(greet("Crumbs"));
+    // chains, literals on both sides, empty strings
+    println("[" + a + "|" + b + "|" + "" + "]");
+    println("" + "" == "");
+
+    // += builds strings; the old views stay valid
+    let mut s = "";
+    for i in 0..5 { s += to_str(i); s += ","; }
+    println(s, " len=", s.len);
+    let base = "x" + "y";
+    let one = base + "1";
+    let two = base + "2";
+    println(base, " ", one, " ", two);
+
+    // to_str on many types
+    println("n=" + to_str(-42) + " u=" + to_str(7u8) + " f=" + to_str(2.5) + " b=" + to_str(true) + " m=" + to_str(Mood.Sad));
+
+    // growth across arena chunks
+    let mut big = "";
+    for i in 0..200000 { big += "ab"; }
+    println(big.len, " ", big[0..4], " ", big[big.len - 2..]);
+
+    // concatenation results are ordinary strings
+    let joined = "a,b,c";
+    println(joined[2..3] + joined[0..1] == "ba");
+    let mut parts = 0;
+    for ch in "a" + "," + "b" + "," + "c" { if ch == ',' { parts += 1; } }
+    println(parts);
+}

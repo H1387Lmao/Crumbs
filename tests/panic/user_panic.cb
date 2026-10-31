@@ -1,0 +1,2 @@
+// PANIC: custom failure
+fn main() { println("before"); panic("custom failure"); }

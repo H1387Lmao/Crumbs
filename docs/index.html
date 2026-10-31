@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#171816">
+  <script>
+    try {
+      document.documentElement.dataset.theme = localStorage.getItem("crumbs-theme") || "dark";
+    } catch {}
+  </script>
+  <meta name="description" content="Crumbs is a small, statically typed programming language that compiles to C.">
+  <meta name="docs-build" content="2026-10-31-feature-title-fix">
+  <title>Crumbs — Documentation</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #f1f1ee;
+      --surface: #ffffff;
+      --surface-soft: #e8e8e3;
+      --ink: #242424;
+      --muted: #686862;
+      --line: #d6d6cf;
+      --yellow: #f0cf45;
+      --yellow-dark: #d4ad16;
+      --sidebar-bg: #e9e9e5;
+      --sidebar-label: #898981;
+      --sidebar-search-bg: #f7f7f4;
+      --sidebar-search-border: #d2d2cb;
+      --nav-hover: #ddddd6;
+      --nav-sub-border: #cdcdc5;
+      --nav-subtext: #64645e;
+      --nav-feature-text: #777770;
+      --inline-code-bg: #f1efdf;
+      --inline-code-ink: #36362f;
+      --feature-text: #62625c;
+      --note-bg: #f5f2df;
+      --note-ink: #59533a;
+      --footer-text: #85857d;
+      --footer-link: #55554f;
+      --code: #222321;
+      --code-ink: #eeeeea;
+      --sidebar-width: 274px;
+      --content-width: 980px;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --page: #171816;
+      --surface: #22231f;
+      --surface-soft: #2a2b26;
+      --ink: #eeeeea;
+      --muted: #aaa99f;
+      --line: #3b3c35;
+      --yellow: #f0cf45;
+      --yellow-dark: #f0cf45;
+      --sidebar-bg: #1e1f1b;
+      --sidebar-label: #99998f;
+      --sidebar-search-bg: #292a25;
+      --sidebar-search-border: #45463e;
+      --nav-hover: #33342d;
+      --nav-sub-border: #414239;
+      --nav-subtext: #b6b5aa;
+      --nav-feature-text: #a09f95;
+      --inline-code-bg: #373529;
+      --inline-code-ink: #f2e8b7;
+      --feature-text: #b7b6ad;
+      --note-bg: #373426;
+      --note-ink: #e4dcae;
+      --footer-text: #929188;
+      --footer-link: #d0cfc5;
+      --code: #11120f;
+      --code-ink: #eeeeea;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 88px; }
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px;
+      line-height: 1.65;
+    }
+    a { color: inherit; }
+    button, input { font: inherit; }
+
+    .topbar {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      height: 66px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 0 30px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+    .brand { display: inline-flex; align-items: center; gap: 12px; text-decoration: none; font-weight: 800; letter-spacing: -.04em; font-size: 20px; }
+    .brand img { width: 38px; height: 38px; object-fit: contain; }
+    .brand span { padding-top: 1px; }
+    .topbar-right { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; }
+    .topbar-right a { text-decoration: none; }
+    .topbar-right a:hover { color: var(--ink); }
+    .github-link { display: inline-flex; align-items: center; gap: 7px; font-weight: 650; }
+    .github-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--yellow-dark); }
+    .theme-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 38px;
+      width: 38px;
+      height: 38px;
+      padding: 0;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+      border-radius: 7px;
+      cursor: pointer;
+    }
+    .theme-toggle:hover { border-color: var(--yellow-dark); }
+    .theme-toggle:focus-visible { outline: 2px solid var(--yellow-dark); outline-offset: 2px; }
+    .theme-toggle svg { display: block; width: 19px; height: 19px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    .theme-toggle .icon-sun { color: #c49a08; }
+    .theme-toggle .icon-moon { color: var(--ink); }
+    .menu-toggle {
+      display: none;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: 7px;
+      padding: 7px 10px;
+      color: var(--ink);
+      cursor: pointer;
+    }
+
+    .layout { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); min-height: calc(100vh - 66px); }
+    .sidebar {
+      position: sticky;
+      top: 66px;
+      height: calc(100vh - 66px);
+      overflow-y: auto;
+      padding: 26px 18px 34px 22px;
+      background: var(--sidebar-bg);
+      border-right: 1px solid var(--line);
+    }
+    .sidebar-label { margin: 0 0 11px 10px; color: var(--sidebar-label); font-size: 10px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
+    .sidebar-search { width: 100%; margin: 0 0 22px; padding: 9px 11px; color: var(--ink); background: var(--sidebar-search-bg); border: 1px solid var(--sidebar-search-border); border-radius: 7px; outline: none; font-size: 13px; }
+    .sidebar-search:focus { border-color: var(--yellow-dark); box-shadow: 0 0 0 2px #f0cf4533; }
+    .nav-section { margin: 0 0 16px; }
+    .nav-section-title { display: block; padding: 5px 10px; color: var(--ink); text-decoration: none; font-size: 13px; font-weight: 800; }
+    .nav-section-title:hover { background: var(--nav-hover); border-radius: 5px; }
+    .nav-subsection { margin: 2px 0 0 11px; padding-left: 11px; border-left: 1px solid var(--nav-sub-border); }
+    .nav-subsection-title { display: block; padding: 3px 7px; color: var(--nav-subtext); font-size: 11px; font-weight: 700; text-decoration: none; }
+    .nav-feature { display: block; padding: 3px 7px; color: var(--nav-feature-text); text-decoration: none; font-size: 11px; line-height: 1.5; border-radius: 4px; }
+    .nav-feature:hover, .nav-feature.active { color: var(--ink); background: var(--yellow); }
+    .nav-empty { display: none; padding: 8px 10px; color: var(--muted); font-size: 12px; }
+
+    main { min-width: 0; padding: 46px 52px 90px; }
+    .content { width: min(100%, var(--content-width)); margin: 0 auto; }
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: 39px 42px 36px;
+      background: #292a27;
+      color: #f4f4ef;
+      border: 1px solid #292a27;
+      border-radius: 12px;
+    }
+    .hero::after { position: absolute; content: ""; width: 7px; top: 0; right: 0; bottom: 0; background: var(--yellow); }
+    .eyebrow { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 14px; color: var(--yellow); font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .eyebrow::before { content: ""; display: inline-block; width: 18px; height: 2px; background: var(--yellow); }
+    h1 { margin: 0; font-size: clamp(40px, 6vw, 62px); line-height: 1.02; letter-spacing: -.065em; }
+    .hero-tagline { margin: 12px 0 0; color: #d0d0c9; font-size: 19px; font-weight: 550; letter-spacing: -.02em; }
+    .hero-description { max-width: 610px; margin: 20px 0 0; color: #bdbdb5; font-size: 14px; }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 25px; }
+    .button { display: inline-flex; align-items: center; justify-content: center; min-height: 39px; padding: 8px 14px; border: 1px solid var(--yellow); border-radius: 6px; background: var(--yellow); color: #242424; text-decoration: none; font-size: 12px; font-weight: 800; }
+    .button.secondary { background: transparent; color: #f3f3ed; border-color: #5b5c55; }
+    .button:hover { filter: brightness(.96); }
+
+    .fact { min-height: 82px; padding: 13px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+    .fact-value { display: block; font-size: 21px; font-weight: 850; line-height: 1.2; letter-spacing: -.04em; }
+    .fact-label { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+
+    .intro-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 68px; }
+    .panel { min-width: 0; padding: 22px 23px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+    .panel h2 { margin: 0 0 9px; font-size: 17px; letter-spacing: -.035em; }
+    .panel p { margin: 0; color: var(--muted); font-size: 13px; }
+    .quickstart-list { display: grid; gap: 12px; margin-top: 15px; }
+    .quickstart-item { display: grid; gap: 3px; }
+    .quickstart-item code { width: fit-content; max-width: 100%; overflow-wrap: anywhere; color: var(--inline-code-ink); background: var(--inline-code-bg); padding: 3px 6px; border-radius: 4px; font-size: 11px; }
+    .quickstart-item span { color: var(--muted); font-size: 11px; }
+
+    .docs-section { margin: 0 0 72px; scroll-margin-top: 88px; }
+    .section-heading { display: flex; align-items: flex-start; gap: 14px; padding-bottom: 15px; border-bottom: 2px solid var(--ink); }
+    .section-index { display: flex; align-items: center; justify-content: center; flex: 0 0 32px; width: 32px; height: 32px; margin-top: 3px; background: var(--yellow); border-radius: 6px; font-size: 12px; font-weight: 900; }
+    .section-heading h2 { margin: 0; font-size: 29px; line-height: 1.2; letter-spacing: -.055em; }
+    .section-heading p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+    .subsection { margin-top: 29px; scroll-margin-top: 88px; }
+    .subsection-heading { margin: 0 0 12px; font-size: 17px; letter-spacing: -.03em; }
+    .feature-list { display: grid; gap: 10px; }
+    .feature {
+      min-width: 0;
+      padding: 19px 21px 20px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--yellow);
+      border-radius: 7px;
+      scroll-margin-top: 88px;
+    }
+    .feature h4 { margin: 0; font-size: 15px; font-weight: 800; letter-spacing: -.02em; }
+    .feature p { max-width: 760px; margin: 6px 0 0; color: var(--feature-text); font-size: 13px; }
+    .feature-note { margin-top: 11px; padding: 8px 11px; background: var(--note-bg); border-radius: 5px; color: var(--note-ink); font-size: 11px; }
+    .code-wrap { overflow: hidden; margin-top: 13px; background: var(--code); border: 1px solid #171815; border-radius: 6px; }
+    .code-top { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-bottom: 1px solid #3a3b36; color: #a5a59d; font-size: 10px; }
+    .copy-button { padding: 3px 8px; color: #d8d8d1; background: #393a35; border: 1px solid #51524b; border-radius: 4px; cursor: pointer; font-size: 10px; }
+    .copy-button:hover { background: #4a4b44; }
+    pre { margin: 0; padding: 14px 16px; overflow-x: auto; color: var(--code-ink); font: 12px/1.7 "SFMono-Regular", Consolas, "Liberation Mono", monospace; tab-size: 4; }
+    code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    .tok-keyword { color: #f0cf45; font-weight: 700; }
+    .tok-type { color: #9bc9c1; }
+    .tok-string { color: #c6d69b; }
+    .tok-number { color: #e6ad78; }
+    .tok-comment { color: #888b82; font-style: italic; }
+    .tok-function { color: #e7e7df; }
+    .tok-operator { color: #d7d7cf; }
+
+    .footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; padding-top: 20px; color: var(--footer-text); border-top: 1px solid var(--line); font-size: 11px; }
+    .footer a { color: var(--footer-link); text-decoration: none; }
+    .footer a:hover { text-decoration: underline; }
+    .no-results { display: none; padding: 35px 20px; text-align: center; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+
+    @media (max-width: 1000px) {
+      main { padding: 34px 30px 70px; }
+      .sidebar { padding-left: 14px; padding-right: 13px; }
+    }
+    @media (max-width: 760px) {
+      .topbar { height: 60px; padding: 0 17px; }
+      .brand { font-size: 18px; }
+      .brand img { width: 34px; height: 34px; }
+      .topbar-right { margin-left: auto; }
+      .topbar-right .top-link { display: none; }
+      .menu-toggle { display: inline-flex; }
+      .layout { display: block; min-height: calc(100vh - 60px); }
+      .sidebar { display: none; position: fixed; z-index: 19; top: 60px; left: 0; right: 0; bottom: 0; width: 100%; height: auto; padding: 20px 20px 35px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .sidebar.open { display: block; }
+      main { padding: 23px 16px 55px; }
+      .hero { padding: 30px 24px 28px; }
+      .hero::after { width: 5px; }
+      .hero-tagline { font-size: 16px; }
+      .intro-grid { grid-template-columns: 1fr; margin-bottom: 53px; }
+      .section-heading h2 { font-size: 25px; }
+      .feature { padding: 16px 15px 17px; }
+      pre { font-size: 11px; padding: 12px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#top" aria-label="Crumbs documentation home">
+      <img id="brand-logo" src="../resources/crumbs-logo.svg" alt="">
+      <span>Crumbs</span>
+    </a>
+    <div class="topbar-right">
+      <a class="top-link" href="#quickstart">Quick start</a>
+      <a class="github-link" id="repository-link" target="_blank" rel="noreferrer" hidden><span class="github-dot"></span> Repository</a>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to light theme" title="Switch to light theme"></button>
+      <button class="menu-toggle" id="menu-toggle" type="button" aria-expanded="false" aria-controls="sidebar">Contents</button>
+    </div>
+  </header>
+
+  <div class="layout" id="top">
+    <aside class="sidebar" id="sidebar" aria-label="Documentation navigation">
+      <p class="sidebar-label">On this page</p>
+      <input class="sidebar-search" id="feature-search" type="search" placeholder="Filter documentation..." aria-label="Filter documentation">
+      <nav id="navigation"></nav>
+      <p class="nav-empty" id="nav-empty">No matching features.</p>
+    </aside>
+
+    <main>
+      <div class="content">
+        <section class="hero" aria-labelledby="hero-title">
+          <div class="eyebrow">Language documentation</div>
+          <h1 id="hero-title">Crumbs</h1>
+          <p class="hero-tagline" id="hero-tagline">A small language. Straight to C.</p>
+          <p class="hero-description" id="hero-description">A statically typed, C-style toy programming language implemented in Python and compiled to C.</p>
+          <div class="hero-actions">
+            <a class="button" href="#quickstart">Get started</a>
+            <a class="button secondary" id="hero-repository" target="_blank" rel="noreferrer" hidden>View source</a>
+          </div>
+        </section>
+
+        <section class="intro-grid" id="quickstart">
+          <div class="panel">
+            <h2>Quick start</h2>
+            <p>Use the command-line driver to run, build, inspect, or type-check a Crumbs source file.</p>
+            <div class="quickstart-list" id="quickstart-list"></div>
+          </div>
+        </section>
+
+        <div id="documentation"></div>
+        <div class="no-results" id="no-results">No documentation features match this search.</div>
+        <footer class="footer">
+          <span>Crumbs documentation</span>
+          <a id="footer-repository" target="_blank" rel="noreferrer" hidden>Source repository ↗</a>
+        </footer>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const DATA_URL = "features.json";
+    const KEYWORDS = new Set([
+      "import", "pub", "struct", "enum", "error", "const", "fn", "let", "mut",
+      "if", "else", "for", "in", "match", "return", "break", "continue", "try",
+      "catch", "throw", "drop", "extern", "include", "link", "define", "export",
+      "as", "null", "true", "false"
+    ]);
+    const TYPES = new Set([
+      "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
+      "bool", "str", "String", "void"
+    ]);
+
+    const escapeHTML = value => String(value).replace(/[&<>"']/g, char => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+    })[char]);
+
+    function highlightCrumbs(source) {
+      const tokenPattern = /(\/\/[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b[A-Za-z_][A-Za-z0-9_]*\b|\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b|->|=>|\.\.=|\.\.|\+%=|-%=|\*%=|==|!=|<=|>=|\+%|-%|\*%|&&|\|\||[^\s])/g;
+      let output = "";
+      let lastIndex = 0;
+      for (const match of source.matchAll(tokenPattern)) {
+        const token = match[0];
+        const index = match.index;
+        output += escapeHTML(source.slice(lastIndex, index));
+        let kind = "";
+        if (token.startsWith("//")) kind = "comment";
+        else if (token.startsWith("\"") || token.startsWith("'")) kind = "string";
+        else if (KEYWORDS.has(token)) kind = "keyword";
+        else if (TYPES.has(token) || token === "List") kind = "type";
+        else if (/^\d/.test(token)) kind = "number";
+        else if (/^[A-Za-z_]/.test(token) && /^\s*\(/.test(source.slice(index + token.length))) kind = "function";
+        else if (/^(->|=>|\.\.|\.\.=|\+%=|-%=|\*%=|==|!=|<=|>=|\+%|-%|\*%|&&|\|\||[+*/%=<>!&|^~-])$/.test(token)) kind = "operator";
+        output += kind ? `<span class="tok-${kind}">${escapeHTML(token)}</span>` : escapeHTML(token);
+        lastIndex = index + token.length;
+      }
+      output += escapeHTML(source.slice(lastIndex));
+      return output;
+    }
+
+    function element(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function renderCode(code) {
+      const wrap = element("div", "code-wrap");
+      const top = element("div", "code-top");
+      top.append(element("span", "", "CRUMBS"));
+      const copy = element("button", "copy-button", "Copy");
+      copy.type = "button";
+      copy.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(code);
+          copy.textContent = "Copied";
+          window.setTimeout(() => { copy.textContent = "Copy"; }, 1400);
+        } catch {
+          copy.textContent = "Unavailable";
+        }
+      });
+      top.append(copy);
+      const pre = document.createElement("pre");
+      const codeNode = document.createElement("code");
+      codeNode.innerHTML = highlightCrumbs(code);
+      pre.append(codeNode);
+      wrap.append(top, pre);
+      return wrap;
+    }
+
+    function render(data) {
+      const project = data.project;
+      document.title = `${project.name} — Documentation`;
+      document.getElementById("brand-logo").src = project.logo;
+      document.getElementById("hero-title").textContent = project.name;
+      document.getElementById("hero-tagline").textContent = project.tagline;
+      document.getElementById("hero-description").textContent = project.description;
+      for (const id of ["repository-link", "hero-repository", "footer-repository"]) {
+        const link = document.getElementById(id);
+        if (project.repository) {
+          link.href = project.repository;
+          link.hidden = false;
+        }
+      }
+
+      const quickstart = document.getElementById("quickstart-list");
+      for (const item of project.quickstart || []) {
+        const row = element("div", "quickstart-item");
+        row.append(element("code", "", item.command), element("span", "", item.description));
+        quickstart.append(row);
+      }
+      const navigation = document.getElementById("navigation");
+      const documentation = document.getElementById("documentation");
+      data.sections.forEach((section, sectionIndex) => {
+        const navSection = element("div", "nav-section");
+        const sectionLink = element("a", "nav-section-title", section.title);
+        sectionLink.href = `#${section.id}`;
+        navSection.append(sectionLink);
+
+        const sectionNode = element("section", "docs-section");
+        sectionNode.id = section.id;
+        const heading = element("div", "section-heading");
+        heading.append(element("span", "section-index", String(sectionIndex + 1).padStart(2, "0")));
+        const headingText = element("div");
+        headingText.append(element("h2", "", section.title));
+        headingText.append(element("p", "", section.description || ""));
+        heading.append(headingText);
+        sectionNode.append(heading);
+
+        section.subsections.forEach(subsection => {
+          const navSubsection = element("div", "nav-subsection");
+          const subLink = element("a", "nav-subsection-title", subsection.title);
+          subLink.href = `#${subsection.id}`;
+          navSubsection.append(subLink);
+
+          const subsectionNode = element("section", "subsection");
+          subsectionNode.id = subsection.id;
+          subsectionNode.append(element("h3", "subsection-heading", subsection.title));
+          const featureList = element("div", "feature-list");
+
+          subsection.features.forEach(feature => {
+            const featureNode = element("article", "feature");
+            featureNode.id = feature.id;
+            featureNode.dataset.search = `${section.title} ${subsection.title} ${feature.title} ${feature.desc} ${feature.note || ""}`.toLowerCase();
+            featureNode.append(element("h4", "", feature.title));
+            featureNode.append(element("p", "", feature.desc));
+            if (feature.code) featureNode.append(renderCode(feature.code));
+            if (feature.note) featureNode.append(element("div", "feature-note", feature.note));
+            featureList.append(featureNode);
+
+            const featureLink = element("a", "nav-feature", feature.title);
+            featureLink.href = `#${feature.id}`;
+            navSubsection.append(featureLink);
+          });
+
+          subsectionNode.append(featureList);
+          sectionNode.append(subsectionNode);
+          navSection.append(navSubsection);
+        });
+
+        navigation.append(navSection);
+        documentation.append(sectionNode);
+      });
+    }
+
+    function setupInteractions() {
+      const themeButton = document.getElementById("theme-toggle");
+      const sunIcon = `<svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42"></path></svg>`;
+      const moonIcon = `<svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6.5 6.5 0 0 0 8.268 8.268c.344-.215.825-.003.803.401"></path></svg>`;
+      const updateThemeButton = () => {
+        const dark = document.documentElement.dataset.theme === "dark";
+        themeButton.innerHTML = dark ? sunIcon : moonIcon;
+        const label = dark ? "Switch to light theme" : "Switch to dark theme";
+        themeButton.setAttribute("aria-label", label);
+        themeButton.title = label;
+      };
+      updateThemeButton();
+      themeButton.addEventListener("click", () => {
+        const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+        document.documentElement.dataset.theme = next;
+        try { localStorage.setItem("crumbs-theme", next); } catch {}
+        updateThemeButton();
+      });
+
+      const search = document.getElementById("feature-search");
+      search.addEventListener("input", () => {
+        const query = search.value.trim().toLowerCase();
+        let visibleFeatures = 0;
+        document.querySelectorAll(".feature").forEach(feature => {
+          const visible = !query || feature.dataset.search.includes(query);
+          feature.hidden = !visible;
+          if (visible) visibleFeatures++;
+        });
+        document.querySelectorAll(".subsection").forEach(subsection => {
+          const hasVisible = [...subsection.querySelectorAll(".feature")].some(feature => !feature.hidden);
+          subsection.hidden = !hasVisible;
+        });
+        document.querySelectorAll(".docs-section").forEach(section => {
+          section.hidden = ![...section.querySelectorAll(".subsection")].some(subsection => !subsection.hidden);
+        });
+        document.querySelectorAll(".nav-section").forEach(section => {
+          const links = section.querySelectorAll(".nav-feature");
+          let anyVisible = false;
+          links.forEach(link => {
+            const target = document.getElementById(link.hash.slice(1));
+            const visible = target && !target.hidden && !target.closest(".subsection").hidden;
+            link.hidden = !visible;
+            if (visible) anyVisible = true;
+          });
+          section.hidden = !!query && !anyVisible;
+          section.querySelectorAll(".nav-subsection").forEach(sub => {
+            sub.hidden = !!query && ![...sub.querySelectorAll(".nav-feature")].some(link => !link.hidden);
+          });
+        });
+        document.getElementById("no-results").style.display = visibleFeatures ? "none" : "block";
+        document.getElementById("nav-empty").style.display = visibleFeatures ? "none" : "block";
+      });
+
+      const menu = document.getElementById("menu-toggle");
+      const sidebar = document.getElementById("sidebar");
+      menu.addEventListener("click", () => {
+        const open = sidebar.classList.toggle("open");
+        menu.setAttribute("aria-expanded", String(open));
+      });
+      sidebar.addEventListener("click", event => {
+        if (event.target.closest("a") && window.innerWidth <= 760) {
+          sidebar.classList.remove("open");
+          menu.setAttribute("aria-expanded", "false");
+        }
+      });
+
+      document.addEventListener("click", event => {
+        const link = event.target.closest(".nav-feature");
+        if (!link) return;
+        document.querySelectorAll(".nav-feature.active").forEach(node => node.classList.remove("active"));
+        link.classList.add("active");
+      });
+    }
+
+    fetch(DATA_URL)
+      .then(response => {
+        if (!response.ok) throw new Error(`Could not load ${DATA_URL} (${response.status})`);
+        return response.json();
+      })
+      .then(data => { render(data); setupInteractions(); })
+      .catch(error => {
+        document.getElementById("documentation").textContent = "The documentation content could not be loaded. Serve this folder over HTTP so the page can fetch features.json.";
+        console.error(error);
+      });
+  </script>
+</body>
+</html>

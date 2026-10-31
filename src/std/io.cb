@@ -1,0 +1,43 @@
+// std.io: character-level input/output on stdin/stdout.
+pub error Eof;
+
+extern fn getchar() -> i32;
+extern fn putchar(c: i32) -> i32;
+extern fn cb_peekc() -> i32;
+extern fn cb_flush();
+
+// Read one byte from stdin. Fails with io.Eof at end of input (or Ctrl+D).
+pub fn getc() -> u8! {
+    let c = getchar();
+    if c < 0 { throw Eof; }
+    return c as u8;
+}
+
+// Write one byte to stdout.
+pub fn putc(c: u8) {
+    putchar(c as i32);
+}
+
+// Read one line from stdin, without its terminator. A line ends at '\n', '\r', "\r\n",
+// or at end of input (Ctrl+D). Fails with io.Eof only if input ended before any byte was read.
+pub fn get_line() -> String! {
+    let mut line = string_new();
+    let mut got = false;
+    loop {
+        let c = getchar();
+        if c < 0 {
+            if !got { throw Eof; }
+            return line;
+        }
+        got = true;
+        if c == 10 { return line; }
+        if c == 13 {
+            if cb_peekc() == 10 { getchar(); }
+            return line;
+        }
+        line += c as u8;
+    }
+}
+
+// Flush buffered output (useful before reading, e.g. after printing a prompt).
+pub fn flush() { cb_flush(); }

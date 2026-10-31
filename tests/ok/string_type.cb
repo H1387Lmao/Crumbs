@@ -1,0 +1,44 @@
+import std.str;
+import std.list;
+
+struct Person { name: String, age: i32 }
+
+fn shout(s: str) -> String { return str.to_upper(s) + "!"; }
+
+fn main() {
+    // building, appending bytes and views, indexing, slicing, capacity growth
+    let mut s = string_new();
+    for i in 0..40 { s += (('a' as i32) + i % 26) as u8; }
+    println(s.len, " ", s.cap >= s.len, " ", s[0..5], " ", s[s.len - 3..]);
+    s[0] = 'Z';
+    println(s[0..3]);
+    let mut t = string_from("abc");
+    t += t;
+    t += t[1..3];
+    println(t);
+    string_clear(&t);
+    println(t.len, " [", t, "] ", t == "");
+    t += "again";
+    println(t == "again", " ", "again" == t, " ", t != "x");
+
+    // String in structs, owned values
+    let p = Person { name: string_from("Ada"), age: 36 };
+    println(p.name, " is ", p.age, " / ", p.name + " Lovelace");   // `p` frees its String when main ends
+
+    // str library
+    println(str.trim("  \t padded \r\n") + "|");
+    println(str.find("hello world", "o w"), " ", str.rfind("a.b.c.d", "."), " ", str.find("abc", "z"));
+    println(str.starts_with("crumbs", "cr"), " ", str.ends_with("crumbs", "bs"), " ", str.contains("crumbs", "um"));
+    println(shout("hey"), " ", str.to_lower("MiXeD"), " ", str.reverse("stressed"), " ", str.repeat("ab", 3));
+    println(str.replace("a-b-c", "-", "::"), " ", str.compare("abc", "abd"), " ", str.compare("b", "a"), " ", str.compare("a", "a"));
+    println(str.eq_ignore_case("HeLLo", "hello"), " ", str.is_digit('7'), " ", str.is_alpha('7'));
+    let mut parts = str.split("one,two,,three", ",");
+    println(parts.len);
+    for i in 0..parts.len { print("<", parts.items[i], ">"); }
+    println();
+    let joined = str.join(parts.items[0..parts.len], "+");
+    println(joined);
+    free(joined);
+    list.release(&parts);
+    free(s); free(t);
+}

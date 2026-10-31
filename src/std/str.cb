@@ -1,0 +1,157 @@
+// std.str: string helpers. Functions take `str` views (a `String` converts automatically);
+// those that build new text return an owned `String` that the caller should `free`.
+import std.list;
+
+pub fn is_space(c: u8) -> bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
+pub fn is_digit(c: u8) -> bool { return c >= '0' && c <= '9'; }
+pub fn is_upper(c: u8) -> bool { return c >= 'A' && c <= 'Z'; }
+pub fn is_lower(c: u8) -> bool { return c >= 'a' && c <= 'z'; }
+pub fn is_alpha(c: u8) -> bool { return is_upper(c) || is_lower(c); }
+pub fn to_upper_byte(c: u8) -> u8 { if is_lower(c) { return c - 32; } return c; }
+pub fn to_lower_byte(c: u8) -> u8 { if is_upper(c) { return c + 32; } return c; }
+
+pub fn starts_with(s: str, prefix: str) -> bool {
+    if prefix.len > s.len { return false; }
+    return s[0..prefix.len] == prefix;
+}
+
+pub fn ends_with(s: str, suffix: str) -> bool {
+    if suffix.len > s.len { return false; }
+    return s[s.len - suffix.len..] == suffix;
+}
+
+// index of the first occurrence of `needle` in `hay`, or -1
+pub fn find(hay: str, needle: str) -> i64 {
+    if needle.len > hay.len { return -1; }
+    let last = hay.len - needle.len;
+    for i in 0..=last {
+        if hay[i..i + needle.len] == needle { return i; }
+    }
+    return -1;
+}
+
+// index of the last occurrence of `needle` in `hay`, or -1
+pub fn rfind(hay: str, needle: str) -> i64 {
+    if needle.len > hay.len { return -1; }
+    let mut i = hay.len - needle.len;
+    loop {
+        if hay[i..i + needle.len] == needle { return i; }
+        if i == 0 { return -1; }
+        i -= 1;
+    }
+}
+
+pub fn contains(hay: str, needle: str) -> bool { return find(hay, needle) >= 0; }
+
+pub fn count_byte(s: str, b: u8) -> i64 {
+    let mut n: i64 = 0;
+    for c in s { if c == b { n += 1; } }
+    return n;
+}
+
+pub fn trim_start(s: str) -> str {
+    let mut a: i64 = 0;
+    while a < s.len && is_space(s[a]) { a += 1; }
+    return s[a..];
+}
+
+pub fn trim_end(s: str) -> str {
+    let mut b = s.len;
+    while b > 0 && is_space(s[b - 1]) { b -= 1; }
+    return s[0..b];
+}
+
+pub fn trim(s: str) -> str { return trim_end(trim_start(s)); }
+
+// -1, 0 or 1 (byte-wise lexicographic)
+pub fn compare(a: str, b: str) -> i32 {
+    let n = if_min(a.len, b.len);
+    for i in 0..n {
+        if a[i] < b[i] { return -1; }
+        if a[i] > b[i] { return 1; }
+    }
+    if a.len < b.len { return -1; }
+    if a.len > b.len { return 1; }
+    return 0;
+}
+
+fn if_min(a: i64, b: i64) -> i64 { if a < b { return a; } return b; }
+
+pub fn eq_ignore_case(a: str, b: str) -> bool {
+    if a.len != b.len { return false; }
+    for i in 0..a.len {
+        if to_lower_byte(a[i]) != to_lower_byte(b[i]) { return false; }
+    }
+    return true;
+}
+
+pub fn to_upper(s: str) -> String {
+    let mut out = string_new();
+    for c in s { out += to_upper_byte(c); }
+    return out;
+}
+
+pub fn to_lower(s: str) -> String {
+    let mut out = string_new();
+    for c in s { out += to_lower_byte(c); }
+    return out;
+}
+
+pub fn reverse(s: str) -> String {
+    let mut out = string_new();
+    let mut i = s.len;
+    while i > 0 { i -= 1; out += s[i]; }
+    return out;
+}
+
+pub fn repeat(s: str, n: i64) -> String {
+    let mut out = string_new();
+    for _ in 0..n { out += s; }
+    return out;
+}
+
+// replace every occurrence of `from` (must be non-empty) with `to`
+pub fn replace(s: str, from: str, to: str) -> String {
+    let mut out = string_new();
+    if from.len == 0 { out += s; return out; }
+    let mut i: i64 = 0;
+    while i < s.len {
+        if i + from.len <= s.len && s[i..i + from.len] == from {
+            out += to;
+            i += from.len;
+        } else {
+            out += s[i];
+            i += 1;
+        }
+    }
+    return out;
+}
+
+// concatenate `parts` with `sep` between them
+pub fn join(parts: []str, sep: str) -> String {
+    let mut out = string_new();
+    for i in 0..parts.len {
+        if i > 0 { out += sep; }
+        out += parts[i];
+    }
+    return out;
+}
+
+// split on a non-empty separator; the pieces are views into `s`. Release with list.release.
+pub fn split(s: str, sep: str) -> list.List<str> {
+    let mut parts: list.List<str> = list.new();
+    if sep.len == 0 { list.push(&parts, s); return parts; }
+    let mut start: i64 = 0;
+    let mut i: i64 = 0;
+    while i + sep.len <= s.len {
+        if s[i..i + sep.len] == sep {
+            list.push(&parts, s[start..i]);
+            i += sep.len;
+            start = i;
+        } else {
+            i += 1;
+        }
+    }
+    list.push(&parts, s[start..]);
+    return parts;
+}

@@ -1,0 +1,16 @@
+struct Pair<A, B> { first: A, second: B }
+struct Plain { x: i32 }
+fn id<T>(x: T) -> T { return x; }
+fn none<T>() -> i32 { return 0; }
+fn two<A, B>(a: A, b: B) -> A { return a; }
+fn main() {
+    let a: Pair<i32> = Pair { first: 1, second: 2 };    // ERROR: expects 2 type arguments
+    let b: Plain<i32> = Plain { x: 1 };                  // ERROR: is not generic
+    let c = none();                                      // ERROR: cannot infer type parameter `T`
+    let d = id<i32, i32>(1);                             // ERROR: takes 1 type argument
+    let e = Pair { first: 1 };                           // ERROR: cannot infer type parameter `B`
+    let f = id(1, 2);                                    // ERROR: takes 1 argument
+    let g: i32 = id("str");                              // ERROR: mismatched types
+    let h = Pair { first: 1, second: 2 }.nope;           // ERROR: has no field `nope`
+    let i: Pair<i32, Missing> = 0;                       // ERROR: cannot find type `Missing`
+}

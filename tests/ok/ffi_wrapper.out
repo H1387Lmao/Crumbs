@@ -1,0 +1,12 @@
+[minigfx] open 'demo' 320x200
+[minigfx] rect 10,10 100x50 rgb(255,0,0)
+[minigfx] rect 20,20 30x30 rgb(0,128,255)
+key 98
+draw callback, frame 1
+key 99
+draw callback, frame 2
+key 27
+escape pressed
+draw callback, frame 3
+pixels drawn: 5900
+[minigfx] close 'demo'

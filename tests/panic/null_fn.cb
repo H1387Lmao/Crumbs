@@ -1,0 +1,6 @@
+// PANIC: null pointer dereference
+struct Hooks { on_event: fn(i32) }
+fn main() {
+    let h = Hooks { on_event: null };
+    h.on_event(1);
+}

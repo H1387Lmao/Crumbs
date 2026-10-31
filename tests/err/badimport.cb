@@ -1,0 +1,2 @@
+import nosuchmodule;                         // ERROR: cannot find module
+fn main() { }

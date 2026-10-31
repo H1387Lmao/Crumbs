@@ -1,0 +1,25 @@
+// Lexer torture test: literals, comments, escapes
+/* block /* nested */ comment */
+fn main() {
+    let a = 1_000_000;
+    let b = 0xFF;
+    let c = 0b1010_1010;
+    let d = 0o755;
+    let e = 255u8;
+    let f = 3.5e2;
+    let g = 1.25f32;
+    let h: i64 = 9223372036854775807;
+    let i: i8 = -128;
+    let j: u64 = 18446744073709551615;
+    let k = 'A';
+    let l = '\n';
+    let m = '\x41';
+    println(a, " ", b, " ", c, " ", d, " ", e, " ", f, " ", g);
+    println(h, " ", i, " ", j, " ", k, " ", l, " ", m);
+    println("tab:\t| quote:\" | backslash:\\ | hex:\x41\x42 | nul-safe");
+    let big: i64 = -9223372036854775808;
+    println(big);
+    println(0.1 + 0.2, " ", 1.0 / 3.0, " ", 100.0, " ", 1e21, " ", 1.5e-7);
+    for x in 0..3 { print(x); print(","); }
+    println();
+}

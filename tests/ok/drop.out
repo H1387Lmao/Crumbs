@@ -1,0 +1,40 @@
+-- scope order
+in scope
+drop b
+drop a
+-- move
+consume moved
+drop moved
+-- early exit
+drop early.a
+drop early.b
+drop early.a
+-- loops
+body 0
+drop loop
+drop loop
+drop loop
+-- conditional move
+consume maybe
+drop maybe
+end of maybe
+end of maybe
+drop maybe
+-- reassign
+drop first
+-- temporaries
+drop temp
+drop discarded
+-- fields
+drop boxed 7
+drop boxed.g
+drop pair.a
+drop pair.b
+-- try
+drop fails.g
+drop try_it.g
+-- explicit drop
+drop explicit
+-- end of main
+drop second
+drop through

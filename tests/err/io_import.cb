@@ -1,0 +1,6 @@
+import std.io;
+fn main() {
+    let c = io.getc();                       // ERROR: unhandled error union
+    io.get_line();                           // ERROR: unused error
+    io.putc("x");                            // ERROR: mismatched types
+}

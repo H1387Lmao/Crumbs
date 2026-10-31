@@ -1,0 +1,43 @@
+struct Guard { id: i32 }
+drop Guard(self) { println("drop ", self.id); }
+struct Holder { g: Guard }
+
+fn make() -> Guard { return Guard { id: 1 }; }
+fn take(g: Guard) { }
+
+fn main() {
+    let a = make();
+    take(a);
+    println(a.id);                       // ERROR: use of moved value `a`
+
+    let b = make();
+    let c = b;
+    take(b);                             // ERROR: use of moved value `b`
+    take(c);
+
+    let d = make();
+    if true { take(d); }
+    take(d);                             // ERROR: use of moved value `d`
+
+    let mut e = make();
+    take(e);
+    e = make();                          // re-assigning gives it a new value
+    take(e);
+
+    let f = make();
+    let mut i = 0;
+    while i < 3 {
+        take(f);                         // ERROR: use of moved value `f`
+        i += 1;
+    }
+
+    let h = Holder { g: make() };
+    let _g2 = h.g;                        // ERROR: cannot move a `Guard` out of a struct field
+    let mut hm = Holder { g: make() };
+    let p = &hm.g;
+    let _g3 = *p;                         // ERROR: cannot move a `Guard` out of a pointer
+    let arr = [make(), make()];
+    let _g4 = arr[0];                     // ERROR: cannot move a `Guard` out of an array or slice element
+    for x in arr[..] { }                 // ERROR: cannot iterate over `[]Guard` by value
+    let _rep = [make(); 3];               // ERROR: cannot repeat a value of type `Guard`
+}

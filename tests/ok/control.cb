@@ -1,0 +1,66 @@
+enum Dir { N, E, S, W }
+
+fn turn(d: Dir) -> Dir {
+    match d {
+        Dir.N => { return Dir.E; }
+        Dir.E => { return Dir.S; }
+        Dir.S => { return Dir.W; }
+        Dir.W => { return Dir.N; }
+    }
+}
+
+fn classify(n: i32) -> str {
+    match n {
+        0 => { return "zero"; }
+        1 | 2 | 3 => { return "small"; }
+        -1 => { return "minus one"; }
+        _ => { return "other"; }
+    }
+}
+
+fn collatz(mut_n: i64) -> i32 {
+    let mut n = mut_n;
+    let mut steps = 0;
+    while n != 1 {
+        if n % 2 == 0 { n /= 2; } else { n = 3 * n + 1; }
+        steps += 1;
+    }
+    return steps;
+}
+
+fn main() {
+    let mut d = Dir.N;
+    for _ in 0..5 { d = turn(d); }
+    println(d);
+    println(classify(0), " ", classify(2), " ", classify(-1), " ", classify(99));
+    println(collatz(27));
+    // loop / break / continue
+    let mut i = 0;
+    let mut total = 0;
+    loop {
+        i += 1;
+        if i > 20 { break; }
+        if i % 2 == 0 { continue; }
+        total += i;
+    }
+    println(total);
+    // nested loops with break
+    let mut found = 0;
+    for a in 1..20 {
+        for b in a..20 {
+            if a * a + b * b == 25 * 25 { found += 1; break; }
+        }
+    }
+    println(found);
+    // inclusive range edge: u8 up to 255 must terminate
+    let mut cnt = 0;
+    for v in 250u8..=255u8 { cnt += 1; let _unused = v; }
+    println(cnt);
+    for e in 5..=4 { println("never ", e); }
+    for q in 3..3 { println("never ", q); }
+    let b = true;
+    match b { true => { println("yes"); } false => { println("no"); } }
+    // else-if chain
+    let n = 15;
+    if n < 10 { println("lt10"); } else if n < 20 { println("lt20"); } else { println("big"); }
+}

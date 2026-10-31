@@ -1,0 +1,44 @@
+struct Node { value: i32, next: *Node }
+
+fn sum_list(head: *Node) -> i32 {
+    let mut cur = head;
+    let mut total = 0;
+    while cur != null { total += cur.value; cur = cur.next; }
+    return total;
+}
+
+fn find_max(a: *i32, n: i64) -> *i32 {
+    if n == 0 { return null; }
+    let mut best = a;
+    for i in 1..n {
+        let p = ((a as u64) + (i as u64) * 4) as *i32;   // pointer arithmetic via integer casts
+        if *p > *best { best = p; }
+    }
+    return best;
+}
+
+fn main() {
+    let nodes = alloc(Node, 4);
+    for i in 0..4 { nodes[i].value = (i as i32 + 1) * 5; nodes[i].next = null; }
+    for i in 0..3 { nodes[i].next = &nodes[i + 1]; }
+    println(sum_list(&nodes[0]), " ", sum_list(null));
+    free(nodes);
+
+    let data = [3, 9, 4, 1];
+    let mut d = data;
+    let m = find_max(&d[0], 4);
+    println(*m, " ", find_max(null, 0) == null);
+
+    // reinterpretation
+    let mut word: u32 = 0x01020304;
+    let bytes = &word as *u8;
+    println(*bytes);
+    let addr = &word as u64;
+    println(addr != 0, " ", (addr as *u32) == &word);
+    let n1: *i64 = null;
+    let n2 = 0 as *i64;
+    let n3 = null as *u8;
+    println(n1 == n2, " ", n3 == null, " ", n1 as i64);
+    word += 1;
+    println(word);
+}

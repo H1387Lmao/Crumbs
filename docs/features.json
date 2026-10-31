@@ -1,0 +1,360 @@
+{
+  "project": {
+    "name": "Crumbs",
+    "tagline": "A small language. Straight to C.",
+    "description": "Crumbs is a small, statically typed, C-style toy programming language implemented in Python. It compiles Crumbs source into a single C translation unit, then builds that output with GCC or Clang.",
+    "logo": "../resources/crumbs-logo.svg",
+    "quickstart": [
+      {
+        "command": "python3 crumbs.py run examples/hello.cb",
+        "description": "Compile and run a source file."
+      },
+      {
+        "command": "python3 crumbs.py build examples/hello.cb -o hello",
+        "description": "Build a native executable."
+      },
+      {
+        "command": "python3 crumbs.py emit examples/hello.cb",
+        "description": "Print the generated C source."
+      },
+      {
+        "command": "python3 crumbs.py check examples/hello.cb",
+        "description": "Run the type checker without building."
+      }
+    ]
+  },
+  "sections": [
+    {
+      "id": "basics",
+      "title": "Basics",
+      "description": "The core syntax used in everyday Crumbs programs.",
+      "subsections": [
+        {
+          "id": "program-structure",
+          "title": "Program structure",
+          "features": [
+            {
+              "id": "imports",
+              "title": "Importing Modules",
+              "desc": "Use `import` to load another Crumbs module. A dotted module path maps to a file path: `import std.math;` loads the standard math module. The module name is its final path segment unless an alias is provided.",
+              "code": "import std.math;\nimport std.conv as conv;",
+              "note": "Only `pub` items are visible to importing modules. Import cycles are rejected."
+            },
+            {
+              "id": "functions",
+              "title": "Defining Functions",
+              "desc": "Declare functions with `fn`, typed parameters, and an optional return type. The return type follows `->`. Every non-void function must return on every path.",
+              "code": "fn area(width: f64, height: f64) -> f64 {\n    return width * height;\n}\n\nfn main() -> void {\n    println(area(4.0, 3.0));\n}"
+            },
+            {
+              "id": "variables",
+              "title": "Variables and Mutability",
+              "desc": "Variables are immutable by default. Add `mut` when a binding needs to be reassigned or changed. Local types can often be inferred from the initializer.",
+              "code": "let count = 3;\nlet mut total: i32 = 0;\ntotal += count;"
+            },
+            {
+              "id": "constants",
+              "title": "Declaring Constants",
+              "desc": "Declare a named constant with `const`. Constants have an explicit type and an initializer.",
+              "code": "const LIMIT: i32 = 10;\n\nfn main() -> void {\n    println(LIMIT);\n}"
+            }
+          ]
+        },
+        {
+          "id": "loops",
+          "title": "Loops",
+          "features": [
+            {
+              "id": "for-loop",
+              "title": "For Loops",
+              "desc": "A `for` loop iterates over a range, array, slice, or string. `0..N` excludes the upper bound; `0..=N` includes it.",
+              "code": "for i in 0..10 {\n    println(i);\n}\n\nfor value in values {\n    println(value);\n}"
+            },
+            {
+              "id": "loop-control",
+              "title": "Loop Control",
+              "desc": "Use `break` to leave a loop and `continue` to skip to its next iteration. Destructors are also run when control leaves a scope through `break` or `continue`.",
+              "code": "for i in 0..100 {\n    if i == 10 { break; }\n    if i % 2 == 0 { continue; }\n    println(i);\n}"
+            }
+          ]
+        },
+        {
+          "id": "decisions",
+          "title": "Conditions and matching",
+          "features": [
+            {
+              "id": "if-expressions",
+              "title": "Conditional Branches",
+              "desc": "Conditions must be `bool`. Use `if` and `else` blocks to select which statements execute.",
+              "code": "if score >= 60 {\n    println(\"passed\");\n} else {\n    println(\"try again\");\n}"
+            },
+            {
+              "id": "match",
+              "title": "Pattern Matching",
+              "desc": "`match` selects a branch based on a value. Matches over enums must be exhaustive, so every variant needs to be handled.",
+              "code": "enum Color { Red, Green, Blue }\n\nmatch color {\n    Color.Red => { println(\"red\"); }\n    Color.Green => { println(\"green\"); }\n    Color.Blue => { println(\"blue\"); }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "types",
+      "title": "Types",
+      "description": "Static types, user-defined data, generic functions, and numeric conversions.",
+      "subsections": [
+        {
+          "id": "built-in-types",
+          "title": "Built-in types",
+          "features": [
+            {
+              "id": "primitive-types",
+              "title": "Primitive Types",
+              "desc": "Crumbs provides signed and unsigned integers (`i8` through `i64`, `u8` through `u64`), `f32`, `f64`, `bool`, `str`, `String`, and `void`.",
+              "code": "let age: u8 = 16;\nlet temperature: f32 = 21.5;\nlet enabled: bool = true;\nlet name: str = \"Crumbs\";"
+            },
+            {
+              "id": "arrays-and-slices",
+              "title": "Arrays and Slices",
+              "desc": "`[N]T` is a fixed-size array and `[]T` is a slice. Indexing accesses an element; slicing creates a view. Slice bounds and ranges are checked at runtime.",
+              "code": "let values = [10, 20, 30];\nlet first = values[0];\nlet rest = values[1..];\n\nlet buffer = alloc(i64, 100);\nfree(buffer);"
+            },
+            {
+              "id": "structs-enums",
+              "title": "Structs and Enums",
+              "desc": "Define records with `struct` and a finite set of variants with `enum`. Struct fields and function parameters carry explicit types.",
+              "code": "pub struct Point {\n    x: f64,\n    y: f64\n}\n\nenum Color { Red, Green }\n\nlet origin = Point { x: 0.0, y: 0.0 };"
+            },
+            {
+              "id": "pointers",
+              "title": "Pointers and Dereferencing",
+              "desc": "A `*T` is a pointer to `T` and may be null. Take an address with `&`, dereference with `*`, and use `as` for explicit pointer or integer casts. Dereferencing null panics with a source location.",
+              "code": "struct Node { value: i32 }\n\nlet mut node = Node { value: 7 };\nlet ptr: *Node = &node;\nprintln((*ptr).value);\n\nlet empty: *Node = null;"
+            }
+          ]
+        },
+        {
+          "id": "generics",
+          "title": "Generics",
+          "features": [
+            {
+              "id": "generic-functions",
+              "title": "Generic Functions",
+              "desc": "Generic functions are monomorphized: each distinct type instantiation produces specialized C code. Type arguments are inferred from call arguments or can be written explicitly.",
+              "code": "fn max<T>(a: T, b: T) -> T {\n    if a > b { return a; }\n    return b;\n}\n\nlet inferred = max(3, 9);\nlet explicit = max<i64>(5, 6);",
+              "note": "There are no trait bounds. Operations used in a generic body must be valid for the types chosen at each instantiation."
+            },
+            {
+              "id": "generic-structs",
+              "title": "Generic Structs",
+              "desc": "Structs can declare type parameters. Crumbs can infer generic struct arguments from initialized fields or an expected type.",
+              "code": "struct Pair<A, B> {\n    first: A,\n    second: B\n}\n\nlet pair = Pair { first: 1, second: \"x\" };"
+            }
+          ]
+        },
+        {
+          "id": "numeric-conversions",
+          "title": "Numeric conversions",
+          "features": [
+            {
+              "id": "implicit-conversions",
+              "title": "Implicit Numeric Conversions",
+              "desc": "Lossless widening conversions happen silently. Mixed numeric operators use a common type that can represent both operands. Narrowing or sign-changing assignments are allowed with a runtime range check and a warning.",
+              "code": "let small: u8 = 200;\nlet signed: i8 = 3;\nlet mixed = small + signed;\nlet large: i32 = 300;\nlet narrowed: u8 = large; // runtime range check + warning"
+            },
+            {
+              "id": "explicit-casts",
+              "title": "Explicit Type Casts",
+              "desc": "Use `as` for explicit conversions, including truncating casts. Conversions such as float-to-integer and number-to-pointer require an explicit cast. `--strict-casts` promotes conversion warnings to errors.",
+              "code": "let raw: i32 = 300;\nlet byte = raw as u8;\nlet address = 0 as *Node;"
+            },
+            {
+              "id": "wrapping-arithmetic",
+              "title": "Wrapping Arithmetic",
+              "desc": "Normal integer arithmetic is overflow-checked. The wrapping operators `+%`, `-%`, and `*%` wrap instead of panicking, and wrapping compound assignments are available too.",
+              "code": "let mut cell: u8 = 255;\ncell +%= 1; // wraps to 0\nlet hash = 17 *% 31;"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "errors-and-memory",
+      "title": "Errors and memory",
+      "description": "Typed error handling, ownership-like moves, strings, allocation, and optional garbage collection.",
+      "subsections": [
+        {
+          "id": "errors",
+          "title": "Errors",
+          "features": [
+            {
+              "id": "error-unions",
+              "title": "Error Types and Values",
+              "desc": "`T!` represents either a value of type `T` or an error. Define named error values with `error`, and raise one with `throw`.",
+              "code": "error NotFound;\n\nfn lookup(id: i32) -> i32! {\n    if id < 0 { throw NotFound; }\n    return id * 2;\n}"
+            },
+            {
+              "id": "try-catch",
+              "title": "Error Propagation and Handling",
+              "desc": "Use `try` to propagate an error to the caller. Use `catch` to supply a fallback value or handle the error with a handler that must diverge.",
+              "code": "let value = try lookup(3);\nlet fallback = lookup(-1) catch 0;\n\nlookup(-1) catch |err| {\n    println(\"lookup failed\");\n    return;\n};"
+            }
+          ]
+        },
+        {
+          "id": "ownership-and-strings",
+          "title": "Strings and destructors",
+          "features": [
+            {
+              "id": "str-and-string",
+              "title": "String Views and Owned Strings",
+              "desc": "`str` is an immutable byte-string view. `String` is an owned, growable heap string with a destructor. Strings support appending, concatenation, indexing, slicing, and conversion to `str` where a borrow is valid.",
+              "code": "let mut text = string_new();\ntext += \"hello\";\ntext += ' ';\nlet message = text + \"world\";\nprintln(message);\n\nlet view: str = text; // borrows text"
+            },
+            {
+              "id": "destructors",
+              "title": "Destructors and Move Semantics",
+              "desc": "Define a destructor with `drop TypeName(self)`. Values with destructors are moved rather than copied, and the compiler tracks moved values to prevent later use. Destructors run when values leave scope, including on return and error propagation.",
+              "code": "struct Buffer { data: []u8 }\n\ndrop Buffer(self) {\n    free((*self).data);\n}\n\nlet first = Buffer { data: alloc(u8, 64) };\nlet second = first; // ownership moves\n// first cannot be used after the move"
+            }
+          ]
+        },
+        {
+          "id": "allocation",
+          "title": "Allocation and garbage collection",
+          "features": [
+            {
+              "id": "manual-allocation",
+              "title": "Heap Allocation",
+              "desc": "`alloc(T, n)` allocates a slice of `n` elements and `free` releases it. Allocation failure is checked by the runtime. `free` can also release an owned `String` early.",
+              "code": "let values = alloc(i64, 32);\nvalues[0] = 42;\nfree(values);"
+            },
+            {
+              "id": "garbage-collector",
+              "title": "Garbage Collection",
+              "desc": "Build with `--gc` to enable a conservative, single-threaded mark-and-sweep collector on Linux with glibc or musl. It manages `alloc()` blocks, `String` buffers, and the string arena. Explicit `free` and destructors remain valid.",
+              "code": "// Build with the compiler flag:\n// python3 crumbs.py build main.cb --gc\n\ngc_collect();\nprintln(gc_bytes());",
+              "note": "Pointers retained only on the C side are not visible to the collector. Keep a Crumbs reference to memory that C must retain."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "standard-library",
+      "title": "Standard library",
+      "description": "The standard library is written in Crumbs and is imported with `std.*` module paths.",
+      "subsections": [
+        {
+          "id": "io",
+          "title": "Input and output",
+          "features": [
+            {
+              "id": "io-functions",
+              "title": "Standard Input and Output",
+              "desc": "The I/O module provides character input and output, line input, and flushing. Input operations that can fail return an error union.",
+              "code": "import std.io;\n\nfn main() -> void! {\n    let line = try io.get_line();\n    io.putc('!');\n    io.flush();\n}"
+            }
+          ]
+        },
+        {
+          "id": "collections-and-utilities",
+          "title": "Collections and utilities",
+          "features": [
+            {
+              "id": "std-list",
+              "title": "Growable Lists",
+              "desc": "`list.List<T>` is a growable array that owns its elements. It supports primitive values, strings, structs, arrays, function pointers, and nested lists. Elements are released automatically when the list is released or leaves scope.",
+              "code": "import std.list;\n\nlet mut numbers: list.List<i32> = list.new();\nnumbers.push(10);\nnumbers.push(20);\nprintln(numbers.get(0));"
+            },
+            {
+              "id": "other-modules",
+              "title": "Standard Library Modules",
+              "desc": "The standard library also includes `std.math`, `std.conv`, `std.str`, `std.rand`, and `std.mem`. The string module includes common operations such as trimming, splitting, joining, replacing, and case conversion.",
+              "code": "import std.math;\nimport std.conv;\nimport std.str;\nimport std.rand;\nimport std.mem;"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c-interop",
+      "title": "C interoperability",
+      "description": "Call C libraries and expose Crumbs functions through declarations in the source file.",
+      "subsections": [
+        {
+          "id": "external-api",
+          "title": "External declarations",
+          "features": [
+            {
+              "id": "extern-functions",
+              "title": "External Functions and Structs",
+              "desc": "Declare C functions and data with `extern`. An external struct uses C layout; opaque external structs can be used behind pointers. Symbol names can be aliased.",
+              "code": "include \"SDL.h\";\nlink \"SDL2\";\n\nextern struct Window;\nextern fn SDL_Init(flags: u32) -> i32;\nextern \"SDL_GetError\" fn get_error() -> *u8;"
+            },
+            {
+              "id": "linking-and-exporting",
+              "title": "Linking and Exporting Symbols",
+              "desc": "Use `link` to add a library or object/source file. Use `export fn` to give a Crumbs function a plain C name so external C code can call it. Command-line alternatives include `-l`, `-L`, `--link`, and `--pkg`.",
+              "code": "link \"SDL2\";\nlink pkg \"sdl2\";\n\nexport fn on_event(code: i32) -> i32 {\n    return code;\n}"
+            },
+            {
+              "id": "c-bridge-helpers",
+              "title": "C Interoperability Helpers",
+              "desc": "Bridge helpers include `cstr`, `from_cstr`, `.ptr`, `slice_of`, and `size_of`. Only types with a C equivalent can cross the boundary.",
+              "code": "let c_name = cstr(name);\nlet name_view = from_cstr(c_name);\nlet data_ptr = values.ptr;\nlet view = slice_of(data_ptr, 8);"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "compiler",
+      "title": "Compiler and safety",
+      "description": "The compiler pipeline, diagnostics, runtime checks, and current language limits.",
+      "subsections": [
+        {
+          "id": "compiler-tools",
+          "title": "Compiler commands",
+          "features": [
+            {
+              "id": "cli-commands",
+              "title": "Compiler Commands",
+              "desc": "The command-line driver can run, build, emit generated C, or type-check a source file. GCC and Clang are supported as C compilers.",
+              "code": "python3 crumbs.py run examples/hello.cb\npython3 crumbs.py build examples/hello.cb -o hello\npython3 crumbs.py emit examples/hello.cb\npython3 crumbs.py check examples/hello.cb"
+            },
+            {
+              "id": "compiler-flags",
+              "title": "Build Options",
+              "desc": "Useful options include `--unchecked` to remove overflow and bounds checks, `-O3` for optimization, `--cc clang` to select the C compiler, `--keep-c` to retain generated C, `--entry` to choose an entry function, and `--gc` to enable the collector.",
+              "code": "python3 crumbs.py build main.cb \\\n    --unchecked -O3 --cc clang --keep-c out.c\n\npython3 crumbs.py build library.cb --entry="
+            }
+          ]
+        },
+        {
+          "id": "safety",
+          "title": "Safety checks",
+          "features": [
+            {
+              "id": "compile-time-checks",
+              "title": "Compile-Time Safety Checks",
+              "desc": "The checker enforces initialization, mutability, boolean conditions, complete returns, exhaustive matches, and handling of error unions. It also diagnoses invalid constant bounds, division by a literal zero, and unused or unreachable code.",
+              "code": "let value: u8 = 12;\n// value = 13; // cannot assign to an immutable binding\n\nif value > 10 {\n    println(\"large\");\n}"
+            },
+            {
+              "id": "runtime-checks",
+              "title": "Runtime Safety Checks",
+              "desc": "The runtime panics with a source location and exit code 101 for integer overflow, division by zero, array/slice/string bounds, invalid slice ranges, invalid shift amounts, and allocation failure.",
+              "code": "let values = [1, 2, 3];\nprintln(values[8]); // bounds panic"
+            },
+            {
+              "id": "known-limits",
+              "title": "Current Language Limitations",
+              "desc": "Crumbs is a toy language. The README lists no generic enums, trait bounds, closures, or methods. The collector is conservative and single-threaded. Slices are mutable views even when created from immutable arrays. Generated C currently relies on GCC/Clang statement expressions and overflow builtins."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+struct Counter { hits: i32, bytes: [4]u8 }
+
+fn next_id(c: *Counter) -> i32 { return c.hits++; }
+
+// `mut` parameters: a mutable local copy, no `let mut a = _a;` needed
+fn countdown(mut n: i32) -> i32 {
+    let mut steps = 0;
+    while n > 0 { n--; steps++; }
+    return steps;
+}
+fn clamp_add(mut a: u8, b: u8) -> u8 { a +%= b; return a; }
+fn bump_all(mut v: [3]i32) -> i32 { v[0]++; v[1] += 10; v[2]--; return v[0] + v[1] + v[2]; }
+
+fn main() {
+    let mut i = 0;
+    i++; ++i; i--;
+    println(i);
+    println(i++, " ", i, " ", ++i, " ", i, " ", i--, " ", --i);
+
+    let mut a = [10, 20, 30];
+    let mut k = 0;
+    a[k++] += 1;
+    a[k++] += 2;
+    a[++k - 1]++;
+    println(a[0], " ", a[1], " ", a[2], " k=", k);
+
+    let mut c = Counter { hits: 0, bytes: [0; 4] };
+    println(next_id(&c), next_id(&c), next_id(&c), " ", c.hits);
+    c.bytes[1]++;
+    c.bytes[1]++;
+    c.hits--;
+    println(c.bytes[1], " ", c.hits);
+
+    let mut f = 1.5;
+    f++;
+    --f;
+    f++;
+    println(f);
+
+    println(countdown(5), " ", clamp_add(250, 10), " ", bump_all([1, 2, 3]));
+    let orig = [1, 2, 3];
+    bump_all(orig);
+    println(orig[0]);
+
+    // wrapping compound assignment (e.g. brainf*** cells)
+    let mut cell: u8 = 255;
+    cell +%= 1;
+    println(cell);
+    cell -%= 1;
+    println(cell);
+    cell *%= 2;
+    println(cell);
+    let mut p = 0;
+    let mut tape = [0u8; 8];
+    for _ in 0..300 { tape[p] +%= 1; }
+    println(tape[0]);
+    p++;
+    println(p);
+}

@@ -1,0 +1,82 @@
+// std.list works for every element type, including ones with destructors.
+import std.list;
+
+struct Point { x: i32, y: i32 }
+struct Guard { id: i32 }
+drop Guard(self) { println("drop guard ", self.id); }
+
+fn by_x(a: *Point, b: *Point) -> i32 { return a.x - b.x; }
+fn desc(a: *i32, b: *i32) -> i32 { return *b - *a; }
+fn is_big(p: *Point) -> bool { return p.x > 10; }
+fn show(p: *Point) { println("(", p.x, ",", p.y, ")"); }
+fn twice(x: i32) -> i32 { return x * 2; }
+fn thrice(x: i32) -> i32 { return x * 3; }
+
+fn main() {
+    println("-- i32");
+    let mut a = list.new<i32>();
+    for i in 0..6 { list.push(&a, i * i); }
+    list.insert(&a, 2, 100);
+    println(list.remove(&a, 0), " ", list.swap_remove(&a, 1), " ", list.get(&a, 0), " len ", a.len);
+    list.sort_by(&a, desc);
+    let v = list.view(&a);
+    for i in 0..v.len { print(v[i], " "); }
+    println("");
+    list.reverse(&a);
+    println(list.pop(&a) catch -1, " ", list.pop(&a) catch -1);
+    list.set(&a, 0, 55);
+    println(*list.at(&a, 0));
+
+    println("-- struct");
+    let mut ps = list.new<Point>();
+    list.push(&ps, Point { x: 30, y: 1 });
+    list.push(&ps, Point { x: 5, y: 2 });
+    list.push(&ps, Point { x: 12, y: 3 });
+    list.sort_by(&ps, by_x);
+    list.for_each(&ps, show);
+    println(list.find_by(&ps, is_big) catch -1);
+    println(list.get(&ps, 1).y);
+
+    println("-- str and String");
+    let mut words = list.new<str>();
+    list.push(&words, "alpha");
+    list.push(&words, "beta");
+    println(list.get(&words, 1), " ", words.len);
+    let mut owned = list.new<String>();
+    list.push(&owned, string_from("one"));
+    let mut two = string_from("tw");
+    two += "o";
+    list.push(&owned, two);
+    println(list.at(&owned, 0).len, " ", *list.at(&owned, 1));
+
+    println("-- arrays, functions, nested lists");
+    let mut arrs = list.new<[2]i32>();
+    list.push(&arrs, [1, 2]);
+    list.push(&arrs, [3, 4]);
+    println(list.get(&arrs, 1)[0]);
+    let mut fns = list.new<fn(i32) -> i32>();
+    list.push(&fns, twice);
+    list.push(&fns, thrice);
+    println(list.get(&fns, 0)(7), " ", list.get(&fns, 1)(7));
+    let mut grid = list.new<list.List<i32>>();
+    for r in 0..3 {
+        let mut row = list.new<i32>();
+        for c in 0..r + 1 { list.push(&row, c); }
+        list.push(&grid, row);
+    }
+    println(list.at(&grid, 2).len, " ", grid.len);
+
+    println("-- destructors");
+    let mut gs = list.new<Guard>();
+    list.push(&gs, Guard { id: 1 });
+    list.push(&gs, Guard { id: 2 });
+    list.push(&gs, Guard { id: 3 });
+    list.push(&gs, Guard { id: 4 });
+    let g = list.remove(&gs, 1);
+    println("removed ", g.id);
+    list.set(&gs, 0, Guard { id: 10 });
+    println("clear");
+    list.clear(&gs);
+    list.push(&gs, Guard { id: 5 });
+    println("end of main");
+}

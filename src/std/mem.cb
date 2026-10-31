@@ -1,0 +1,19 @@
+// std.mem: small generic helpers.
+pub fn swap<T>(a: *T, b: *T) {
+    let t = read_at(a);
+    write_at(a, read_at(b));
+    write_at(b, t);
+}
+pub fn min<T>(a: T, b: T) -> T { if a < b { return a; } return b; }
+pub fn max<T>(a: T, b: T) -> T { if a > b { return a; } return b; }
+
+// in-place insertion sort for any element type with `<`
+pub fn sort<T>(s: []T) {
+    for i in 1..s.len {
+        let mut j = i;
+        while j > 0 && s[j] < s[j - 1] {
+            swap(&s[j], &s[j - 1]);
+            j -= 1;
+        }
+    }
+}

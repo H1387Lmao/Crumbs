@@ -1,0 +1,55 @@
+// Implicit numeric conversions: widening is silent, narrowing is range-checked.
+const LIMIT: i32 = 255;
+fn twice(x: i32) -> i32 { return x * 2; }
+fn to_f(x: f64) -> f64 { return x / 2.0; }
+fn wide(x: i64) -> i64 { return x + 1; }
+fn narrow(x: u8) -> u8 { return x; }
+
+fn main() {
+    let a: u16 = 40000;
+    let b: i32 = 50000;
+    println(a + b, " ", a - b, " ", a / 2, " ", twice(a), " ", wide(b));
+    println(a == b, " ", a != b);
+
+    // mixed widths and signs pick a common type that holds every value of both
+    let small: u8 = 200;
+    let neg: i8 = -5;
+    println(small + neg, " ", small - neg, " ", neg * small);       // i16 arithmetic
+    let u32v: u32 = 4000000000;
+    let i32v: i32 = -1;
+    println(u32v + i32v, " ", u32v > 5);                              // computed in i64
+
+    // ints to floats, f32 to f64
+    let n: i32 = 7;
+    let f: f64 = n;
+    let h: f32 = 1.5;
+    let d: f64 = h;
+    println(f / 2, " ", to_f(n), " ", d, " ", n * 1.5, " ", h + n);
+
+    // assignment / compound assignment / returns convert too
+    let mut w: u32 = 10;
+    let step: u8 = 5;
+    w += step;
+    w -= 3u16;
+    let mut x: i64 = 0;
+    x = w;
+    x += n;
+    println(w, " ", x);
+
+    // narrowing is allowed when the value fits (range-checked at runtime)
+    let mid: i32 = 200;
+    let nb: u8 = mid;
+    println(nb, " ", narrow(mid), " ", mid as u8);
+
+    // constants that fit convert silently
+    let lim: u8 = LIMIT;
+    println(lim);
+
+    // ranges with mixed integer types
+    let end: u8 = 4;
+    let mut total = 0;
+    for i in 0..end { total += i; }
+    let lo: i32 = -2;
+    for j in lo..=end { total += j; }
+    println(total);
+}

@@ -1,0 +1,27 @@
+fn main() {
+    let a: i32 = 7;
+    let b: i32 = -3;
+    println(a / b, " ", a % b, " ", -a / 2, " ", -a % 4);
+    let x: u8 = 200;
+    println(x +% 100, " ", x -% 201, " ", x *% 2);
+    let y: i32 = 2147483647;
+    println(y +% 1, " ", (y as i64) + 1);
+    println(1 << 4, " ", 256 >> 3, " ", -16 >> 2, " ", 5 & 3, " ", 5 | 3, " ", 5 ^ 3, " ", ~5);
+    let u: u8 = 0b1100;
+    println(~u, " ", u << 2, " ", u >> 2);
+    let big: i32 = 300;
+    let neg: i32 = -1;
+    println(big as u8, " ", neg as u8, " ", 3.99 as i32, " ", -3.99 as i32, " ", 1e20 as i32, " ", -1e20 as i32);
+    println(true as i32, " ", 65 as u8, " ", (65 as u8) as f64, " ", 7 as f64 / 2.0);
+    println(1 + 2 * 3 - 4 / 2, " ", (1 + 2) * 3, " ", 10 - 4 - 3, " ", 2 * 3 % 4);
+    println(1 < 2 && 2 < 3, " ", 1 > 2 || 3 > 2, " ", !(1 == 1), " ", 5 != 5);
+    let mut z = 10;
+    z += 5; z -= 3; z *= 2; z /= 4; z %= 4;
+    println(z);
+    let mut bits: u32 = 1;
+    bits <<= 31; bits >>= 30; bits |= 4; bits &= 6; bits ^= 1;
+    println(bits);
+    let f: f32 = 0.1;
+    println(f, " ", f * 3.0, " ", 16777216.0f32 + 1.0f32);
+    println(-0.0, " ", true);
+}

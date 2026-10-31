@@ -1,0 +1,31 @@
+import gfx;
+
+struct Scene { frames: i32 }
+
+fn draw(user: *void) {
+    let scene = user as *Scene;
+    scene.frames += 1;
+    println("draw callback, frame ", scene.frames);
+}
+
+fn main() {
+    let mut win = gfx.open("demo", 320, 200);
+    gfx.rect(&win, 10, 10, 100, 50, 255, 0, 0);
+    gfx.rect(&win, 20, 20, 30, 30, 0, 128, 255);
+    let mut scene = Scene { frames: 0 };
+    gfx.on_draw(&win, draw, &scene as *void);
+    let mut key = 0;
+    let mut running = true;
+    while running {
+        match gfx.poll(&win, &key) {
+            gfx.Event.Key => {
+                println("key ", key);
+                if key == gfx.escape() { println("escape pressed"); }
+                gfx.frame(&win);
+            }
+            gfx.Event.Quit => { running = false; }
+            _ => {}
+        }
+    }
+    println("pixels drawn: ", gfx.pixels(&win));
+}   // `win` is closed here by its destructor

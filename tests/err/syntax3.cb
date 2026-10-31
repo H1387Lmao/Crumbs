@@ -1,0 +1,3 @@
+fn main() {
+    let t = '';                              // ERROR: unterminated or empty char literal
+}

@@ -1,0 +1,180 @@
+// std.list: a growable array that works for every element type.
+//
+// A List owns its elements: it is destroyed automatically at the end of its scope, running each
+// element's destructor (and freeing `String` elements). Elements with destructors can only be moved
+// in and out (`push`, `pop`, `remove`) or borrowed (`at`); copying accessors such as `get` and
+// `extend` need a copyable element type.
+
+pub error Empty;
+pub error NotFound;
+
+pub struct List<T> { items: []T, len: i64 }
+
+drop<T> List<T>(self) { release(self); }
+
+pub fn new<T>() -> List<T> {
+    return List { items: slice_of(null as *T, 0), len: 0 };
+}
+
+pub fn with_capacity<T>(n: i64) -> List<T> {
+    return List { items: alloc(T, n), len: 0 };
+}
+
+// copies the elements of a slice (copyable element types)
+pub fn from_slice<T>(xs: []T) -> List<T> {
+    let mut l = new<T>();
+    for i in 0..xs.len { push(&l, xs[i]); }
+    return l;
+}
+
+fn grow<T>(l: *List<T>, need: i64) {
+    let mut cap = l.items.len * 2;
+    if cap < 4 { cap = 4; }
+    while cap < need { cap *= 2; }
+    let bigger = alloc(T, cap);
+    for i in 0..l.len { write_at(&bigger[i], read_at(&l.items[i])); }
+    free(l.items);
+    l.items = bigger;
+}
+
+pub fn push<T>(l: *List<T>, v: T) {
+    if l.len == l.items.len { grow(l, l.len + 1); }
+    write_at(&l.items[l.len], v);
+    l.len += 1;
+}
+
+pub fn pop<T>(l: *List<T>) -> T! {
+    if l.len == 0 { throw Empty; }
+    l.len -= 1;
+    return read_at(&l.items[l.len]);
+}
+
+// a pointer to element i (bounds-checked); works for every element type
+pub fn at<T>(l: *List<T>, i: i64) -> *T {
+    if i < 0 || i >= l.len { panic("list index out of range"); }
+    return &l.items[i];
+}
+
+// a copy of element i (copyable element types)
+pub fn get<T>(l: *List<T>, i: i64) -> T {
+    if i < 0 || i >= l.len { panic("list index out of range"); }
+    return l.items[i];
+}
+
+// replaces element i; the old element is destroyed
+pub fn set<T>(l: *List<T>, i: i64, v: T) {
+    *at(l, i) = v;
+}
+
+// the live elements as a slice (valid until the next push)
+pub fn view<T>(l: *List<T>) -> []T { return l.items[0..l.len]; }
+
+pub fn insert<T>(l: *List<T>, i: i64, v: T) {
+    if i < 0 || i > l.len { panic("list insert index out of range"); }
+    if l.len == l.items.len { grow(l, l.len + 1); }
+    let mut j = l.len;
+    while j > i {
+        write_at(&l.items[j], read_at(&l.items[j - 1]));
+        j -= 1;
+    }
+    write_at(&l.items[i], v);
+    l.len += 1;
+}
+
+// removes element i and returns it, keeping the order of the rest
+pub fn remove<T>(l: *List<T>, i: i64) -> T {
+    if i < 0 || i >= l.len { panic("list remove index out of range"); }
+    let v = read_at(&l.items[i]);
+    for j in i..l.len - 1 { write_at(&l.items[j], read_at(&l.items[j + 1])); }
+    l.len -= 1;
+    return v;
+}
+
+// removes element i by moving the last element into its place (O(1), does not keep the order)
+pub fn swap_remove<T>(l: *List<T>, i: i64) -> T {
+    if i < 0 || i >= l.len { panic("list remove index out of range"); }
+    let v = read_at(&l.items[i]);
+    l.len -= 1;
+    if i != l.len { write_at(&l.items[i], read_at(&l.items[l.len])); }
+    return v;
+}
+
+// appends copies of a slice's elements (copyable element types)
+pub fn extend<T>(l: *List<T>, xs: []T) {
+    for i in 0..xs.len { push(l, xs[i]); }
+}
+
+// destroys every element but keeps the allocation
+pub fn clear<T>(l: *List<T>) {
+    for i in 0..l.len { drop_at(&l.items[i]); }
+    l.len = 0;
+}
+
+// destroys every element and frees the storage; the list is empty (and reusable) afterwards.
+// Calling it is optional: lists are released automatically at the end of their scope.
+pub fn release<T>(l: *List<T>) {
+    clear(l);
+    free(l.items);
+    l.items = slice_of(null as *T, 0);
+}
+
+fn swap_at<T>(l: *List<T>, i: i64, j: i64) {
+    let t = read_at(&l.items[i]);
+    write_at(&l.items[i], read_at(&l.items[j]));
+    write_at(&l.items[j], t);
+}
+
+pub fn reverse<T>(l: *List<T>) {
+    let mut i = 0;
+    let mut j = l.len - 1;
+    while i < j {
+        swap_at(l, i, j);
+        i += 1;
+        j -= 1;
+    }
+}
+
+fn sift<T>(l: *List<T>, start: i64, end: i64, cmp: fn(*T, *T) -> i32) {
+    let mut root = start;
+    loop {
+        let mut child = 2 * root + 1;
+        if child >= end { return; }
+        if child + 1 < end && cmp(&l.items[child], &l.items[child + 1]) < 0 { child += 1; }
+        if cmp(&l.items[root], &l.items[child]) < 0 {
+            swap_at(l, root, child);
+            root = child;
+        } else {
+            return;
+        }
+    }
+}
+
+// in-place heap sort, O(n log n), not stable. `cmp` returns <0, 0 or >0 like C's qsort.
+pub fn sort_by<T>(l: *List<T>, cmp: fn(*T, *T) -> i32) {
+    let n = l.len;
+    if n < 2 { return; }
+    let mut i = n / 2 - 1;
+    loop {
+        sift(l, i, n, cmp);
+        if i == 0 { break; }
+        i -= 1;
+    }
+    let mut end = n - 1;
+    while end > 0 {
+        swap_at(l, 0, end);
+        sift(l, 0, end, cmp);
+        end -= 1;
+    }
+}
+
+pub fn for_each<T>(l: *List<T>, f: fn(*T)) {
+    for i in 0..l.len { f(&l.items[i]); }
+}
+
+// index of the first element for which `pred` is true
+pub fn find_by<T>(l: *List<T>, pred: fn(*T) -> bool) -> i64! {
+    for i in 0..l.len {
+        if pred(&l.items[i]) { return i; }
+    }
+    throw NotFound;
+}

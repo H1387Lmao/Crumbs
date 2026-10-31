@@ -1,0 +1,9 @@
+yx
+1: [rest of line one] len=16
+2: [line two] len=8
+3: [three] len=5
+4: [] len=0
+5: [five] len=4
+6: [] len=0
+7: [last without newline] len=20
+done after 7 lines: std.io.Eof

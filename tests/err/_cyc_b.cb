@@ -1,0 +1,2 @@
+import _cyc_a;                               // ERROR: circular import
+pub fn b() { }

@@ -1,0 +1,50 @@
+struct Pair<A, B> { first: A, second: B }
+struct Box<T> { value: T }
+struct Stack<T> { items: []T, len: i64 }
+
+fn max<T>(a: T, b: T) -> T { if a > b { return a; } return b; }
+fn swap<T>(a: *T, b: *T) { let t = *a; *a = *b; *b = t; }
+fn make_pair<A, B>(a: A, b: B) -> Pair<A, B> { return Pair { first: a, second: b }; }
+fn swapped<A, B>(p: Pair<A, B>) -> Pair<B, A> { return Pair { first: p.second, second: p.first }; }
+fn first_of<T>(s: []T) -> T { return s[0]; }
+fn zero<T>() -> T { let z: T = 0 as T; return z; }
+fn sum<T>(s: []T) -> T {
+    let mut acc: T = 0 as T;
+    for v in s { acc += v; }
+    return acc;
+}
+
+fn stack_new<T>() -> Stack<T> { return Stack { items: alloc(T, 2), len: 0 }; }
+fn push<T>(s: *Stack<T>, v: T) {
+    if s.len == s.items.len {
+        let bigger = alloc(T, s.items.len * 2);
+        for i in 0..s.len { bigger[i] = s.items[i]; }
+        free(s.items);
+        s.items = bigger;
+    }
+    s.items[s.len] = v;
+    s.len += 1;
+}
+fn pop<T>(s: *Stack<T>) -> T { s.len -= 1; return s.items[s.len]; }
+
+fn main() {
+    println(max(3, 9), " ", max(2.5, 1.5), " ", max(7u8, 200u8), " ", max<i64>(5, 6));
+    let mut a = 1; let mut b = 2;
+    swap(&a, &b);
+    println(a, " ", b);
+    let p = make_pair(1, "one");
+    let q = swapped(p);
+    println(p.first, " ", p.second, " ", q.first, " ", q.second);
+    let bx: Box<f64> = Box { value: 2.5 };
+    let nested: Box<Pair<i32, bool>> = Box { value: make_pair(4, true) };
+    println(bx.value, " ", nested.value.first, " ", nested.value.second);
+    let arr = [10, 20, 30];
+    let fl = [1.5, 2.5];
+    println(first_of(arr[0..]), " ", sum(arr[0..]), " ", sum(fl[0..]));
+    let z: i64 = zero();
+    println(z);
+    let mut st: Stack<i32> = stack_new();
+    for i in 0..10 { push(&st, i * i); }
+    println(st.len, " ", pop(&st), " ", pop(&st));
+}
+fn mut_ref(s: *Stack<i32>) -> *Stack<i32> { return s; }

@@ -1,0 +1,16 @@
+fn takes(a: i32) {
+    a++;                                     // ERROR: cannot apply `++` to an immutable place
+    a = 5;                                   // ERROR: cannot assign to an immutable place
+}
+fn ok_mut(mut a: i32) { a++; a = 5; }
+fn main() {
+    let x = 1;
+    x++;                                     // ERROR: cannot apply `++` to an immutable place
+    let mut s = "hi";
+    s++;                                     // ERROR: cannot apply `++` to type `str`
+    let mut y = 1;
+    (y + 1)++;                               // ERROR: needs a variable, field or element to modify
+    let b = true;
+    --b;                                     // ERROR: cannot apply `--` to type `bool`
+    let r = &x;                              // ERROR: cannot take the address of an immutable binding
+}

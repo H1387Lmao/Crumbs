@@ -1,0 +1,3 @@
+link "_ffi_lib.c";
+import _ffi_api;
+fn main() { _ffi_api.run(); }

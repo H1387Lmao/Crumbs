@@ -1,0 +1,31 @@
+struct S { v: u8 }
+const BIGC: i32 = 1000;
+fn takes_u8(x: u8) -> u8 { return x; }
+fn takes_f32(x: f32) { }
+fn main() {
+    let a: u16 = 1;
+    let b: i32 = 2;
+    let c = a < b;                           // WARNING: comparing signed `i32` with unsigned `u16`
+    let d = a == b;
+    let e = b >= a;                          // WARNING: comparing signed `i32` with unsigned `u16`
+    let f: u8 = b;                           // WARNING: implicit conversion from signed `i32` to unsigned `u8`
+    let g = takes_u8(b);                     // WARNING: implicit conversion from signed `i32` to unsigned `u8`
+    let big: i64 = 5;
+    let h: f64 = big;                        // WARNING: may lose precision
+    takes_f32(b);                            // WARNING: may lose precision
+    let dbl: f64 = 1.5;
+    takes_f32(dbl);                          // WARNING: loses precision
+    let k = a & b;                           // WARNING: mixes signed `i32` and unsigned `u16`
+    let n: u32 = 3;
+    let z = n < 0;                           // WARNING: this comparison is always false
+    let y = n >= 0;                          // WARNING: this comparison is always true
+    let l: i32 = 3.5 * 2.0;                  // ERROR: mismatched types
+    let m: u64 = 7;
+    let o = m + big;                         // ERROR: cannot mix `u64` and `i64`
+    let p: u8 = 300;                         // ERROR: out of range for `u8`
+    let q: u8 = BIGC;                        // ERROR: constant value 1000 does not fit in `u8`
+    let r: bool = 1;                         // ERROR: mismatched types
+    let s: i32 = true;                       // ERROR: mismatched types
+    let t = S { v: dbl };                    // ERROR: mismatched types
+    let u = 1 + true;                        // ERROR: mismatched types in binary operation
+}

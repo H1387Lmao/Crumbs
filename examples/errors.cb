@@ -1,0 +1,35 @@
+// Error handling in Crumbs: errors are values, `T!` is "T or an error",
+// `try` propagates, `catch` handles. Nothing can be silently ignored.
+import std.conv;
+
+error NotFound, Forbidden;
+
+struct User { id: i32, admin: bool }
+
+fn find_user(id: i32) -> User! {
+    if id == 1 { return User { id: 1, admin: true }; }
+    if id == 2 { return User { id: 2, admin: false }; }
+    throw NotFound;
+}
+
+fn delete_user(actor: i32, target: i32) -> void! {
+    let a = try find_user(actor);
+    let t = try find_user(target);
+    if !a.admin { throw Forbidden; }
+    println("user ", t.id, " deleted by ", a.id);
+}
+
+fn sum_inputs(a: str, b: str) -> i64! {
+    return try conv.parse_i64(a) + try conv.parse_i64(b);
+}
+
+fn main() -> void! {
+    try delete_user(1, 2);
+    delete_user(2, 1) catch |e| { println("denied: ", e); };
+    delete_user(9, 1) catch |e| { println("failed: ", e); };
+
+    println(sum_inputs("40", "2") catch -1);
+    println(sum_inputs("40", "x2") catch -1);
+    println(sum_inputs("99999999999999999999", "1") catch |e| { println("bad input: ", e); return; });
+    println("unreachable");
+}

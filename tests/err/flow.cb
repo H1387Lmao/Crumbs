@@ -1,0 +1,19 @@
+error Foo;
+fn noret(x: i32) -> i32 {                    // ERROR: does not return a value on every path
+    if x > 0 { return 1; }
+}
+fn okret(x: i32) -> i32 {
+    if x > 0 { return 1; } else { return 2; }
+}
+fn unit() { return 1; }                      // ERROR: unexpected return value
+fn needs() -> i32 { return; }                // ERROR: `return` needs a value
+fn main() {
+    if true { break; }                       // ERROR: `break` outside of a loop
+    if true { continue; }                    // ERROR: `continue` outside of a loop
+    throw Foo;                               // ERROR: `throw` can only be used
+    let v = try okret(1);                    // ERROR: `try` needs an expression that can fail
+}
+fn deadcode() {
+    return;
+    let _dead = 1;                           // WARNING: unreachable statement
+}

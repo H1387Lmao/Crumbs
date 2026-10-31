@@ -1,0 +1,27 @@
+// std.rand: a small xorshift64* generator.
+pub struct Rng { state: u64 }
+
+pub fn new(seed: u64) -> Rng {
+    let mut s = seed;
+    if s == 0 { s = 88172645463325252; }
+    return Rng { state: s };
+}
+
+pub fn next(r: *Rng) -> u64 {
+    let mut x = r.state;
+    x = x ^ (x >> 12);
+    x = x ^ (x << 25);
+    x = x ^ (x >> 27);
+    r.state = x;
+    return x *% 2685821657736338717;
+}
+
+// uniform-ish integer in [0, n)
+pub fn below(r: *Rng, n: u64) -> u64 {
+    return next(r) % n;
+}
+
+// float in [0, 1)
+pub fn float(r: *Rng) -> f64 {
+    return (next(r) >> 11) as f64 / 9007199254740992.0;
+}

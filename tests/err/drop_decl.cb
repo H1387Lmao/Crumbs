@@ -1,0 +1,17 @@
+extern struct Opaque;
+struct Plain { a: i32 }
+struct Twice { a: i32 }
+struct Gen<T> { v: T }
+
+drop Missing(self) { }                    // ERROR: cannot find struct `Missing` in this module
+drop Opaque(self) { }                     // ERROR: `Opaque` is an opaque C type and cannot have a destructor
+drop Plain(self) { println("one"); }
+drop Plain(self) { println("two"); }      // ERROR: `Plain` already has a destructor
+drop<T> Plain(self) { }                   // ERROR: `Plain` already has a destructor
+drop Gen(self) { }                        // ERROR: the destructor of `Gen` must be generic over exactly the struct's type parameters
+drop<T> Twice(self) { }                   // ERROR: `Twice` is not generic
+
+fn main() {
+    let t = Twice { a: 1 };
+    println(t.a);
+}

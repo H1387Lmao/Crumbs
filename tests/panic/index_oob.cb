@@ -1,0 +1,2 @@
+// PANIC: index out of bounds: the length is 3 but the index is 5
+fn main() { let a = [1, 2, 3]; let mut i = 5; println(a[i]); i += 1; }

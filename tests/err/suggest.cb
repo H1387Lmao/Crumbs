@@ -1,0 +1,9 @@
+fn compute_total(a: i32) -> i32 { return a; }
+struct Point { xcoord: i32 }
+fn main() {
+    let counter = 1;
+    let r = countr + 1;                      // ERROR: cannot find value `countr`
+    let s = compute_totl(1);                 // ERROR: cannot find function `compute_totl`
+    let p = Point { xcoord: 1, xcord: 2 };              // ERROR: has no field `xcord`
+    // (a missing-field error follows too)
+}

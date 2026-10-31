@@ -1,0 +1,28 @@
+-- i32
+0 100 1 len 5
+25 16 9 4 1 
+25 16
+55
+-- struct
+(5,2)
+(12,3)
+(30,1)
+1
+3
+-- str and String
+beta 2
+3 two
+-- arrays, functions, nested lists
+3
+14 21
+3 3
+-- destructors
+removed 2
+drop guard 1
+clear
+drop guard 10
+drop guard 3
+drop guard 4
+end of main
+drop guard 2
+drop guard 5

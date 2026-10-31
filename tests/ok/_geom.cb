@@ -1,0 +1,6 @@
+pub struct Pt { x: f64, y: f64 }
+pub const LIMIT: i32 = 100;
+pub error TooSmall;
+pub fn origin() -> Pt { return Pt { x: 0.0, y: 0.0 }; }
+pub fn checked(n: i32) -> i32! { if n < 0 { throw TooSmall; } return n * 2; }
+fn private_helper() -> i32 { return 1; }

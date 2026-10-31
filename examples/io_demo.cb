@@ -1,0 +1,26 @@
+// Reads lines from stdin until EOF (Ctrl+D), then reports statistics.
+import std.io;
+import std.str;
+import std.list;
+
+fn main() -> void! {
+    let mut total_words: i64 = 0;
+    let mut lines: i64 = 0;
+    loop {
+        print("> ");
+        io.flush();
+        let line = io.get_line() catch |e| { println(); break; };
+        lines += 1;
+        let words = str.split(str.trim(line), " ");
+        let mut count: i64 = 0;
+        for i in 0..words.len { if words.items[i].len > 0 { count += 1; } }
+        total_words += count;
+        let shout = str.to_upper(line);
+        let rev = str.reverse(line);
+        println("  words=", count, "  upper=", shout, "  reversed=", rev);
+        free(shout); free(rev); free(line);
+        let mut w = words;
+        list.release(&w);
+    }
+    println(lines, " lines, ", total_words, " words");
+}

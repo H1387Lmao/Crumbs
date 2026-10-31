@@ -1,0 +1,39 @@
+struct P { x: i32, y: i32 }
+enum E { A, B }
+error Oops;
+
+fn two(a: i32, b: i32) -> i32 { return a + b; }
+fn nothing() { }
+fn maybe() -> i32! { return 1; }
+
+fn main() {
+    let a: i32 = "hello";                    // ERROR: mismatched types
+    let b: i32 = 2.0 * 3.0;                  // ERROR: mismatched types
+    let c: i32 = 3.5;                        // ERROR: mismatched types
+    let d: bool = 1 + 2;                     // ERROR: mismatched types
+    let e: i64 = 5;
+    let f: i32 = 5;
+    let g = 7u64 + e;                        // ERROR: cannot mix `u64` and `i64`
+    let h = two(1);                          // ERROR: takes 2 arguments but 1 was supplied
+    let i = two(1, "x");                     // ERROR: mismatched types
+    if 1 { }                                 // ERROR: condition must be a `bool`
+    let j = nothing();                       // ERROR: cannot bind a `void` value
+    let k = maybe();                         // ERROR: unhandled error union
+    let l = undefined_var;                   // ERROR: cannot find value `undefined_var`
+    let m = missing_fn(1);                   // ERROR: cannot find function `missing_fn`
+    let n: Missing = 1;                      // ERROR: cannot find type `Missing`
+    let o = P { x: 1 };                      // ERROR: missing field
+    let p = P { x: 1, y: 2, z: 3 };          // ERROR: has no field `z`
+    let q = p.w;                             // ERROR: has no field `w`
+    let r = E.C;                             // ERROR: has no variant `C`
+    let s = !5;                              // ERROR: cannot apply `!`
+    let t = -"s";                            // ERROR: cannot apply unary `-`
+    let u: u32 = 5;
+    let v = -u;                              // ERROR: cannot apply unary `-`
+    let w = "a" * "b";                       // ERROR: cannot apply `*` to type `str`
+    let x = 5 as str;                        // ERROR: cannot cast
+    let y = [1, 2, 3];
+    let z = y["a"];                          // ERROR: indices must be integers
+    let aa = 5.5 % 2.0;                      // ERROR: cannot apply `%`
+    let bb = P { x: 1, y: 2 } == P { x: 1, y: 2 }; // ERROR: cannot compare values of type `P`
+}

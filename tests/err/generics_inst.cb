@@ -1,0 +1,4 @@
+fn diff<T>(a: T, b: T) -> T { return a - b; }  // ERROR: cannot apply `-` to type `str`
+fn main() {
+    println(diff("a", "b"));
+}

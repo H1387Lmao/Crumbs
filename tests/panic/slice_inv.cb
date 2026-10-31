@@ -1,0 +1,2 @@
+// PANIC: slice start 3 is greater than end 1
+fn main() { let a = [1, 2, 3, 4]; let lo = 3; let s = a[lo..1]; println(s.len); }

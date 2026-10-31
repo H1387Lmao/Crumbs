@@ -1,0 +1,12 @@
+// run with --strict-casts: every numeric-safety warning becomes an error
+fn takes_u8(x: u8) -> u8 { return x; }
+fn main() {
+    let a: u16 = 1;
+    let b: i32 = 2;
+    let c = a < b;                           // ERROR: comparing signed `i32` with unsigned `u16`
+    let d = a + b;
+    let f: u8 = b;                           // ERROR: implicit conversion from signed `i32` to unsigned `u8`
+    let w: i64 = b;
+    let g: f64 = w;                          // ERROR: may lose precision
+    let h: f64 = b;
+}

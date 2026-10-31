@@ -1,0 +1,10 @@
+import _lib_priv;
+import std.math;
+fn main() {
+    _lib_priv.hidden();                      // ERROR: is private to module
+    _lib_priv.nothing();                     // ERROR: has no member `nothing`
+    let x = math.sqrtt(2.0);                 // ERROR: has no member `sqrtt`
+    let y: _lib_priv.Nope = 1;               // ERROR: has no type `Nope`
+    let z = math;                            // ERROR: expected a value, found module
+    other.f();                               // ERROR: cannot find module or value `other`
+}

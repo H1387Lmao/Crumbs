@@ -1,0 +1,38 @@
+extern struct Window;
+extern struct Rect { x: i32, y: i32, name: str }                    // ERROR: field `name` of extern struct `Rect` uses type `str`
+extern fn win_new() -> *Window;
+extern fn win_by_value(w: Window);                                  // ERROR: `Window` is an opaque C type, so it cannot be used by value
+extern fn win_name(s: str) -> i32;                                  // ERROR: extern function `win_name` uses type `str`
+extern fn win_slice(s: []u8);                                       // ERROR: extern function `win_slice` uses type `[]u8`
+extern fn win_err() -> i32!;                                        // ERROR: extern function `win_err` cannot return an error union
+extern fn printf(fmt: *u8, ...) -> i32;
+extern const MAXW: str;                                             // ERROR: extern constants must be numbers
+extern const LIMIT: i32;
+struct Plain { a: i32 }
+fn local_fn(a: i32, b: i32) -> i32 { return a + b; }
+fn generic<T>(x: T) -> T { return x; }
+fn helper(a: i32) -> i32 { return a; }
+
+fn main() {
+    let w = win_new();
+    let _copy = *w;                                                  // ERROR: `Window` is an opaque C type
+    let _x = Window { };                                             // ERROR: `Window` is an opaque C type and cannot be constructed
+    printf(cstr("hi"), "oops");                                     // ERROR: cannot pass a value of type `str` to a C variadic parameter
+    printf(cstr("hi"), 1, 2.5, true, w);
+    let p: *void = w;
+    let _q: *Window = p;                                             // ERROR: mismatched types
+    println(*p);                                                    // ERROR: cannot dereference a `*void`
+    let _f = generic;                                                // ERROR: generic function `generic` cannot be used as a value
+    let _g = printf;                                                 // ERROR: variadic function `printf` cannot be used as a value
+    let _h: fn(i32) -> i32 = local_fn;                               // ERROR: mismatched types
+    let k = helper;
+    k(1, 2);                                                        // ERROR: this function pointer takes 1 argument but 2 were supplied
+    k("x");                                                         // ERROR: mismatched types
+    let n = 5;
+    n(1);                                                           // ERROR: cannot call a value of type `i32`
+    let s = Plain { a: 1 };
+    s.a(1);                                                         // ERROR: cannot call a value of type `i32`
+    let _z = k as i32;                                               // ERROR: cannot cast `fn(i32) -> i32` to `i32`
+    println(LIMIT);
+    match 1 { LIMIT => {} _ => {} }                                 // ERROR: match patterns must be constants
+}

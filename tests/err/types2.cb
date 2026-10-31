@@ -1,0 +1,11 @@
+struct Rec { inner: Rec }                    // ERROR: recursive type `Rec` has infinite size
+struct A { b: B }                            // ERROR: recursive type
+struct B { a: A }
+enum Empty { }                               // ERROR: has no variants
+struct Dup { a: i32, a: i32 }                // ERROR: declared more than once
+fn dup(a: i32, a: i32) { }                   // ERROR: declared more than once
+fn dupfn() { }
+fn dupfn() { }                               // ERROR: defined multiple times
+fn print() { }                               // ERROR: reserved name
+fn bad_main() -> void { let x: void = 1; }   // ERROR: `void` is not allowed here
+fn main(argc: i32) { }                       // ERROR: `main` cannot take parameters

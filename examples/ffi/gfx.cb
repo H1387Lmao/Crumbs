@@ -1,0 +1,69 @@
+// gfx.cb: a Crumbs wrapper around the C library in minigfx.h.
+//
+// This is the whole recipe for wrapping SDL, raylib, sqlite, ...:
+//   1. `include` the header (only needed for macros and constants) and `link` the library or object file
+//   2. declare the C structs, functions and constants you use
+//   3. hide the raw handle behind a Crumbs struct whose `drop` closes it, and expose safe functions
+include "minigfx.h";
+link "minigfx.c";                         // or: link "libminigfx.so";  link "minigfx";  link pkg "sdl2";
+
+// ---- raw C interface ------------------------------------------------------
+extern const MG_EVENT_KEY: i32;
+extern const MG_EVENT_QUIT: i32;
+extern const MG_KEY_ESCAPE: i32;
+
+extern struct MgColor { r: u8, g: u8, b: u8, a: u8 }
+extern struct MgEvent { kind: i32, key: i32 }
+extern struct MgWindow;                   // opaque
+
+extern fn mg_open(title: *u8, w: i32, h: i32) -> *MgWindow;
+extern fn mg_close(w: *MgWindow);
+extern fn mg_fill_rect(w: *MgWindow, x: i32, y: i32, rw: i32, rh: i32, c: MgColor);
+extern fn mg_poll(w: *MgWindow, out: *MgEvent) -> i32;
+extern fn mg_on_draw(w: *MgWindow, cb: fn(*MgWindow, *void), user: *void);
+extern fn mg_frame(w: *MgWindow);
+extern fn mg_pixels_drawn(w: *MgWindow) -> i32;
+
+// ---- safe wrapper ---------------------------------------------------------
+// the C side stores one (function, user pointer) pair; this struct carries the Crumbs callback
+struct Hook { cb: fn(*void), user: *void }
+fn trampoline(_raw: *MgWindow, data: *void) {
+    let h = data as *Hook;
+    h.cb(h.user);                          // calling a function stored in a struct field
+}
+
+pub struct Window { raw: *MgWindow, hook: []Hook }
+drop Window(self) {
+    mg_close(self.raw);
+    free(self.hook);
+}
+
+pub enum Event { None, Key, Quit }
+
+pub fn open(title: str, w: i32, h: i32) -> Window {
+    return Window { raw: mg_open(cstr(title), w, h), hook: alloc(Hook, 1) };
+}
+
+pub fn rect(win: *Window, x: i32, y: i32, w: i32, h: i32, r: u8, g: u8, b: u8) {
+    mg_fill_rect(win.raw, x, y, w, h, MgColor { r: r, g: g, b: b, a: 255 });
+}
+
+// returns the next event and, for key presses, the key code
+pub fn poll(win: *Window, key: *i32) -> Event {
+    let mut ev = MgEvent { kind: 0, key: 0 };
+    mg_poll(win.raw, &ev);
+    *key = ev.key;
+    if ev.kind == MG_EVENT_QUIT { return Event.Quit; }
+    if ev.kind == MG_EVENT_KEY { return Event.Key; }
+    return Event.None;
+}
+
+pub fn escape() -> i32 { return MG_KEY_ESCAPE; }
+
+// register a Crumbs callback that the C library invokes on every frame
+pub fn on_draw(win: *Window, cb: fn(*void), user: *void) {
+    win.hook[0] = Hook { cb: cb, user: user };
+    mg_on_draw(win.raw, trampoline, &win.hook[0] as *void);
+}
+pub fn frame(win: *Window) { mg_frame(win.raw); }
+pub fn pixels(win: *Window) -> i32 { return mg_pixels_drawn(win.raw); }

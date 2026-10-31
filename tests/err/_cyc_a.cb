@@ -1,0 +1,2 @@
+import _cyc_b;
+pub fn a() { }

@@ -1,0 +1,32 @@
+// Hello, Crumbs!
+struct Point { x: f64, y: f64 }
+
+enum Color { Red, Green, Blue }
+
+fn dist2(a: Point, b: Point) -> f64 {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+    return dx * dx + dy * dy;
+}
+
+fn fib(n: i32) -> i64 {
+    if n < 2 { return n as i64; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn main() {
+    println("Hello, Crumbs!");
+    let p = Point { x: 0.0, y: 0.0 };
+    let q = Point { x: 3.0, y: 4.0 };
+    println("dist^2 = ", dist2(p, q));
+    println("fib(30) = ", fib(30));
+    let c = Color.Green;
+    println("color: ", c);
+    let mut sum = 0;
+    for i in 1..=10 { sum += i; }
+    println("sum 1..=10 = ", sum);
+    let arr = [5, 3, 8, 1];
+    let mut best = arr[0];
+    for x in arr { if x > best { best = x; } }
+    println("max = ", best, ", len = ", arr.len);
+}

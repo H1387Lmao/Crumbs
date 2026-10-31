@@ -1,0 +1,2 @@
+import _cyc_a;
+fn main() { _cyc_a.a(); }

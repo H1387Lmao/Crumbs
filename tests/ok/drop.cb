@@ -1,0 +1,83 @@
+// Destructors: scope exit, moves, early exits, reassignment, containers.
+struct Guard { name: str }
+drop Guard(self) { println("drop ", self.name); }
+
+struct Pair { a: Guard, b: Guard }          // fields are destroyed after Pair's own destructor (it has none)
+struct Boxed { g: Guard, tag: i32 }
+drop Boxed(self) { println("drop boxed ", self.tag); }
+
+fn make(n: str) -> Guard { return Guard { name: n }; }
+fn consume(g: Guard) { println("consume ", g.name); }
+fn pass_through(g: Guard) -> Guard { return g; }
+
+fn early(flag: bool) -> i32 {
+    let _a = make("early.a");
+    if flag { return 1; }
+    let _b = make("early.b");
+    return 2;
+}
+
+fn loops() {
+    for i in 0..3 {
+        let _g = make("loop");
+        if i == 1 { continue; }
+        if i == 2 { break; }
+        println("body ", i);
+    }
+}
+
+fn maybe(flag: bool) {
+    let g = make("maybe");
+    if flag { consume(g); }
+    println("end of maybe");
+}
+
+error Oops;
+fn fails(flag: bool) -> i32! {
+    let _g = make("fails.g");
+    if flag { throw Oops; }
+    return 5;
+}
+fn try_it() -> i32! {
+    let _g = make("try_it.g");
+    let v = try fails(true);
+    return v;
+}
+
+fn main() {
+    println("-- scope order");
+    {
+        let _a = make("a");
+        let _b = make("b");
+        println("in scope");
+    }
+    println("-- move");
+    let m = make("moved");
+    consume(m);
+    let _t = pass_through(make("through"));
+    println("-- early exit");
+    early(true);
+    early(false);
+    println("-- loops");
+    loops();
+    println("-- conditional move");
+    maybe(true);
+    maybe(false);
+    println("-- reassign");
+    let mut _r = make("first");
+    _r = make("second");
+    println("-- temporaries");
+    make("temp");
+    let _ = make("discarded");
+    println("-- fields");
+    {
+        let _p = Pair { a: make("pair.a"), b: make("pair.b") };
+        let _bx = Boxed { g: make("boxed.g"), tag: 7 };
+    }
+    println("-- try");
+    let _x = try_it() catch 0;
+    println("-- explicit drop");
+    let e = make("explicit");
+    drop(e);
+    println("-- end of main");
+}

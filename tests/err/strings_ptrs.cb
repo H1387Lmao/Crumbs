@@ -1,0 +1,17 @@
+fn main() {
+    let b = null;                            // ERROR: cannot infer the pointer type of `null`
+    let null = 5;                            // ERROR: `null` is a reserved name
+    let s = string_new();
+    s += "x";                                // ERROR: cannot assign to an immutable place
+    let n: i32 = s;                          // ERROR: mismatched types
+    let t = s + 1;                           // ERROR: mismatched types in binary operation
+    let u = s - s;                           // ERROR: cannot apply `-` to type `String`
+    let f = 1.5 as *i32;                     // ERROR: cannot cast
+    let g: String = "lit";                   // ERROR: mismatched types
+    let h = s as str;                        // ERROR: cannot cast `String` to `str`
+    string_clear(s);                         // ERROR: `string_clear` expects `*String`
+    free(5);                                 // ERROR: `free` expects a slice or a `String`
+    let p: *i32 = null;
+    let q: *u8 = p;                          // ERROR: mismatched types
+    let w = s.nope;                          // ERROR: has no field `nope`
+}

@@ -1,0 +1,2 @@
+// PANIC: value out of range for `u8` in implicit conversion
+fn main() { let n: i32 = 300; let c: u8 = n; println(c); }

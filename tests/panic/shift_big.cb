@@ -1,0 +1,2 @@
+// PANIC: shift amount out of range
+fn main() { let n = 40; println(1 << n); }

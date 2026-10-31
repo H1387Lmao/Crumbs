@@ -1,0 +1,51 @@
+// FLAGS: --gc
+// The conservative collector reclaims unreachable alloc()/String memory and keeps everything reachable.
+import std.list;
+
+struct Node { value: i64, next: *Node }
+
+fn push_front(head: *Node, v: i64) -> *Node {
+    let cell = alloc(Node, 1);
+    cell[0].value = v;
+    cell[0].next = head;
+    return &cell[0];
+}
+
+fn sum(head: *Node) -> i64 {
+    let mut total = 0i64;
+    let mut cur = head;
+    while cur != null {
+        total += cur.value;
+        cur = cur.next;
+    }
+    return total;
+}
+
+fn churn() {
+    // ~1.6 GB of garbage if nothing were ever collected
+    for i in 0..200000 {
+        let junk = alloc(i64, 1000);
+        junk[0] = i;
+        junk[999] = i;
+    }
+}
+
+fn main() {
+    let mut head: *Node = null;
+    for i in 1..=1000 { head = push_front(head, i); }
+    let mut names = list.new<String>();
+    for i in 0..100 { list.push(&names, string_from("item-") + to_str(i)); }
+
+    churn();
+    let mut text = "";
+    for i in 0..20000 { text = to_str(i) + "-" + to_str(i * 2); }
+    gc_collect();
+
+    println("sum ", sum(head));
+    println("names ", names.len, " last ", *list.at(&names, 99));
+    println("text ", text);
+    println("bounded ", gc_bytes() < 64 * 1024 * 1024);
+    let mut s = string_new();
+    for i in 0..100000 { s += "ab"; }
+    println("string len ", s.len);
+}

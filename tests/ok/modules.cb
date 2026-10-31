@@ -1,0 +1,14 @@
+import _geom;
+import _geom.shapes as sh;
+import std.math as m;
+
+fn main() {
+    let p = _geom.origin();
+    println(p.x, " ", p.y);
+    let c = sh.Circle { center: _geom.Pt { x: 1.0, y: 2.0 }, r: 2.0 };
+    println(sh.area(c) > 12.5, " ", sh.area(c) < 12.6);
+    println(_geom.LIMIT, " ", m.gcd(48, 18), " ", sh.Kind.Round);
+    let r = _geom.checked(5) catch -1;
+    let e = _geom.checked(-5) catch -1;
+    println(r);
+}

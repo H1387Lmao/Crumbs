@@ -1,0 +1,4 @@
+import _geom;
+pub enum Kind { Round, Square }
+pub struct Circle { center: _geom.Pt, r: f64 }
+pub fn area(c: Circle) -> f64 { return 3.14159 * c.r * c.r; }

@@ -1,0 +1,3 @@
+// PANIC: error: main_error.Boom
+error Boom;
+fn main() -> void! { throw Boom; }

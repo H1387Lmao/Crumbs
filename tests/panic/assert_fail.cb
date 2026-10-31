@@ -1,0 +1,2 @@
+// PANIC: values differ
+fn main() { let a = 1; assert(a == 2, "values differ"); }

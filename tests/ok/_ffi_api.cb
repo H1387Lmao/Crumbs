@@ -1,0 +1,66 @@
+// A C library bound to Crumbs: the pattern for wrapping SDL, raylib and friends.
+include "_ffi_lib.h";
+
+pub extern const FFI_VERSION: i32;
+pub extern const FFI_FLAG_A: u32;
+pub extern const FFI_FLAG_B: u32;
+pub extern const FFI_PI: f64;
+
+pub extern struct Vec2 { x: f32, y: f32 }
+pub extern struct Item { id: i32, name: [8]u8, pos: Vec2 }
+extern struct Counter;                       // opaque: only usable behind a pointer
+
+extern fn counter_new(start: i32) -> *Counter;
+extern fn counter_add(c: *Counter, n: i32);
+extern fn counter_get(c: *Counter) -> i32;
+extern fn counter_free(c: *Counter);
+pub extern fn counters_alive() -> i32;
+pub extern fn vec2_add(a: Vec2, b: Vec2) -> Vec2;
+pub extern fn vec2_len(v: Vec2) -> f64;
+extern fn apply_twice(f: fn(i32) -> i32, x: i32) -> i32;
+extern fn each_int(xs: *i32, n: i32, cb: fn(i32, *void), user: *void);
+extern fn sum_ints(count: i32, ...) -> i32;
+extern fn greeting() -> *u8;
+extern fn c_calls_tern(x: i32) -> i32;
+extern fn fill_item(it: *Item);
+extern "name_len" fn c_name_len(s: *u8) -> i32;   // renamed
+
+export fn tern_double(x: i32) -> i32 { return x * 2; }
+
+fn inc(x: i32) -> i32 { return x + 1; }
+fn collect(x: i32, user: *void) {
+    let total = user as *i32;
+    *total += x;
+}
+
+// a safe wrapper: the destructor closes the C handle
+pub struct Handle { raw: *Counter }
+drop Handle(self) { counter_free(self.raw); }
+pub fn open(start: i32) -> Handle { return Handle { raw: counter_new(start) }; }
+pub fn add(h: *Handle, n: i32) { counter_add(h.raw, n); }
+pub fn get(h: *Handle) -> i32 { return counter_get(h.raw); }
+
+pub fn run() {
+    println("version ", FFI_VERSION, " flags ", FFI_FLAG_A | FFI_FLAG_B, " pi ", FFI_PI);
+    let v = vec2_add(Vec2 { x: 3.0, y: 0.0 }, Vec2 { x: 0.0, y: 4.0 });
+    println(v.x, " ", v.y, " len ", vec2_len(v));
+    println(apply_twice(inc, 5));
+    println(apply_twice(tern_double, 5));
+    let xs = [1, 2, 3, 4];
+    let mut total = 0;
+    each_int(xs[..].ptr, xs.len as i32, collect, &total as *void);
+    println("sum ", total);
+    println(sum_ints(3, 10, 20, 30));
+    println(from_cstr(greeting()));
+    println(c_calls_tern(20));
+    let mut it = Item { id: 0, name: [0u8; 8], pos: Vec2 { x: 0.0, y: 0.0 } };
+    fill_item(&it);
+    println(it.id, " ", from_cstr(&it.name[0]), " ", it.pos.y);
+    println(c_name_len(cstr("seven!!")));
+    {
+        let mut h = open(10);
+        add(&h, 5);
+        println("counter ", get(&h), " alive ", counters_alive());
+    }
+    println("alive after scope ", counters_alive());
+}

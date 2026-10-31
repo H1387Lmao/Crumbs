@@ -1,0 +1,16 @@
+fn take(s: String) { }
+fn view_of() -> str {
+    let s = string_from("local");
+    return s;                            // ERROR: cannot return a view of the local `String` `s`
+}
+fn main() {
+    let a = string_from("x");
+    let b = a;
+    println(a);                          // ERROR: use of moved value `a`
+    take(b);
+    println(b);                          // ERROR: use of moved value `b`
+    let c = string_from("y");
+    let v: str = c;
+    take(c);
+    println(v);
+}

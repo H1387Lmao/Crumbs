@@ -1,0 +1,2 @@
+// PANIC: null pointer dereference
+fn main() { let mut p: *i32 = null; *p = 3; }

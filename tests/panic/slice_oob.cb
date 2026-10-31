@@ -1,0 +1,2 @@
+// PANIC: slice range 2..9 is out of bounds for length 4
+fn main() { let a = [1, 2, 3, 4]; let hi = 9; let s = a[2..hi]; println(s.len); }

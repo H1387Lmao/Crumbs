@@ -1,0 +1,20 @@
+struct P { x: i32 }
+fn takes(a: i32) {
+    a = 5;                                   // ERROR: cannot assign to an immutable place
+}
+fn main() {
+    let x = 1;
+    x = 2;                                   // ERROR: cannot assign to an immutable place
+    x += 1;                                  // ERROR: cannot assign to an immutable place
+    let p = P { x: 1 };
+    p.x = 3;                                 // ERROR: cannot assign to an immutable place
+    let arr = [1, 2, 3];
+    arr[0] = 9;                              // ERROR: cannot assign to an immutable place
+    let r = &x;                              // ERROR: cannot take the address of an immutable binding
+    let s = "abc";
+    s[0] = 'x';                              // ERROR: cannot assign to an immutable place
+    5 = 6;                                   // ERROR: invalid left-hand side of assignment
+    let y = 1;
+    let y = 2;                               // ERROR: already declared in this scope
+    let z = &5;                              // ERROR: cannot take the address of a temporary
+}

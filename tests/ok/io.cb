@@ -1,0 +1,20 @@
+import std.io;
+
+fn main() -> void! {
+    // single characters
+    let a = try io.getc();
+    let b = try io.getc();
+    io.putc(b); io.putc(a); io.putc('\n');
+
+    // lines ended by \n, \r\n, \r, an empty line, and EOF without a terminator
+    let mut n = 0;
+    loop {
+        let line = io.get_line() catch |e| {
+            println("done after ", n, " lines: ", e);
+            return;
+        };
+        n += 1;
+        println(n, ": [", line, "] len=", line.len);
+        free(line);
+    }
+}

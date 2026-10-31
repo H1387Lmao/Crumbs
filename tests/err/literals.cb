@@ -1,0 +1,14 @@
+const BIG: u8 = 300;                         // ERROR: out of range
+const NOINIT: i32 = foo();                   // ERROR: cannot find function
+fn main() {
+    let a: i8 = 128;                         // ERROR: out of range for `i8`
+    let b: i8 = -129;                        // ERROR: out of range for `i8`
+    let c = 3000000000;                      // ERROR: out of range for `i32`
+    let d: u8 = 256;                         // ERROR: out of range for `u8`
+    let e = 10 / 0;                          // ERROR: division by zero
+    let f = [1, 2, 3];
+    let g = f[3];                            // ERROR: index out of bounds
+    let h = [1, "a"];                        // ERROR: array elements must all have the same type
+    let i: [0]i32 = [];                      // ERROR: array length must be at least 1
+    let j = [];                              // ERROR: cannot infer the type of an empty array
+}

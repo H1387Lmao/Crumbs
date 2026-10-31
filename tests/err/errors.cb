@@ -1,0 +1,16 @@
+error Bad;
+fn f() -> i32! { throw Bad; }
+fn g() -> void! { return; }
+fn plain() -> i32 {
+    let x = try f();                         // ERROR: `try` can only be used in a function that returns an error union
+    return x;
+}
+fn main() {
+    f();                                     // ERROR: unused error
+    g();                                     // ERROR: unused error
+    let a = f() catch 0;
+    let b = f() catch |e| { };               // ERROR: `catch` block must not fall through
+    g() catch 5;                             // ERROR: a default value makes no sense
+    let c = f() catch "str";                 // ERROR: mismatched types
+    let d = (1) catch 0;                     // ERROR: `catch` needs an expression that can fail
+}
