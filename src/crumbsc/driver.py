@@ -165,7 +165,7 @@ def cc_command(cc, c_path, out_path, opt, unchecked, extra, plan=None, libs=(), 
     cmd += [f"-Wl,-rpath,{d}" for d in rpaths]
     cmd += [f"-l{n}" for n in list(plan.libs) + list(libs)]
     cmd += pkg_config(list(plan.pkgs) + list(pkgs))
-    cmd += ["-o", out_path, "-lm"]
+    cmd += ["-o", out_path, "-lm", "-pthread"]
     return cmd + list(extra)
 
 

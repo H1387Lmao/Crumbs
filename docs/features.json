@@ -327,8 +327,8 @@
             {
               "id": "garbage-collector",
               "title": "Garbage Collection",
-              "desc": "Build with `--gc` to enable a conservative, single-threaded mark-and-sweep collector on Linux with glibc or musl. It manages `alloc()` blocks, `String` buffers, and the string arena. Explicit `free` and destructors remain valid.",
-              "code": "// Build with the compiler flag:\n// crumbs build main.cb --gc\n\ngc_collect();\nprintln(gc_bytes());",
+              "desc": "The default collector is a conservative, thread-aware tri-colour mark-and-lazy-sweep collector (Linux, glibc or musl; `--no-gc` turns it off). Blocks are white, grey or black; roots are greyed, the grey worklist is drained, and white blocks are swept a few at a time while the program allocates. It manages `alloc()` blocks, `String` buffers, and the string arena. Explicit `free` and destructors remain valid.",
+              "code": "// on by default; crumbs build main.cb --no-gc disables it\n\ngc_collect();\nprintln(gc_bytes());",
               "note": "Pointers retained only on the C side are not visible to the collector. Keep a Crumbs reference to memory that C must retain."
             }
           ]

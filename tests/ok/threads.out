@@ -1,0 +1,9 @@
+worker 0 -> 20000
+worker 1 -> 20001
+worker 2 -> 20002
+worker 3 -> 20003
+counter 8000 shared 8000
+received sum 250500
+after close -1
+collections ran true
+cpus true

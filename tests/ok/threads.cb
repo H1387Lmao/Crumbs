@@ -1,0 +1,67 @@
+// FLAGS: --gc --cflag=-DCB_GC_VERIFY
+// std.thread: spawn/join, Mutex, Condvar-backed Channel, and the collector running while threads allocate.
+import std.thread;
+import std.list;
+
+struct Job { id: i64, counter: *thread.AtomicI64, lock: *thread.Mutex, shared: *i64 }
+
+fn worker(arg: *void) -> *void {
+    let job = arg as *Job;
+    // garbage + live data, so collections happen while the other threads are running
+    let mut keep = list.new<String>();
+    for i in 0..2000 {
+        let junk = alloc(i64, 2000);
+        junk[0] = i;
+        if i % 100 == 0 { list.push(&keep, string_from("t") + to_str(job.id) + "-" + to_str(i)); }
+        job.counter.add(1);
+        job.lock.lock();
+        *job.shared += 1;
+        job.lock.unlock();
+    }
+    let out = alloc(i64, 1);
+    out[0] = keep.len * 1000 + job.id;
+    return &out[0] as *void;
+}
+
+fn producer(arg: *void) -> *void {
+    let ch = arg as *thread.Channel<i64>;
+    for i in 1..=500 { ch.send(i) catch |e| { panic("closed"); }; }
+    return null;
+}
+
+fn main() {
+    let counter = thread.AtomicI64.new(0);
+    let lock = thread.Mutex.new();
+    let shared = alloc(i64, 1);
+    let mut threads = list.new<thread.Thread>();
+    let mut jobs = list.new<*Job>();
+    for i in 0..4 {
+        let cell = alloc(Job, 1);
+        cell[0] = Job { id: i, counter: counter, lock: lock, shared: &shared[0] };
+        list.push(&jobs, &cell[0]);
+        let t = thread.spawn(worker, &cell[0] as *void) catch |e| { panic("spawn failed"); };
+        list.push(&threads, t);
+    }
+    for i in 0..4 {
+        let r = list.at(&threads, i).join() as *i64;
+        println("worker ", i, " -> ", *r);
+    }
+    println("counter ", counter.load(), " shared ", shared[0]);
+
+    let ch = thread.channel<i64>();
+    let mut p1 = thread.spawn(producer, ch as *void) catch |e| { panic("spawn failed"); };
+    let mut p2 = thread.spawn(producer, ch as *void) catch |e| { panic("spawn failed"); };
+    let mut total: i64 = 0;
+    for i in 0..1000 {
+        let v = ch.recv() catch |e| { panic("closed early"); };
+        total += v;
+    }
+    p1.join();
+    p2.join();
+    ch.close();
+    println("received sum ", total);
+    let after = ch.recv() catch -1;
+    println("after close ", after);
+    println("collections ran ", gc_collections() > 0);
+    println("cpus ", thread.cpu_count() > 0);
+}

@@ -268,12 +268,19 @@ function pointers and nested lists. It owns its elements and is released automat
 `String`s). API: `new`, `with_capacity`, `from_slice`, `push`, `pop` (`T!`, `Empty`), `at` (pointer, any `T`), `get`, `set`, `insert`, `remove`,
 `swap_remove`, `extend`, `view`, `clear`, `release`, `reverse`, `sort_by(l, cmp)` (heap sort, `cmp` like C's `qsort`), `for_each`, `find_by`.
 
-**Garbage collector (on by default; `--no-gc` for plain malloc).** A conservative, single-threaded mark-and-sweep collector (Linux; glibc or musl) manages `alloc()`,
-`String` buffers and the string arena. It scans the stack, registers and data segment, follows pointers into the middle of blocks, and
-never scans blocks it knows hold no pointers (numbers, bytes). Collection is triggered by allocation volume; `gc_collect()` forces
-one, `gc_bytes()` reports the bytes in use and `gc_collections()` counts the collections run (all three are no-ops / 0 with `--no-gc`). `free()` and destructors stay legal and release
-memory immediately, so code works the same with or without the collector. Caveats: memory given to C and kept only on the C side is
-not seen (keep a Crumbs reference to it); under AddressSanitizer use `ASAN_OPTIONS=detect_stack_use_after_return=0`.
+**Garbage collector (on by default; `--no-gc` for plain malloc).** A conservative **tri-colour** collector (Linux; glibc or musl) manages `alloc()`,
+`String` buffers and the string arena. Every block is white (not reached), grey (reached, contents not scanned) or black (reached and
+scanned). A cycle flips which two colour values mean white and black (so nothing has to be repainted), greys the roots (the stacks
+and registers of every thread, the data segment, live regions), drains the grey worklist until nothing is grey, then sweeps *lazily*:
+a cursor frees the white blocks a few at a time as you allocate, and blocks allocated during the sweep are born black. Interior
+pointers keep a block alive, and blocks known to hold no pointers (numbers, bytes) are never scanned. Marking is stop-the-world, so no
+write barrier is needed; it is not an incremental or concurrent collector. Compile with `--cflag=-DCB_GC_VERIFY` to check the invariant
+after every mark phase (no grey block left, no black block pointing at a white one). Collection is triggered by allocation volume;
+`gc_collect()` forces a full one, `gc_bytes()` reports the bytes in use and `gc_collections()` counts the cycles (no-ops / 0 with `--no-gc`).
+`free()` and destructors stay legal and release memory immediately. Caveats: memory given to C and kept only on the C side is not seen
+(keep a Crumbs reference to it); under AddressSanitizer use `ASAN_OPTIONS=detect_stack_use_after_return=0`.
+With threads (`std.thread`) the heap is locked and a collection waits (up to 100 ms) for the other threads to reach an allocation or a
+blocking call; a thread that is busy computing only postpones the collection.
 
 **Lifetimes: `region` blocks.** A region is a scoped arena. `alloc_in(T, n, r)` returns a zeroed `[]T` that lives exactly as long
 as `region r { ... }`; the whole region is released in one step on *every* way out (end of block, `break`, `continue`, `return`).
@@ -317,6 +324,11 @@ Standard library (`std/`, written in Crumbs): `math`, `conv`, `str` (trim, find/
   and calendar dates: `from_unix(secs)`, `now_utc()`, `now_local()`, `DateTime.new(y, m, d, h, mi, s)`, `.format()`, `.iso()`, `.weekday_name()`, `.add_days(n)`, `is_leap_year`, `days_in_month`.
 - **`std.fs`**: `read_to_string`, `read_lines`, `write`, `append`, `exists`, `is_file`, `is_dir`, `size`, `remove`, `make_dir` (errors `NotFound`, `IoError`).
 - **`std.env`**: `args()`, `arg(i)`, `arg_count()`, `get(name)` (`NotSet`), `has(name)`.
+- **`std.thread`**: `spawn(f, arg)` / `spawn_fn(f)` -> `Thread` (`.join()`), `Mutex.new()` (`lock`, `try_lock`, `unlock`), `Condvar.new()` (`wait`, `signal`, `broadcast`),
+  `AtomicI64`, generic `channel<T>()` (`send`, `recv`, `close`; error `Closed`), `sleep_ms`, `yield_now`, `current_id`, `cpu_count`.
+
+`std.time`, `std.fs`, `std.env`, `std.io` and `std.thread` contain no C helpers: they bind libc and pthread with plain `extern fn` / `extern struct` / `extern const`
+declarations, exactly like user code does. (The only runtime hooks they call are the collector's thread notifications in `std.thread`.)
 
 ## Compiler layout
 
@@ -334,5 +346,5 @@ Standard library (`std/`, written in Crumbs): `math`, `conv`, `str` (trim, find/
 | `driver.py` | build pipeline, link plan (`link`/`--link`/`--pkg`), command line |
 
 ## Known limits (it is a toy)
-No generic enums, trait bounds or closures; no `if` expressions; the collector is conservative and single-threaded. Slices are mutable views even of
+No generic enums, trait bounds or closures; no `if` expressions; the collector is conservative and stop-the-world. Slices are mutable views even of
 immutable arrays. The generated C needs GCC/Clang (statement expressions, overflow builtins).

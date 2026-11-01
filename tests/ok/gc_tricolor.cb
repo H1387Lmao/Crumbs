@@ -1,0 +1,49 @@
+// FLAGS: --gc --cflag=-DCB_GC_VERIFY
+// Tri-colour collector: the build runs a checker after every mark phase (no grey block left, no black block
+// pointing at a white one), so any missed edge aborts the program. Objects made during a lazy sweep survive it.
+import std.list;
+
+struct Tree { left: *Tree, right: *Tree, value: i64 }
+
+fn build(depth: i64) -> *Tree {
+    let t = alloc(Tree, 1);
+    t[0].value = depth;
+    if depth > 0 {
+        t[0].left = build(depth - 1);
+        t[0].right = build(depth - 1);
+    }
+    return &t[0];
+}
+
+fn count(t: *Tree) -> i64 {
+    if t == null { return 0; }
+    return 1 + count(t.left) + count(t.right);
+}
+
+fn garbage(rounds: i64) {
+    for i in 0..rounds {
+        let junk = alloc(i64, 500);
+        junk[0] = i;
+    }
+}
+
+fn main() {
+    let tree = build(12);                 // 8191 nodes, reachable only through `tree`
+    let mut keep = list.new<String>();
+    for i in 0..200 { list.push(&keep, string_from("keep-") + to_str(i)); }
+
+    let before = gc_collections();
+    garbage(100000);                      // many cycles; each one starts a lazy sweep that later allocations finish
+    // allocate while sweeps are in flight and check they are never freed
+    let mut fresh = list.new<*Tree>();
+    for i in 0..300 {
+        list.push(&fresh, build(3));
+        garbage(500);
+    }
+    gc_collect();
+    println("collected ", gc_collections() > before);
+    println("tree ", count(tree));
+    println("fresh ", fresh.len, " nodes ", count(*list.at(&fresh, 299)));
+    println("keep ", keep.len, " ", *list.at(&keep, 199));
+    println("bounded ", gc_bytes() < 16 * 1024 * 1024);
+}

@@ -1,0 +1,229 @@
+// std.thread: OS threads, mutexes, condition variables, channels (pthread through FFI).
+//
+//   import std.thread;
+//   fn work(arg: *void) -> *void { ...; return null; }
+//   let t = thread.spawn(work, null) catch |e| { panic("no thread"); };
+//   t.join();
+//
+// Threads share the garbage-collected heap. The collector parks every thread at its next allocation or
+// blocking call; Mutex.lock, Condvar.wait, Thread.join and thread.sleep_ms tell it that they are blocking.
+// A thread that computes for a long time without allocating only delays collections, it never breaks them.
+import std.time;
+
+pub error SpawnFailed;
+pub error Closed;
+
+include "pthread.h";
+include "sched.h";
+include "unistd.h";
+
+// ---- pthread, bound directly ------------------------------------------------------------------
+extern "sizeof(pthread_mutex_t)" const MUTEX_SIZE: i64;
+extern "sizeof(pthread_cond_t)" const COND_SIZE: i64;
+extern const _SC_NPROCESSORS_ONLN: i32;
+extern fn pthread_create(t: *u64, attr: *void, f: fn(*void) -> *void, arg: *void) -> i32;
+extern fn pthread_join(t: u64, out: *void) -> i32;
+extern fn pthread_detach(t: u64) -> i32;
+extern fn pthread_self() -> u64;
+extern fn pthread_mutex_init(m: *void, attr: *void) -> i32;
+extern fn pthread_mutex_lock(m: *void) -> i32;
+extern fn pthread_mutex_trylock(m: *void) -> i32;
+extern fn pthread_mutex_unlock(m: *void) -> i32;
+extern fn pthread_cond_init(c: *void, attr: *void) -> i32;
+extern fn pthread_cond_wait(c: *void, m: *void) -> i32;
+extern fn pthread_cond_signal(c: *void) -> i32;
+extern fn pthread_cond_broadcast(c: *void) -> i32;
+extern fn sched_yield() -> i32;
+extern fn sysconf(name: i32) -> i64;
+
+// ---- the collector's thread hooks (runtime.c; no-ops under --no-gc) -----------------------------
+extern fn cb_gc_thread_prepare(arg: *void) -> *void;
+extern fn cb_gc_thread_begin(rec: *void);
+extern fn cb_gc_thread_end();
+extern fn cb_gc_blocking_begin();
+extern fn cb_gc_blocking_end();
+
+// ---- threads ---------------------------------------------------------------------------------------
+struct Start { f: fn(*void) -> *void, arg: *void, rec: *void, result: *void }
+
+pub struct Thread { id: u64, start: *Start, joined: bool }
+
+fn entry(p: *void) -> *void {
+    let st = p as *Start;
+    cb_gc_thread_begin(st.rec);
+    st.result = st.f(st.arg);
+    cb_gc_thread_end();
+    return null;
+}
+
+// Start a thread running f(arg). The memory arg points to must stay valid (and be reachable) while it runs.
+pub fn spawn(f: fn(*void) -> *void, arg: *void) -> Thread! {
+    let cell = alloc(Start, 1);
+    let st = &cell[0];
+    st.f = f;
+    st.arg = arg;
+    st.rec = cb_gc_thread_prepare(st as *void);
+    let mut id: u64 = 0;
+    if pthread_create(&id, null, entry, st as *void) != 0 {
+        cb_gc_thread_end();
+        throw SpawnFailed;
+    }
+    return Thread { id: id, start: st, joined: false };
+}
+
+fn run_plain(p: *void) -> *void {
+    let f = p as fn();
+    f();
+    return null;
+}
+
+// Start a thread running a function without arguments.
+pub fn spawn_fn(f: fn()) -> Thread! {
+    return try spawn(run_plain, f as *void);
+}
+
+impl Thread {
+    // wait for the thread to finish; returns what its function returned
+    pub fn join(mut self) -> *void {
+        if self.joined { return self.start.result; }
+        cb_gc_blocking_begin();
+        pthread_join(self.id, null);
+        cb_gc_blocking_end();
+        self.joined = true;
+        return self.start.result;
+    }
+}
+
+pub fn current_id() -> u64 { return pthread_self(); }
+pub fn yield_now() { sched_yield(); }
+pub fn cpu_count() -> i64 { return sysconf(_SC_NPROCESSORS_ONLN); }
+
+pub fn sleep_ms(ms: i64) {
+    cb_gc_blocking_begin();
+    time.sleep_ms(ms);
+    cb_gc_blocking_end();
+}
+
+// ---- Mutex ---------------------------------------------------------------------------------------
+// Make one with Mutex.new() and share the pointer between threads.
+pub struct Mutex { raw: []u8 }
+
+impl Mutex {
+    pub fn new() -> *Mutex {
+        let cell = alloc(Mutex, 1);
+        cell[0].raw = alloc(u8, MUTEX_SIZE);
+        pthread_mutex_init(cell[0].raw.ptr as *void, null);
+        return &cell[0];
+    }
+    pub fn lock(self) {
+        let m = self.raw.ptr as *void;
+        if pthread_mutex_trylock(m) == 0 { return; }
+        cb_gc_blocking_begin();
+        pthread_mutex_lock(m);
+        cb_gc_blocking_end();
+    }
+    // true if the lock was taken
+    pub fn try_lock(self) -> bool { return pthread_mutex_trylock(self.raw.ptr as *void) == 0; }
+    pub fn unlock(self) { pthread_mutex_unlock(self.raw.ptr as *void); }
+}
+
+// ---- Condvar -------------------------------------------------------------------------------------
+pub struct Condvar { raw: []u8 }
+
+impl Condvar {
+    pub fn new() -> *Condvar {
+        let cell = alloc(Condvar, 1);
+        cell[0].raw = alloc(u8, COND_SIZE);
+        pthread_cond_init(cell[0].raw.ptr as *void, null);
+        return &cell[0];
+    }
+    // atomically unlocks m and sleeps; m is locked again when this returns (re-check your condition in a loop)
+    pub fn wait(self, m: *Mutex) {
+        cb_gc_blocking_begin();
+        pthread_cond_wait(self.raw.ptr as *void, m.raw.ptr as *void);
+        cb_gc_blocking_end();
+    }
+    pub fn signal(self) { pthread_cond_signal(self.raw.ptr as *void); }
+    pub fn broadcast(self) { pthread_cond_broadcast(self.raw.ptr as *void); }
+}
+
+// ---- AtomicI64 -----------------------------------------------------------------------------------
+pub struct AtomicI64 { lock: *Mutex, value: i64 }
+
+impl AtomicI64 {
+    pub fn new(v: i64) -> *AtomicI64 {
+        let cell = alloc(AtomicI64, 1);
+        cell[0].lock = Mutex.new();
+        cell[0].value = v;
+        return &cell[0];
+    }
+    pub fn load(self) -> i64 {
+        self.lock.lock();
+        let v = self.value;
+        self.lock.unlock();
+        return v;
+    }
+    pub fn store(self, v: i64) {
+        self.lock.lock();
+        self.value = v;
+        self.lock.unlock();
+    }
+    // adds d and returns the new value
+    pub fn add(self, d: i64) -> i64 {
+        self.lock.lock();
+        self.value += d;
+        let v = self.value;
+        self.lock.unlock();
+        return v;
+    }
+}
+
+// ---- Channel<T>: an unbounded multi-producer multi-consumer queue ---------------------------------
+pub struct Channel<T> { lock: *Mutex, ready: *Condvar, items: List<T>, head: i64, closed: bool }
+
+pub fn channel<T>() -> *Channel<T> {
+    let cell = alloc(Channel<T>, 1);
+    cell[0].lock = Mutex.new();
+    cell[0].ready = Condvar.new();
+    cell[0].items = List.new();
+    return &cell[0];
+}
+
+impl<T> Channel<T> {
+    // queue a value (fails with thread.Closed after close())
+    pub fn send(self, v: T) -> void! {
+        self.lock.lock();
+        if self.closed {
+            self.lock.unlock();
+            throw Closed;
+        }
+        self.items.push(v);
+        self.ready.signal();
+        self.lock.unlock();
+    }
+    // wait for a value; fails with thread.Closed once the channel is closed and drained
+    pub fn recv(self) -> T! {
+        self.lock.lock();
+        while self.head == self.items.len && !self.closed {
+            self.ready.wait(self.lock);
+        }
+        if self.head == self.items.len {
+            self.lock.unlock();
+            throw Closed;
+        }
+        let v = self.items.get(self.head);
+        self.head += 1;
+        if self.head == self.items.len {
+            self.items.clear();
+            self.head = 0;
+        }
+        self.lock.unlock();
+        return v;
+    }
+    pub fn close(self) {
+        self.lock.lock();
+        self.closed = true;
+        self.ready.broadcast();
+        self.lock.unlock();
+    }
+}
