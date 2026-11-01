@@ -1,0 +1,54 @@
+// FLAGS: -DMODE=2 -DFEATURE
+// The preprocessor: object/function-like macros, variadics, # and ##, nested #if, #elif, -D, and that
+// strings/comments are left alone and line numbers survive.
+#define SQUARE(x) ((x) * (x))
+#define LOG(fmt, ...) println(fmt __VA_OPT__(,) __VA_ARGS__)
+#define STR(x) #x
+#define CAT(a, b) a##b
+#define ADD(a, b) ((a) + (b))
+#define TWICE(f, x) f(f(x))
+#define EMPTY
+#define LIMIT 10
+#define DOUBLE_LIMIT (LIMIT * 2)
+#define PING PONG
+#define PONG PING
+#ifndef DEBUG
+#define DEBUG 0
+#endif
+#undef LIMIT
+#define LIMIT 100
+
+fn inc(x: i64) -> i64 { return x + 1; }
+
+fn main() {
+    let CAT(my, var) = SQUARE(3 + 1);
+    println(myvar);
+    println("SQUARE(2) and // and #define stay in strings");   // SQUARE(9) in a comment
+    LOG("one arg");
+    LOG("two ", 2);
+    println(STR(hello   world), " ", STR("q"));
+    println(TWICE(inc, 5), " ", ADD(SQUARE(2), SQUARE(3)));
+    let PING = 7;
+    println(PING);
+    println(LIMIT, " ", DOUBLE_LIMIT, " ", __LINE__);
+#if MODE == 1
+    println("mode 1");
+#elif MODE == 2 && defined(FEATURE) && !DEBUG
+    println("mode 2 with feature");
+    #if 1 << 3 == 8 && (7 % 4) == 3 && -1 < 0
+    println("arithmetic ok");
+    #endif
+#else
+    println("other mode");
+#endif
+#ifdef NOT_DEFINED
+    println("never");
+#else
+    println("ifdef else");
+#endif
+#if CB_OS_LINUX || CB_OS_MACOS
+    println("unix");
+#endif
+    let SELF_VAL = 1;
+    println(SELF_VAL);
+}

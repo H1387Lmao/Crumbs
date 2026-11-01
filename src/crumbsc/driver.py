@@ -43,11 +43,18 @@ def make_plan(mods):
 
 
 def compile_to_c(path, include_dirs=(), color=None, quiet_warnings=False, strict=False, entry="main", gc=True,
-                 nostd=False, overflow_panic=False):
+                 nostd=False, overflow_panic=False, defines=None):
     """Returns (c_source or None, diagnostics, link plan)."""
     d = Diagnostics()
+    predefined = {}
+    if gc:
+        predefined["CB_GC"] = "1"
+    if nostd:
+        predefined["CB_NO_STDRUNTIME"] = "1"
+    if overflow_panic:
+        predefined["CB_OVERFLOW_PANIC"] = "1"
     try:
-        mods = Loader(d, include_dirs, nostd=nostd).load_entry(path)
+        mods = Loader(d, include_dirs, nostd=nostd, defines=defines, predefined=predefined).load_entry(path)
     except CompileError as e:
         print(f"error: {e}", file=sys.stderr)
         return None, d, LinkPlan()
@@ -175,7 +182,7 @@ def build(args, run_after=False):
         return 1
     verbose_header(args)
     c_src, d, plan = compile_to_c(args.file, args.include, strict=args.strict_casts, entry=args.entry, gc=args.gc,
-                                 nostd=args.no_stdruntime, overflow_panic=args.overflow_panic)
+                                 nostd=args.no_stdruntime, overflow_panic=args.overflow_panic, defines=parse_defines(args))
     verbose_front(args)
     report(d, args.no_warn)
     if c_src is None:
@@ -234,6 +241,39 @@ def build(args, run_after=False):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def parse_defines(a):
+    out = {}
+    for item in getattr(a, "define", []) or []:
+        name, _, val = item.partition("=")
+        out[name] = val if _ else "1"
+    for name in getattr(a, "undef", []) or []:
+        out[name] = None
+    return out
+
+
+def preprocess_only(a):
+    """`crumbs pp FILE`: print the entry file after preprocessing (like `gcc -E`)."""
+    from .preprocessor import Preprocessor
+    with open(a.file, encoding="utf-8") as f:
+        text = f.read()
+    d = Diagnostics()
+    from .diag import Source
+    src = Source(a.file, text)
+    predef = {}
+    if a.gc:
+        predef["CB_GC"] = "1"
+    if a.no_stdruntime:
+        predef["CB_NO_STDRUNTIME"] = "1"
+    if a.overflow_panic:
+        predef["CB_OVERFLOW_PANIC"] = "1"
+    out = Preprocessor(d, parse_defines(a), predef).process(text, a.file, src)
+    report(d, a.no_warn)
+    if d.has_errors:
+        return 1
+    sys.stdout.write(out if out.endswith("\n") else out + "\n")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="crumbs", description="Crumbs: a small, type-safe, C-style language that compiles to C.")
     ap.add_argument("--version", action="version", version=f"crumbs {__version__}")
@@ -246,6 +286,10 @@ def main(argv=None):
                        help="log what the compiler does: time spent lexing, parsing, checking and generating code, "
                             "and the C compiler command (-vv adds a per-file table)")
         p.add_argument("--no-warn", action="store_true", help="hide warnings")
+        p.add_argument("-D", dest="define", action="append", default=[], metavar="NAME[=VALUE]",
+                       help="define a preprocessor macro (value defaults to 1); usable in #if / #ifdef and in code")
+        p.add_argument("-U", dest="undef", action="append", default=[], metavar="NAME",
+                       help="undefine a predefined or -D macro")
         p.add_argument("--strict-casts", action="store_true",
                        help="treat implicit-conversion and signedness warnings as errors")
         p.add_argument("--entry", default="main", metavar="NAME",
@@ -284,6 +328,8 @@ def main(argv=None):
     p.add_argument("-o", "--output")
     p = sub.add_parser("check", help="type-check only")
     common(p)
+    p = sub.add_parser("pp", help="print the entry file after preprocessing (#define / #if / ...)")
+    common(p)
 
     a = ap.parse_args(argv)
     try:
@@ -299,17 +345,19 @@ def main(argv=None):
 
 def _dispatch(a):
     a.file_ = a.file
+    if a.cmd == "pp":
+        return preprocess_only(a)
     if a.cmd in ("check", "emit"):
         verbose_header(a)
     if a.cmd == "check":
         c, d, _ = compile_to_c(a.file, a.include, strict=a.strict_casts, entry=a.entry, gc=a.gc,
-                                 nostd=a.no_stdruntime, overflow_panic=a.overflow_panic)
+                                 nostd=a.no_stdruntime, overflow_panic=a.overflow_panic, defines=parse_defines(a))
         verbose_front(a)
         report(d, a.no_warn)
         return 0 if c is not None else 1
     if a.cmd == "emit":
         c, d, _ = compile_to_c(a.file, a.include, strict=a.strict_casts, entry=a.entry, gc=a.gc,
-                                 nostd=a.no_stdruntime, overflow_panic=a.overflow_panic)
+                                 nostd=a.no_stdruntime, overflow_panic=a.overflow_panic, defines=parse_defines(a))
         verbose_front(a)
         report(d, a.no_warn)
         if c is None:

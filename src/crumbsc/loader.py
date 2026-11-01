@@ -3,6 +3,7 @@ import os
 from .diag import Source, CompileError
 from .parser import parse
 from .timing import TIMINGS
+from .preprocessor import Preprocessor, needs_preprocessing
 
 STD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "std")
 
@@ -32,8 +33,10 @@ class Module:
 
 
 class Loader:
-    def __init__(self, diags, include_dirs=(), nostd=False):
+    def __init__(self, diags, include_dirs=(), nostd=False, defines=None, predefined=None):
         self.d = diags
+        self.defines = defines or {}
+        self.predefined = predefined or {}
         self.nostd = nostd
         self.include_dirs = list(include_dirs)
         self.by_path = {}
@@ -70,6 +73,13 @@ class Loader:
         except UnicodeDecodeError:
             raise CompileError(f"`{path}` is not valid UTF-8")
         shown = display or os.path.relpath(path)
+        if needs_preprocessing(text) or self.defines:
+            orig = Source(shown, text)
+            pp = Preprocessor(self.d, self.defines, self.predefined)
+            new = pp.process(text, shown, orig)
+            src = Source(shown, new)
+            src.expanded = pp.changed
+            return src
         return Source(shown, text)
 
     def _load(self, path, logical, stack, display):

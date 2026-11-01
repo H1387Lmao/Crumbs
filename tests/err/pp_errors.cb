@@ -1,0 +1,16 @@
+// The preprocessor reports mistakes with spans.
+#define TWO(a, b) a + b
+#define BAD(x) #y // ERROR: must be followed by a parameter name
+#if 1 + // ERROR: ends unexpectedly
+#endif
+#else // ERROR: without a matching `#if`
+#frobnicate // ERROR: unknown preprocessor directive
+#include "other.cb" // ERROR: `#include` is not supported
+#if 4 / 0 // ERROR: division by zero
+#endif
+#error stop here // ERROR: #error stop here
+fn main() {
+    let x = TWO(1); // ERROR: takes 2 arguments, found 1
+#if 1 // ERROR: unterminated conditional
+    let y = 2;
+}

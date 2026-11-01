@@ -8,6 +8,7 @@ class Source:
         self.path = path
         self.text = text
         self.lines = text.split("\n")
+        self.expanded = {}           # line -> original text, for lines changed by the preprocessor
 
 
 class Span:
@@ -102,6 +103,8 @@ class Diagnostics:
             carets = " " * start + "^" * width
             lab = (" " + d.label) if d.label else ""
             out.append(f"{pad} {paint('|', '1;34')} {paint(carets + lab, tint)}")
+            if sp.line in getattr(sp.src, "expanded", {}):
+                out.append(f"{pad} {paint('=', '1;34')} {paint('note', '1')}: this line was changed by macro expansion; it was: {sp.src.expanded[sp.line].strip()}")
             for n in d.notes:
                 out.append(f"{pad} {paint('=', '1;34')} {paint('note', '1')}: {n}")
             if d.help:

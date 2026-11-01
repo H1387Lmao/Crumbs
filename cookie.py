@@ -105,7 +105,7 @@ PROJECT_KEYS = {"name": str, "version": str, "description": str, "source_dir": s
                 "entry_fn": str, "build_dir": str, "crumbs_path": str}
 BUILD_KEYS = {"cc": str, "gc": bool, "no_stdruntime": bool, "strict_casts": bool, "no_warn": bool,
               "include": STR_LIST, "libs": STR_LIST, "lib_dirs": STR_LIST, "link": STR_LIST,
-              "pkg": STR_LIST, "cflags": STR_LIST}
+              "pkg": STR_LIST, "cflags": STR_LIST, "defines": STR_LIST}
 PROFILE_KEYS = {"opt": (str, int), "unchecked": bool, "overflow_panic": bool, "gc": bool,
                 "strict_casts": bool}
 
@@ -253,6 +253,8 @@ class Options:
         self.link = list(project.b.get("link", [])) + list(getattr(args, "link", None) or [])
         self.pkg = list(project.b.get("pkg", [])) + list(getattr(args, "pkg", None) or [])
         self.cflags = list(project.b.get("cflags", [])) + list(getattr(args, "cflag", None) or [])
+        self.defines = list(project.b.get("defines", [])) + list(getattr(args, "define", None) or [])
+        self.undefs = list(getattr(args, "undef", None) or [])
         self.extra = list(getattr(args, "crumbs_arg", None) or [])
         self.verbose = int(getattr(args, "verbose", 0) or 0)
         if self.unchecked and getattr(args, "overflow_panic", None) is True:
@@ -299,6 +301,10 @@ class Options:
             flags += ["--cc", self.cc]
         for f in self.cflags:
             flags.append(f"--cflag={f}")
+        for dflt in self.defines:
+            flags += ["-D", dflt]
+        for u in self.undefs:
+            flags += ["-U", u]
         for n in self.libs:
             flags += ["-l", n]
         for d in self.lib_dirs:
@@ -488,6 +494,7 @@ entry = "{entry}"
 # link = []                 # object files / archives / shared libraries to link
 # pkg = []                  # pkg-config packages
 # cflags = []               # extra C compiler flags
+# defines = []              # preprocessor macros, like -D: ["FEATURE", "LEVEL=3"]
 
 [profile.debug]
 opt = "0"
@@ -584,6 +591,8 @@ def add_cc(p):
                    help="remove bounds, null, division and conversion checks (and overflow panics)")
     g.add_argument("--cc", metavar="CC", help="C compiler (default: $CC, gcc, clang)")
     g.add_argument("--cflag", action="append", metavar="FLAG", help="extra C compiler flag (repeatable)")
+    g.add_argument("-D", dest="define", action="append", metavar="NAME[=VALUE]", help="define a preprocessor macro (repeatable)")
+    g.add_argument("-U", dest="undef", action="append", metavar="NAME", help="undefine a preprocessor macro (repeatable)")
     g.add_argument("-l", dest="lib", action="append", metavar="NAME", help="link library NAME")
     g.add_argument("-L", dest="libdir", action="append", metavar="DIR", help="library search directory")
     g.add_argument("--link", action="append", metavar="FILE", help="link an object file, archive or shared library")

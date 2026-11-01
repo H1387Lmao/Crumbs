@@ -345,6 +345,29 @@ declarations, exactly like user code does. (The only runtime hooks they call are
 | `crumbsc/diag.py` | rustc-style diagnostics with "did you mean" suggestions |
 | `driver.py` | build pipeline, link plan (`link`/`--link`/`--pkg`), command line |
 
+## Preprocessor
+
+Source text goes through a preprocessor before lexing. Directives start with `#` at the beginning of a line:
+
+```
+#define LIMIT 100
+#define SQUARE(x) ((x) * (x))
+#define LOG(fmt, ...) println(fmt __VA_OPT__(,) __VA_ARGS__)   // variadic; #x makes a string, a##b pastes
+#ifdef CB_OS_LINUX            // #if / #ifdef / #ifndef / #elif / #else / #endif, nestable
+#if LIMIT > 50 && defined(FEATURE) && !CB_GC
+...
+#endif
+#endif
+#error / #warning message     // reported as compiler diagnostics
+```
+
+`#if` expressions are integers with `defined(X)`, `! ~ - + * / % << >> < <= > >= == != & ^ | && ||` and `?:`; unknown names are 0.
+Strings, char literals and comments are never touched, and line numbers never change (directive and skipped lines become empty), so
+error messages still point at the right line; a line altered by macros gets a note showing the original. Predefined: `__FILE__`,
+`__LINE__`, `__COUNTER__`, `__CRUMBS__`, `CB_OS_LINUX/MACOS/WINDOWS`, `CB_ARCH_X86_64/AARCH64`, `CB_GC`, `CB_NO_STDRUNTIME`, `CB_OVERFLOW_PANIC`.
+`-DNAME[=VALUE]` / `-UNAME` work on `crumbs` and `cookie` (`defines = [...]` under `[build]`), and `crumbs pp file.cb` prints the result.
+Not supported: `#include` (use `import`, or `include "x.h";` for C headers). Macros are per file, and a call must fit on one line.
+
 ## Known limits (it is a toy)
 No generic enums, trait bounds or closures; no `if` expressions; the collector is conservative and stop-the-world. Slices are mutable views even of
 immutable arrays. The generated C needs GCC/Clang (statement expressions, overflow builtins).
