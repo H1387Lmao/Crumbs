@@ -164,6 +164,20 @@ Integer literals adapt to their context (`let x: u8 = 200`); `as` is always avai
 is `0`. Build with `--overflow-panic` to make overflow a panic with a location instead (`cookie`'s debug profile does this).
 Division by zero and `MIN / -1` stay defined: zero panics; `MIN / -1` wraps (panics with `--overflow-panic`).
 
+**`try { } catch { }` blocks.** One handler for a whole group of calls. Inside the block any call to a function returning `T!` (and
+any `throw`) that fails jumps to the handler, so the calls need no `try` of their own. Locals of the block are destroyed first;
+`return`, `break`, `continue` and nested blocks work normally, and the handler may `throw e` to pass the error on. The binder is optional.
+
+```
+try {
+    let text = fs.read_to_string("config.txt");   // fails -> handler
+    let n = parse(text);                          // fails -> handler
+    println("ok ", n);
+} catch |e| {
+    println("could not load: ", e == fs.NotFound);
+}
+```
+
 **Increment / decrement.** `i++`, `i--`, `++i`, `--i` work as statements and as expressions
 (`cells[p++] = x`) on any mutable integer/float place.
 

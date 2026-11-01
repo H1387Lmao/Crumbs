@@ -74,6 +74,7 @@ class CodeGen:
         self.cur_ret = VOID
         self.dscopes = []        # per C scope: locals whose type has a destructor
         self.loop_bases = []
+        self.try_stack = []
         self.glue_done = {}
         self.glue_todo = []
         self.stmt_temps = None   # temporaries with destructors created while generating the current statement
@@ -216,6 +217,8 @@ class CodeGen:
             if self.dscopes:
                 self.dscopes[-1].append(self.stmt_temps[-1])
             c = f"({name} = {c}, {name}__live = 1, {name})"
+        if getattr(e, "auto_try", False):     # a failing call inside `try { }`
+            c = self.try_wrap(c, e.eu_ty)
         if getattr(e, "coerce", False):       # String -> str view
             return f"cb_string_view({c})"
         return c
@@ -596,13 +599,45 @@ class CodeGen:
 
     # ---------------------------------------------------------------- errors
     def g_Try(self, e):
-        t = self.tmp()
-        eut = e.expr.ty
+        return self.try_wrap(self.ex(e.expr), e.expr.ty)
+
+    def fail_jump(self, err):
+        """C statements that leave the current function (or the innermost `try { }`) with error code `err`."""
+        if self.try_stack:
+            var, label, base = self.try_stack[-1]
+            return f"{var} = {err}; {' '.join(self.drops_text(base))} goto {label};"
         R = self.ctype(self.cur_ret)
+        return f"{' '.join(self.drops_text(0))} return ({R}){{.err = {err}}};"
+
+    def try_wrap(self, call, eut):
+        t = self.tmp()
         val = "(void)0" if eut.inner == VOID else f"{t}.val"
-        drops = " ".join(self.drops_text(0))
-        return (f"({{ {self.ctype(eut)} {t} = {self.ex(e.expr)}; "
-                f"if (CB_UNLIKELY({t}.err)) {{ {drops} return ({R}){{.err = {t}.err}}; }} {val}; }})")
+        return (f"({{ {self.ctype(eut)} {t} = {call}; "
+                f"if (CB_UNLIKELY({t}.err)) {{ {self.fail_jump(t + '.err')} }} {val}; }})")
+
+    def s_TryBlock(self, s):
+        n = self.tmp("cb_try")
+        var, catch_l, end_l = f"{n}_err", f"{n}_catch", f"{n}_end"
+        self.emit("{")
+        self.ind += 1
+        self.emit(f"int32_t {var} = 0;")
+        self.try_stack.append((var, catch_l, len(self.dscopes)))
+        self.emit("{")
+        self.block(s.body)
+        self.emit("}")
+        self.try_stack.pop()
+        self.emit(f"goto {end_l};")
+        self.emit(f"{catch_l}: (void){var};")
+        self.emit("{")
+        self.ind += 1
+        if s.binder_local is not None:
+            self.emit(f"int32_t {s.binder_local.cname} = {var};")
+        self.block_body(s.handler)
+        self.ind -= 1
+        self.emit("}")
+        self.emit(f"{end_l}: ;")
+        self.ind -= 1
+        self.emit("}")
 
     def g_Catch(self, e):
         t = self.tmp()
@@ -864,6 +899,9 @@ class CodeGen:
             self.finish_return(self.ex(s.expr))
 
     def s_Throw(self, s):
+        if self.try_stack:
+            self.emit("{ " + self.fail_jump(self.ex(s.expr)) + " }")
+            return
         self.finish_return(f"({self.ctype(self.cur_ret)}){{.err = {self.ex(s.expr)}}}")
 
     def s_For(self, s):
@@ -945,6 +983,7 @@ class CodeGen:
         self.out = []
         self.dscopes = [[]]
         self.loop_bases = []
+        self.try_stack = []
         for loc in getattr(sym, "param_locals", []):
             if loc.glue:
                 self.emit(f"bool {loc.cname}__live = 1;")
@@ -1151,6 +1190,7 @@ class CodeGen:
         L.append("")
         if glue:
             L.append("/* destructors */")
+            L += [g.split("\n", 1)[0].rstrip(" {") + ";" for g in glue]     # glue functions call each other in any order
             L += glue
             L.append("")
         L.append("/* functions */")

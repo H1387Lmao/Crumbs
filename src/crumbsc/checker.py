@@ -91,6 +91,7 @@ class FnInfo:
         self.names = set()
         self.loops = 0
         self.rdepth = 0          # nesting depth of `region` blocks
+        self.try_stack = []      # open `try { }` blocks: frames {"fails": [moved-state at each failure point]}
         self.loop_stack = []     # frames {"breaks": [...], "conts": [...]} for move analysis
 
 
@@ -1121,6 +1122,8 @@ class Checker:
     def check(self, e, exp=None, eu=False):
         t = getattr(self, "ex_" + e.kind)(e, exp)
         e.ty = t
+        if t.kind == "eu" and not eu and self.fn is not None and self.fn.try_stack and e.kind == "Call":
+            return self.auto_try(e, t)
         if t.kind == "eu" and not eu:
             self.d.error(e.span, f"unhandled error union `{t}`",
                          label="this call can fail",
@@ -1128,6 +1131,37 @@ class Checker:
             e.ty = POISON
             return POISON
         return t
+
+    def auto_try(self, e, t):
+        """Inside `try { }` a failing call needs no `try`: its error goes to the block's handler."""
+        e.auto_try = True
+        e.eu_ty = t
+        self.fn.try_stack[-1]["fails"].append(dict(self.moved))
+        e.ty = t.inner
+        return t.inner
+
+    def st_TryBlock(self, s):
+        fn = self.fn
+        frame = {"fails": []}
+        fn.try_stack.append(frame)
+        m0 = dict(self.moved)
+        self.check_block(s.body)
+        fn.try_stack.pop()
+        m_body = None if self.terminates(s.body) else self.moved
+        if not frame["fails"]:
+            self.d.warn(s.span, "this `try` block contains nothing that can fail",
+                        help="calls to functions returning `T!` and `throw` send control to the `catch` handler")
+        self.moved = self.merge_moved(m0, *frame["fails"]) if frame["fails"] else dict(m0)
+        self.push()
+        s.binder_local = None
+        if s.binder:
+            loc = self.declare_local(s.binder, ERR, False, s.binder_span)
+            loc.used = True
+            s.binder_local = loc
+        self.check_block(s.handler)
+        self.pop()
+        m_handler = None if self.terminates(s.handler) else self.moved
+        self.moved = self.merge_moved(m0, m_body, m_handler)
 
     # ============================================================== literals
     def ex_Int(self, e, exp, neg=False):
@@ -2252,7 +2286,9 @@ class Checker:
             self.d.error(e.span, f"`try` needs an expression that can fail, found `{t}`",
                          label="this cannot produce an error", help="`try` applies to calls to functions returning `T!`")
             return t
-        if self.fn.ret.kind != "eu":
+        if self.fn.try_stack:
+            self.fn.try_stack[-1]["fails"].append(dict(self.moved))      # a failure goes to the enclosing `try { }` handler
+        elif self.fn.ret.kind != "eu":
             self.d.error(e.span, "`try` can only be used in a function that returns an error union",
                          label=f"enclosing function returns `{self.fn.ret}`",
                          help=f"change the return type to `{self.fn.ret}!`, or handle the error with `catch`")
@@ -2595,7 +2631,9 @@ class Checker:
             self.fn.loop_stack[-1]["conts"].append(dict(self.moved))
 
     def st_Throw(self, s):
-        if self.fn.ret.kind != "eu" and not self.fn.ret.poison:
+        if self.fn.try_stack:
+            self.fn.try_stack[-1]["fails"].append(dict(self.moved))
+        elif self.fn.ret.kind != "eu" and not self.fn.ret.poison:
             self.d.error(s.span, "`throw` can only be used in a function that returns an error union",
                          label=f"enclosing function returns `{self.fn.ret}`",
                          help=f"change the return type to `{self.fn.ret}!`")
@@ -2607,6 +2645,8 @@ class Checker:
     def st_ExprStmt(self, s):
         e = s.expr
         t = self.check(e, None, eu=(e.kind == "Call"))
+        if e.kind == "Call" and t.kind == "eu" and self.fn.try_stack:
+            t = self.auto_try(e, t)
         if e.kind == "Call" and t.kind == "eu":
             self.d.error(e.span, f"unused error from call returning `{t}`", label="this call can fail",
                          help="prefix with `try`, or handle it: `f() catch |e| { ... };`")
@@ -2764,6 +2804,8 @@ class Checker:
             return any(self.terminates(x) for x in s.stmts)
         if k == "Region":
             return self.terminates(s.body)
+        if k == "TryBlock":
+            return self.terminates(s.body) and self.terminates(s.handler)
         if k == "If":
             return s.els is not None and self.terminates(s.then) and self.terminates(s.els)
         if k == "Match":

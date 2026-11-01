@@ -1,0 +1,7 @@
+error Bad;
+fn f() -> i32! { throw Bad; }
+fn main() {
+    try { // ERROR: needs a `catch` handler
+        let x = f();
+    }
+}

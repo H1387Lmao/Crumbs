@@ -1,0 +1,16 @@
+// Destructor glue for a struct that holds a List inside a struct that holds a String: the generated
+// helper functions call each other, so they need forward declarations (regression test).
+struct Inner { stack: List<u16>, name: String }
+struct Outer { inner: Inner, cells: []u8, tag: String }
+impl Outer {
+    pub fn new() -> Outer {
+        return Outer { inner: Inner { stack: List.new(), name: String.new("in") }, cells: alloc(u8, 4), tag: String.new("out") };
+    }
+    pub fn depth(self) -> i64 { return self.inner.stack.len; }
+}
+fn main() {
+    let mut o = Outer.new();
+    o.inner.stack.push(7);
+    o.inner.stack.push(9);
+    println(o.depth(), " ", o.inner.name, " ", o.tag);
+}

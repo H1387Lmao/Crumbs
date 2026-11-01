@@ -1,0 +1,15 @@
+all ok 12
+drop inner
+12
+drop inner
+failed after 2: true false
+-1
+drop inner
+failed after 6: false true
+-1
+10 0 -9
+i = 1
+caught at 3
+inner
+outer true
+missing file true

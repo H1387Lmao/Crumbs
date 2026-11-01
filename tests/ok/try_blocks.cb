@@ -1,0 +1,79 @@
+// try { ... } catch |e| { ... }: any failing call (or `throw`) inside the block jumps to the handler.
+import std.fs;
+error Bad;
+error Worse;
+
+fn parse(n: i32) -> i32! {
+    if n < 0 { throw Bad; }
+    if n > 100 { throw Worse; }
+    return n * 2;
+}
+
+struct Guard { name: str }
+drop Guard(self) { println("drop ", self.name); }
+
+fn sum3(a: i32, b: i32, c: i32) -> i32 {
+    let mut total = 0;
+    try {
+        let _g = Guard { name: "inner" };
+        total += parse(a);          // no `try` needed inside the block
+        total += parse(b);
+        total += parse(c);
+        println("all ok ", total);
+    } catch |e| {
+        println("failed after ", total, ": ", e == Bad, " ", e == Worse);
+        return -1;
+    }
+    return total;
+}
+
+fn propagate(n: i32) -> i32! {
+    try {
+        let v = parse(n);
+        return v;
+    } catch |e| {
+        if e == Bad { return 0; }      // handled here
+        throw e;                       // or passed on to the caller
+    }
+}
+
+fn main() {
+    println(sum3(1, 2, 3));
+    println(sum3(1, -2, 3));
+    println(sum3(1, 2, 500));
+    println(propagate(5) catch -9, " ", propagate(-5) catch -9, " ", propagate(500) catch -9);
+
+    // loops: break / continue inside a try, and throw in a block
+    let mut i = 0;
+    while i < 5 {
+        i += 1;
+        try {
+            if i == 2 { continue; }
+            if i == 4 { break; }
+            if i == 3 { throw Bad; }
+            println("i = ", i);
+        } catch {
+            println("caught at ", i);
+        }
+    }
+
+    // nested: the inner handler only sees its own block
+    try {
+        try {
+            parse(-1);
+        } catch |e| {
+            println("inner");
+            parse(200);
+        }
+        println("not reached");
+    } catch |e| {
+        println("outer ", e == Worse);
+    }
+
+    try {
+        let content = fs.read_to_string("/definitely/not/here");
+        println(content.len);
+    } catch |e| {
+        println("missing file ", e == fs.NotFound);
+    }
+}

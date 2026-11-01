@@ -547,6 +547,20 @@ class Parser:
             return N("Region", self.sp(t), name=nm.val, name_span=nm.span, body=body)
         if t.kind == "kw":
             v = t.val
+            if v == "try" and self.peek().kind == "op" and self.peek().val == "{":
+                self.advance()
+                body = self.parse_block()
+                if not self.is_kw("catch"):
+                    self.fail("a `try { ... }` block needs a `catch` handler", tok=t,
+                              label="expected `catch { ... }` or `catch |e| { ... }`")
+                self.advance()
+                binder = None
+                if self.accept_op("|"):
+                    binder = self.expect_ident("error binding")
+                    self.expect_op("|", "after catch binding")
+                handler = self.parse_block()
+                return N("TryBlock", self.sp(t), body=body, binder=binder.val if binder else None,
+                         binder_span=binder.span if binder else None, handler=handler)
             if v == "let":
                 return self.parse_let()
             if v == "if":
