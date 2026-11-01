@@ -6,10 +6,42 @@
 //   println("took ", sw.elapsed().to_string());
 //   time.sleep_ms(250);
 //   println(time.now_utc().iso());
-extern fn cb_time_mono_ns() -> i64;
-extern fn cb_time_unix_ns() -> i64;
-extern fn cb_time_sleep_ns(ns: i64);
-extern fn cb_time_local_offset(secs: i64) -> i64;
+include "time.h";
+include "errno.h";
+
+// libc, bound through the language's own FFI (no runtime helpers)
+extern struct Timespec { sec: i64, nsec: i64 }
+extern struct Tm { sec: i32, min: i32, hour: i32, mday: i32, mon: i32, year: i32, wday: i32, yday: i32,
+                   isdst: i32, gmtoff: i64, zone: *u8 }
+extern const CLOCK_REALTIME: i32;
+extern const CLOCK_MONOTONIC: i32;
+extern const EINTR: i32;
+extern fn clock_gettime(clock: i32, out: *Timespec) -> i32;
+extern fn nanosleep(req: *Timespec, rem: *Timespec) -> i32;
+extern fn localtime_r(t: *i64, out: *Tm) -> *Tm;
+extern fn fflush(f: *void) -> i32;
+extern "__errno_location" fn errno_ptr() -> *i32;
+
+fn clock_ns(clock: i32) -> i64 {
+    let mut t = Timespec { sec: 0, nsec: 0 };
+    clock_gettime(clock, &t);
+    return t.sec * 1000000000 + t.nsec;
+}
+fn mono_ns() -> i64 { return clock_ns(CLOCK_MONOTONIC); }
+fn wall_ns() -> i64 { return clock_ns(CLOCK_REALTIME); }
+fn sleep_ns(ns: i64) {
+    if ns <= 0 { return; }
+    fflush(null);
+    let mut req = Timespec { sec: ns / 1000000000, nsec: ns % 1000000000 };
+    while nanosleep(&req, &req) == -1 && *errno_ptr() == EINTR { }
+}
+// seconds east of UTC at that moment
+fn local_offset(secs: i64) -> i64 {
+    let mut t = secs;
+    let mut tm = Tm { sec: 0, min: 0, hour: 0, mday: 0, mon: 0, year: 0, wday: 0, yday: 0, isdst: 0, gmtoff: 0, zone: null };
+    if localtime_r(&t, &tm) == null { return 0; }
+    return tm.gmtoff;
+}
 
 pub const NS_PER_US: i64 = 1000;
 pub const NS_PER_MS: i64 = 1000000;
@@ -17,13 +49,13 @@ pub const NS_PER_SEC: i64 = 1000000000;
 
 // ---- raw clocks -------------------------------------------------------------------------
 // nanoseconds on a clock that only moves forward (use it to measure elapsed time)
-pub fn monotonic_ns() -> i64 { return cb_time_mono_ns(); }
+pub fn monotonic_ns() -> i64 { return mono_ns(); }
 // nanoseconds since 1970-01-01 00:00:00 UTC (the wall clock; it can jump)
-pub fn unix_ns() -> i64 { return cb_time_unix_ns(); }
-pub fn unix() -> i64 { return cb_time_unix_ns() / NS_PER_SEC; }
-pub fn unix_ms() -> i64 { return cb_time_unix_ns() / NS_PER_MS; }
-pub fn sleep_ms(ms: i64) { cb_time_sleep_ns(ms * NS_PER_MS); }
-pub fn sleep_secs(s: f64) { cb_time_sleep_ns((s * 1000000000.0) as i64); }
+pub fn unix_ns() -> i64 { return wall_ns(); }
+pub fn unix() -> i64 { return wall_ns() / NS_PER_SEC; }
+pub fn unix_ms() -> i64 { return wall_ns() / NS_PER_MS; }
+pub fn sleep_ms(ms: i64) { sleep_ns(ms * NS_PER_MS); }
+pub fn sleep_secs(s: f64) { sleep_ns((s * 1000000000.0) as i64); }
 
 // ---- Duration -----------------------------------------------------------------------------
 pub struct Duration { ns: i64 }
@@ -46,7 +78,7 @@ impl Duration {
     pub fn mul(self, k: i64) -> Duration { return Duration { ns: self.ns * k }; }
     pub fn less(self, o: Duration) -> bool { return self.ns < o.ns; }
 
-    pub fn sleep(self) { cb_time_sleep_ns(self.ns); }
+    pub fn sleep(self) { sleep_ns(self.ns); }
 
     // "850ns", "12.500us", "3.250ms", "1.500s", "2m05.250s"
     pub fn to_string(self) -> String {
@@ -95,18 +127,18 @@ fn frac(n: i64, unit: i64) -> String {
 pub struct Stopwatch { began: i64 }
 
 impl Stopwatch {
-    pub fn start() -> Stopwatch { return Stopwatch { began: cb_time_mono_ns() }; }
-    pub fn elapsed(self) -> Duration { return Duration { ns: cb_time_mono_ns() - self.began }; }
-    pub fn elapsed_ms(self) -> i64 { return (cb_time_mono_ns() - self.began) / NS_PER_MS; }
-    pub fn elapsed_secs(self) -> f64 { return (cb_time_mono_ns() - self.began) as f64 / 1000000000.0; }
+    pub fn start() -> Stopwatch { return Stopwatch { began: mono_ns() }; }
+    pub fn elapsed(self) -> Duration { return Duration { ns: mono_ns() - self.began }; }
+    pub fn elapsed_ms(self) -> i64 { return (mono_ns() - self.began) / NS_PER_MS; }
+    pub fn elapsed_secs(self) -> f64 { return (mono_ns() - self.began) as f64 / 1000000000.0; }
     // returns the time since the last start/lap and begins a new lap
     pub fn lap(mut self) -> Duration {
-        let now = cb_time_mono_ns();
+        let now = mono_ns();
         let d = Duration { ns: now - self.began };
         self.began = now;
         return d;
     }
-    pub fn reset(mut self) { self.began = cb_time_mono_ns(); }
+    pub fn reset(mut self) { self.began = mono_ns(); }
 }
 
 // ---- calendar dates (proleptic Gregorian) -----------------------------------------------------
@@ -178,9 +210,9 @@ pub fn now_utc() -> DateTime { return from_unix(unix()); }
 
 // the date and time in the machine's time zone
 pub fn now_local() -> DateTime { return local(unix()); }
-pub fn local(secs: i64) -> DateTime { return from_unix(secs + cb_time_local_offset(secs)); }
+pub fn local(secs: i64) -> DateTime { return from_unix(secs + local_offset(secs)); }
 // seconds east of UTC for the machine's time zone right now
-pub fn utc_offset() -> i64 { return cb_time_local_offset(unix()); }
+pub fn utc_offset() -> i64 { return local_offset(unix()); }
 
 fn two(out: *String, n: i32) {
     if n < 10 { *out += '0'; }

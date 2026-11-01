@@ -1,10 +1,12 @@
-// std.io: character-level input/output on stdin/stdout.
+// std.io: character-level input/output on stdin/stdout (libc through FFI).
 pub error Eof;
 
+include "stdio.h";
+extern "stdin" const stdin_file: *void;
 extern fn getchar() -> i32;
 extern fn putchar(c: i32) -> i32;
-extern fn cb_peekc() -> i32;
-extern fn cb_flush();
+extern fn ungetc(c: i32, f: *void) -> i32;
+extern fn fflush(f: *void) -> i32;
 
 // Read one byte from stdin. Fails with io.Eof at end of input (or Ctrl+D).
 pub fn getc() -> u8! {
@@ -16,6 +18,12 @@ pub fn getc() -> u8! {
 // Write one byte to stdout.
 pub fn putc(c: u8) {
     putchar(c as i32);
+}
+
+fn peek() -> i32 {
+    let c = getchar();
+    if c >= 0 { ungetc(c, stdin_file); }
+    return c;
 }
 
 // Read one line from stdin, without its terminator. A line ends at '\n', '\r', "\r\n",
@@ -32,7 +40,7 @@ pub fn get_line() -> String! {
         got = true;
         if c == 10 { return line; }
         if c == 13 {
-            if cb_peekc() == 10 { getchar(); }
+            if peek() == 10 { getchar(); }
             return line;
         }
         line += c as u8;
@@ -40,4 +48,4 @@ pub fn get_line() -> String! {
 }
 
 // Flush buffered output (useful before reading, e.g. after printing a prompt).
-pub fn flush() { cb_flush(); }
+pub fn flush() { fflush(null); }

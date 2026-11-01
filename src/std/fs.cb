@@ -1,4 +1,4 @@
-// std.fs: whole-file reading and writing, and a few file-system queries.
+// std.fs: whole-file reading and writing, and a few file-system queries (libc through FFI).
 //
 //   import std.fs;
 //   let text = fs.read_to_string("notes.txt") catch |e| { panic("cannot read"); };
@@ -6,16 +6,75 @@
 pub error NotFound;
 pub error IoError;
 
-extern fn cb_fs_read(path: str, out: *String) -> i32;
-extern fn cb_fs_write(path: str, data: str, append: i32) -> i32;
-extern fn cb_fs_stat(path: str, size: *i64) -> i32;
-extern fn cb_fs_remove(path: str) -> i32;
-extern fn cb_fs_mkdir(path: str) -> i32;
+include "stdio.h";
+include "unistd.h";
+include "dirent.h";
+include "sys/stat.h";
+extern fn fopen(path: *u8, mode: *u8) -> *void;
+extern fn fclose(f: *void) -> i32;
+extern fn fread(buf: *u8, size: u64, n: u64, f: *void) -> u64;
+extern fn fwrite(buf: *u8, size: u64, n: u64, f: *void) -> u64;
+extern fn ferror(f: *void) -> i32;
+extern fn fseek(f: *void, off: i64, whence: i32) -> i32;
+extern fn ftell(f: *void) -> i64;
+extern "remove" fn c_remove(path: *u8) -> i32;
+extern fn mkdir(path: *u8, mode: u32) -> i32;
+extern fn access(path: *u8, mode: i32) -> i32;
+extern fn opendir(path: *u8) -> *void;
+extern fn closedir(d: *void) -> i32;
+extern const SEEK_END: i32;
+
+// a NUL-terminated copy of a path (owned, freed by its destructor)
+fn cpath(p: str) -> String {
+    let mut s = string_from(p);
+    s += 0 as u8;
+    return s;
+}
+
+// 0 = missing, 1 = file, 2 = directory
+fn kind(path: str) -> i32 {
+    let p = cpath(path);
+    if access(p.ptr, 0) != 0 { return 0; }
+    let d = opendir(p.ptr);
+    if d == null { return 1; }
+    closedir(d);
+    return 2;
+}
+
+// 0 = ok, 1 = cannot open, 2 = read/write failed
+fn read_into(path: str, out: *String) -> i32 {
+    let p = cpath(path);
+    let f = fopen(p.ptr, "rb".ptr);
+    if f == null { return 1; }
+    let buf = alloc(u8, 16384);
+    let mut rc = 0;
+    loop {
+        let n = fread(buf.ptr, 1, 16384, f);
+        if n == 0 { break; }
+        for i in 0..n as i64 { *out += buf[i]; }
+    }
+    if ferror(f) != 0 { rc = 2; }
+    fclose(f);
+    free(buf);
+    return rc;
+}
+
+fn write_file(path: str, data: str, append: i32) -> i32 {
+    let p = cpath(path);
+    let mut mode = "wb";
+    if append != 0 { mode = "ab"; }
+    let f = fopen(p.ptr, cstr(mode));
+    if f == null { return 1; }
+    let mut rc = 0;
+    if data.len > 0 && fwrite(data.ptr, 1, data.len as u64, f) != data.len as u64 { rc = 2; }
+    if fclose(f) != 0 { rc = 2; }
+    return rc;
+}
 
 // the whole file as a String
 pub fn read_to_string(path: str) -> String! {
     let mut out = string_new();
-    let rc = cb_fs_read(path, &out);
+    let rc = read_into(path, &out);
     if rc == 1 { throw NotFound; }
     if rc != 0 { throw IoError; }
     return out;
@@ -42,44 +101,47 @@ pub fn read_lines(path: str) -> List<String>! {
 
 // creates or replaces the file
 pub fn write(path: str, data: str) -> void! {
-    let rc = cb_fs_write(path, data, 0);
+    let rc = write_file(path, data, 0);
     if rc == 1 { throw NotFound; }
     if rc != 0 { throw IoError; }
 }
 
 // adds to the end of the file (creating it if needed)
 pub fn append(path: str, data: str) -> void! {
-    let rc = cb_fs_write(path, data, 1);
+    let rc = write_file(path, data, 1);
     if rc == 1 { throw NotFound; }
     if rc != 0 { throw IoError; }
 }
 
 pub fn exists(path: str) -> bool {
-    let mut size: i64 = 0;
-    return cb_fs_stat(path, &size) != 0;
+    return kind(path) != 0;
 }
 
 pub fn is_file(path: str) -> bool {
-    let mut size: i64 = 0;
-    return cb_fs_stat(path, &size) == 1;
+    return kind(path) == 1;
 }
 
 pub fn is_dir(path: str) -> bool {
-    let mut size: i64 = 0;
-    return cb_fs_stat(path, &size) == 2;
+    return kind(path) == 2;
 }
 
 // size in bytes of a file
 pub fn size(path: str) -> i64! {
-    let mut n: i64 = 0;
-    if cb_fs_stat(path, &n) == 0 { throw NotFound; }
+    let p = cpath(path);
+    let f = fopen(p.ptr, "rb".ptr);
+    if f == null { throw NotFound; }
+    fseek(f, 0, SEEK_END);
+    let n = ftell(f);
+    fclose(f);
     return n;
 }
 
 pub fn remove(path: str) -> void! {
-    if cb_fs_remove(path) != 0 { throw NotFound; }
+    let p = cpath(path);
+    if c_remove(p.ptr) != 0 { throw NotFound; }
 }
 
 pub fn make_dir(path: str) -> void! {
-    if cb_fs_mkdir(path) != 0 { throw IoError; }
+    let p = cpath(path);
+    if mkdir(p.ptr, 511) != 0 { throw IoError; }
 }

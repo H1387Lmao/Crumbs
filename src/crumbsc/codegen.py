@@ -1073,7 +1073,7 @@ class CodeGen:
             glue.append(self.gen_glue(name, t))
         fns, bodies, protos, glue = self.prune(fns, bodies, protos, glue)
         for s in ck.fns:     # private prototypes for user-declared C functions, bound to the real symbol
-            if s.extern and not s.mod.is_std:
+            if s.extern:
                 ps = [self.ctype(t) for t in s.params] + (["..."] if s.variadic else [])
                 ret = self.ctype(s.ret) if s.ret != VOID else "void"
                 protos.append(f"extern {ret} {s.cname}({', '.join(ps) or 'void'}) CB_ASM({c_string(s.csym.encode())});")

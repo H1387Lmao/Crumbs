@@ -181,9 +181,9 @@ class Checker:
                 s.export = it.export
                 if it.extern:
                     s.csym = it.cname_str or it.name
-                    # std modules rely on the runtime's own headers; user bindings get a private
-                    # prototype bound to the real symbol so they can never clash with a C header
-                    s.cname = s.csym if m.is_std else f"cb_x_{m.cprefix}__{it.name}"
+                    # every binding (std included) gets a private prototype bound to the real symbol
+                    # so it can never clash with a C header
+                    s.cname = f"cb_x_{m.cprefix}__{it.name}"
                 elif it.export:
                     s.cname = it.name
                 if self.define(m, s, it.span) and not s.tparams:
@@ -530,8 +530,6 @@ class Checker:
 
         for sym in self.fns:
             it = sym.node
-            if sym.mod.is_std and sym.extern:
-                continue                 # the standard library binds Crumbs-aware runtime helpers (str, String, ...)
             if sym.extern or sym.export:
                 what = f"extern function `{sym.name}`" if sym.extern else f"exported function `{sym.name}`"
                 for p, t in zip(it.params, sym.params):

@@ -55,8 +55,7 @@ def compile_to_c(path, include_dirs=(), color=None, quiet_warnings=False, strict
     plan = make_plan(mods)
     if d.has_errors:
         return None, d, plan
-    externs = {it.name for m in mods if m.is_std for it in m.ast.items if it.kind == "Fn" and it.extern}
-    ck = Checker(mods, d, C_RESERVED | externs, strict=strict, entry_name=entry, nostd=nostd).run()
+    ck = Checker(mods, d, C_RESERVED, strict=strict, entry_name=entry, nostd=nostd).run()
     if d.has_errors:
         return None, d, plan
     cg = CodeGen(ck, gc=gc, nostd=nostd, overflow_panic=overflow_panic)
