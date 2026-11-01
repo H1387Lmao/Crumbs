@@ -2,6 +2,7 @@
 import os
 from .diag import Source, CompileError
 from .parser import parse
+from .timing import TIMINGS
 
 STD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "std")
 
@@ -74,7 +75,8 @@ class Loader:
     def _load(self, path, logical, stack, display):
         if path in self.by_path:
             return self.by_path[path]
-        src = self._read(path, display)
+        with TIMINGS.phase("load"):
+            src = self._read(path, display)
         ast = parse(src, self.d)
         m = Module(logical, path, src, ast, self.prefix_for(logical))
         m.is_std = os.path.commonpath([path, STD_DIR]) == STD_DIR

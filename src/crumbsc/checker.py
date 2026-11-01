@@ -5,15 +5,16 @@ code generator never has to re-derive types.
 """
 import copy
 import re
+from .timing import TIMINGS
 from .diag import suggest
 from .parser import N
 from .types import (INTS, PRIMS, Ty, I8, I16, I32, I64, U8, U16, U32, U64, F32, F64, BOOL, STR, VOID,
-                    ERR, POISON, STRING, ptr, arr, slc, eu, fnty, same)
+                    ERR, POISON, STRING, REGION, ptr, arr, slc, eu, fnty, same)
 
 BUILTINS = {"print", "println", "panic", "assert", "alloc", "free", "exit", "to_str",
             "string_new", "string_from", "string_clear",
             "cstr", "from_cstr", "slice_of", "size_of", "drop", "drop_at", "write_at", "read_at",
-            "gc_collect", "gc_bytes"}
+            "gc_collect", "gc_bytes", "gc_collections", "alloc_in"}
 ARITH = {"+", "-", "*", "/", "%"}
 BITWISE = {"&", "|", "^"}
 SHIFT = {"<<", ">>"}
@@ -56,6 +57,9 @@ class Sym:
         self.csym = None      # for extern fns / consts: the real C symbol or expression
         self.extern_struct = False
         self.opaque = False
+        self.is_method = False
+        self.has_self = False
+        self.self_mut = False
         self.drop_sym = None  # struct: its destructor (generic template for generic structs)
         self.drop_inst = None # struct instance: the instantiated destructor
         self.is_drop = False
@@ -75,6 +79,9 @@ class Local:
         self.span = span
         self.used = False
         self.is_param = is_param
+        self.rdepth = 0           # how many `region` blocks enclose its declaration
+        self.taint = None         # the region (a handle Local) whose memory this variable may point into
+        self.region_handle = False
 
 
 class FnInfo:
@@ -83,9 +90,7 @@ class FnInfo:
         self.ret = sym.ret if sym else VOID
         self.names = set()
         self.loops = 0
-        self.is_method = False
-        self.has_self = False
-        self.self_mut = False
+        self.rdepth = 0          # nesting depth of `region` blocks
         self.loop_stack = []     # frames {"breaks": [...], "conts": [...]} for move analysis
 
 
@@ -120,6 +125,10 @@ class Checker:
 
     # ================================================================ driver
     def run(self):
+        with TIMINGS.phase("check"):
+            return self._run()
+
+    def _run(self):
         for m in self.mods:
             self.declare(m)
             if m.name == "std.list" and m.is_std and not self.nostd and "List" in m.syms:
@@ -520,6 +529,8 @@ class Checker:
 
         for sym in self.fns:
             it = sym.node
+            if sym.mod.is_std and sym.extern:
+                continue                 # the standard library binds Crumbs-aware runtime helpers (str, String, ...)
             if sym.extern or sym.export:
                 what = f"extern function `{sym.name}`" if sym.extern else f"exported function `{sym.name}`"
                 for p, t in zip(it.params, sym.params):
@@ -753,6 +764,7 @@ class Checker:
                          help="use a different name, or assign to the existing variable (declare it with `let mut`)")
         loc = Local(name, ty, mut, self.alloc_cname(name), span, is_param)
         loc.glue = (not ty.poison) and self.has_glue(ty)
+        loc.rdepth = self.fn.rdepth if self.fn is not None else 0
         sc[name] = loc
         return loc
 
@@ -1168,6 +1180,10 @@ class Checker:
         if loc:
             loc.used = True
             e.local = loc
+            if loc.region_handle and not getattr(self, "region_ok", False):
+                self.d.error(e.span, f"the region `{e.name}` can only be used as the last argument of `alloc_in`",
+                             help=f"write `alloc_in(T, n, {e.name})`")
+                return POISON
             if loc in self.moved and e is not self.reinit_ok:
                 self.d.error(e.span, f"use of moved value `{e.name}`", label="value used after it was moved",
                              notes=[f"`{e.name}` was moved at line {self.moved[loc].line}, and its type has a destructor, so it cannot be copied"],
@@ -1370,6 +1386,10 @@ class Checker:
             t = self.check(e.expr, exp_inner)
             if t.poison:
                 return t
+            if not self.is_place(e.expr) and getattr(e, "auto_ref", False) and e.expr.kind in (
+                    "Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch", "Cast", "Field", "Index"):
+                e.temp = True                   # `make().method()`: the receiver is a temporary that lives for the statement
+                return ptr(t)
             if not self.is_place(e.expr):
                 self.d.error(e.span, "cannot take the address of a temporary value",
                              help="store it in a `let mut` variable first")
@@ -2030,7 +2050,7 @@ class Checker:
     PRINTABLE_KINDS = ("enum", "ptr", "fn")
 
     NOSTD_BANNED = {"print", "println", "alloc", "free", "exit", "to_str", "string_new", "string_from",
-                    "string_clear", "cstr", "gc_collect", "gc_bytes"}
+                    "string_clear", "cstr", "gc_collect", "gc_bytes", "gc_collections", "alloc_in"}
 
     def need_std(self, span, what):
         self.d.error(span, f"{what} needs the standard runtime, which `--no-stdruntime` removes",
@@ -2110,6 +2130,34 @@ class Checker:
                 self.d.error(args[0].span, f"allocation count must be an integer, found `{nt}`")
             e.elem = t
             return POISON if t.poison else slc(t)
+        if name == "alloc_in":
+            t = self.resolve_type(e.targ, self.m)
+            if len(args) != 2:
+                self.d.error(e.span, "`alloc_in` takes a type, a count and a region: `alloc_in(T, n, r)`")
+                for a in args:
+                    if not (a.kind == "Ident" and self.lookup(a.name) is not None and self.lookup(a.name).region_handle):
+                        self.check(a, None)
+                return POISON
+            nt = self.check(args[0], I64 if self.untyped(args[0]) else None)
+            if not nt.poison and not nt.is_int:
+                self.d.error(args[0].span, f"allocation count must be an integer, found `{nt}`")
+            r = args[1]
+            loc = self.lookup(r.name) if r.kind == "Ident" else None
+            if loc is None or not loc.region_handle:
+                n0 = self.d.error_count
+                self.check(r, None)
+                if self.d.error_count == n0:
+                    self.d.error(r.span, "the last argument of `alloc_in` must be a region",
+                                 help="declare one with `region r { ... }` and allocate inside the block")
+                return POISON
+            loc.used = True
+            r.local = loc
+            e.region_local = loc
+            e.elem = t
+            return POISON if t.poison else slc(t)
+        if name == "gc_collections":
+            arity(0)
+            return I64
         if name == "gc_collect":
             arity(0)
             return VOID
@@ -2188,6 +2236,10 @@ class Checker:
                     self.d.error(args[0].span, f"`free` expects a slice or a `String`, found `{t}`")
                 elif t == STRING:
                     self.consume(args[0])       # freeing a String early moves it
+                tr = self.taint(args[0])
+                if tr is not None:
+                    self.d.error(args[0].span, f"memory from region `{tr.name}` is freed when the region ends",
+                                 help="remove the `free`")
             return VOID
         raise AssertionError(name)
 
@@ -2312,6 +2364,8 @@ class Checker:
             s.drop_temp = (not ty.poison) and self.has_glue(ty)
             return
         s.local = self.declare_local(s.name, ty, s.mut, s.name_span)
+        if not ty.poison and self.holds_ptr(ty):
+            s.local.taint = self.taint(s.init)
 
     def cond(self, c):
         t = self.check(c, BOOL)
@@ -2402,6 +2456,109 @@ class Checker:
             self.pop()
         self.in_loop(s.body, body, True)
 
+    # ------------------------------------------------------------ regions (lifetimes)
+    def st_Region(self, s):
+        fn = self.fn
+        fn.rdepth += 1
+        self.push()
+        loc = self.declare_local(s.name, REGION, False, s.name_span)
+        loc.region_handle = True
+        loc.used = True
+        loc.glue = False
+        loc.rd = fn.rdepth
+        s.local = loc
+        self.check_block(s.body)
+        self.pop()
+        fn.rdepth -= 1
+
+    def holds_ptr(self, t):
+        """Can a value of type `t` contain a pointer into region memory?"""
+        k = t.kind
+        if k == "prim":
+            return t == REGION and False
+        if k in ("enum", "err", "poison"):
+            return False
+        if k == "arr":
+            return self.holds_ptr(t.inner)
+        if k == "struct":
+            return any(self.holds_ptr(ft) for _, ft, _ in t.sym.fields)
+        if k == "eu":
+            return self.holds_ptr(t.inner)
+        return True                    # ptr, slice, fn
+
+    def taint(self, e):
+        """The innermost region whose memory the value of expression `e` may refer to (a handle Local), or None."""
+        t = getattr(e, "ty", None)
+        if t is None or t.poison or not self.holds_ptr(t):
+            return None
+        if e.kind == "Call" and getattr(e, "builtin", None) == "alloc_in":
+            return e.region_local
+        if e.kind == "Ident":
+            loc = getattr(e, "local", None)
+            return loc.taint if loc is not None else None
+        if e.kind == "Unary" and e.op == "&":
+            return self.place_taint(e.expr)         # the address of an element / field inside region memory
+        best = None
+        for k, v in e.__dict__.items():
+            if k in ("span", "ty", "local", "sym", "handler"):
+                continue
+            kids = v if isinstance(v, (list, tuple)) else [v]
+            for c in kids:
+                if isinstance(c, N) and c.kind != "Block" and hasattr(c, "ty"):
+                    tc = self.taint(c)
+                    if tc is not None and (best is None or tc.rd > best.rd):
+                        best = tc
+        return best
+
+    def place_taint(self, t):
+        """The region that the storage of place `t` belongs to, if it is reached through a pointer or slice."""
+        while t.kind in ("Field", "Index"):
+            bt = getattr(t.obj, "ty", None)
+            if bt is not None and (bt.kind in ("ptr", "slice") or bt in (STR, STRING)):
+                return self.taint(t.obj)
+            t = t.obj
+        if t.kind == "Unary" and t.op == "*":
+            return self.taint(t.expr)
+        return None
+
+    def place_depth(self, t):
+        """Region nesting depth of the storage that assignment target `t` lives in (0 = outside every region)."""
+        while True:
+            k = t.kind
+            if k == "Ident":
+                loc = getattr(t, "local", None)
+                return loc.rdepth if loc is not None else 0
+            if k in ("Field", "Index"):
+                base = t.obj
+                bt = getattr(base, "ty", None)
+                if bt is not None and (bt.kind in ("ptr", "slice") or bt in (STR, STRING)):
+                    tb = self.taint(base)
+                    return tb.rd if tb is not None else 0
+                t = base
+                continue
+            if k == "Unary" and t.op == "*":
+                tb = self.taint(t.expr)
+                return tb.rd if tb is not None else 0
+            return 0
+
+    def escape_error(self, span, region, what):
+        self.d.error(span, f"memory from region `{region.name}` {what}",
+                     label=f"allocated with `alloc_in(.., {region.name})`, which is freed when the region ends",
+                     help="copy what you need out of the region before it ends, or allocate it outside with `alloc`")
+
+    def check_escape_store(self, target, value):
+        tv = self.taint(value)
+        if tv is None:
+            return
+        if tv.rd > self.place_depth(target):
+            self.escape_error(value.span, tv, "would outlive the region if stored here")
+        root = target
+        while root.kind in ("Field", "Index"):
+            root = root.obj
+        if root.kind == "Ident" and getattr(root, "local", None) is not None and self.holds_ptr(root.local.ty):
+            if root.local.taint is None or tv.rd > root.local.taint.rd:
+                root.local.taint = tv
+
     def st_Return(self, s):
         ret = self.fn.ret
         T = ret.inner if ret.kind == "eu" else ret
@@ -2416,6 +2573,9 @@ class Checker:
             return
         self.expect(s.expr, T)
         x = s.expr
+        tx = self.taint(x)
+        if tx is not None:
+            self.escape_error(x.span, tx, "cannot be returned")
         if T == STR and x.kind == "Ident" and getattr(x, "coerce", False) and getattr(x, "local", None) is not None \
                 and x.local.glue:
             self.d.error(x.span, f"cannot return a view of the local `String` `{x.name}`: it is destroyed when the function returns",
@@ -2483,6 +2643,7 @@ class Checker:
             self.d.error(t.span, "cannot assign to an immutable place", label=err[0], help=err[1])
         if s.op == "=":
             self.expect(s.value, tt)
+            self.check_escape_store(t, s.value)
             if t.kind == "Ident" and getattr(t, "local", None) is not None:
                 self.moved.pop(t.local, None)
             return
@@ -2601,6 +2762,8 @@ class Checker:
             return e.kind == "Call" and getattr(e, "builtin", None) in ("panic", "exit")
         if k == "Block":
             return any(self.terminates(x) for x in s.stmts)
+        if k == "Region":
+            return self.terminates(s.body)
         if k == "If":
             return s.els is not None and self.terminates(s.then) and self.terminates(s.els)
         if k == "Match":

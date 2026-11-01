@@ -1,0 +1,21 @@
+// std.time, std.fs and std.env
+import std.time;
+import std.fs;
+import std.env;
+fn main() {
+    let sw = time.Stopwatch.start();
+    time.sleep_ms(20);
+    println(sw.elapsed_ms() >= 20, " ", sw.elapsed().to_string().len > 0);
+    println(time.Duration.from_ms(1500).to_string(), " ", time.Duration.from_us(12).to_string(), " ", time.Duration.from_secs(125).to_string());
+    let d = time.from_unix(1793494209);
+    println(d.format(), " ", d.iso(), " ", d.weekday_name(), " ", d.month_name(), " ", d.yearday);
+    println(time.DateTime.new(2000, 2, 29, 23, 59, 59).format(), " ", time.from_unix(0).format(), " ", time.from_unix(-1).format());
+    println(time.is_leap_year(1900), time.is_leap_year(2024), " ", time.days_in_month(2023, 2));
+    fs.write("/tmp/cb_fs_test.txt", "a\nb\r\nc") catch |e| { panic("write"); };
+    fs.append("/tmp/cb_fs_test.txt", "\n") catch |e| { panic("append"); };
+    let ls = fs.read_lines("/tmp/cb_fs_test.txt") catch |e| { panic("read"); };
+    println(ls.len, " ", *ls.at(1), " ", fs.exists("/tmp/cb_fs_test.txt"), " ", fs.size("/tmp/cb_fs_test.txt") catch -1);
+    fs.remove("/tmp/cb_fs_test.txt") catch |e| { panic("rm"); };
+    println(fs.exists("/tmp/cb_fs_test.txt"), " ", (fs.read_to_string("/nonexistent") catch string_from("missing")));
+    println(env.arg_count() >= 1, " ", "-", " ", env.has("NOPE_NOT_SET"));
+}

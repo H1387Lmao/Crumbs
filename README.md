@@ -19,13 +19,50 @@ python3 crumbs.py run   examples/hello.cb        # compile + run
 python3 crumbs.py build examples/hello.cb -o hi  # native executable
 python3 crumbs.py emit  examples/hello.cb        # print the generated C
 python3 crumbs.py check examples/hello.cb        # type-check only
-        --unchecked   # drop overflow/bounds checks (about 1.08x of hand-written C vs 1.3x checked)
+        --unchecked        # drop bounds/null/division/conversion checks (about 1.08x of hand-written C vs 1.3x checked)
+        --overflow-panic   # panic on integer overflow (+ - * neg); the default is to wrap around like C
+        --no-gc            # plain malloc instead of the (default) garbage collector -- you must free()
+        --no-stdruntime    # freestanding build: only integer/bounds helpers, no libc (no print, String, alloc, std.*)
         -O3 --cc clang --keep-c out.c
         --entry=start  # use `fn start()` as the entry point instead of `main`
         --entry=       # no entry point: emits an object file (.o) for linking into another program (use `export fn`)
-        --gc           # conservative garbage collector (see below)
+        -v / -vv       # log time spent lexing, parsing, checking, generating C, plus the C compiler command
 python3 tests/run_tests.py                     # test suite
 ```
+
+### cookie: the build tool
+
+`cookie` builds whole projects. Every option has the same name as the compiler flag it forwards, and
+`project.toml` supplies the defaults (command line > profile > `[build]` > built-in default).
+
+```
+python3 cookie.py new my_game          # create ./my_game (project.toml, src/main.cb, .gitignore); --lib for a library
+python3 cookie.py init                 # turn the current directory into a project
+python3 cookie.py run                  # compile and run (debug profile); program arguments go after `--`
+python3 cookie.py build --release      # -> build/release/<name>
+python3 cookie.py build --no-gc -O2 --overflow-panic --unchecked --cc clang -l m --pkg sdl2 --entry=start
+python3 cookie.py check | emit | clean | info [--json]
+python3 cookie.py build -n -v          # -n prints the exact compiler command, -v also logs phase timings (-vv per file)
+```
+
+```toml
+[project]
+name = "my_game"
+version = "0.1.0"
+source_dir = "src"          # entry = "main.cb"
+entry_fn = "main"           # "" builds an object file
+build_dir = "build"
+
+[build]                     # gc, no_stdruntime, strict_casts, no_warn, cc, include, libs, lib_dirs, link, pkg, cflags
+gc = true
+
+[profile.debug]             # opt = "0", overflow_panic = true by default
+[profile.release]           # opt = "3"
+```
+
+Unknown keys, wrong types and unknown profiles are reported with a suggestion. The compiler is found next to `cookie.py`
+(override with `crumbs_path` in `[project]` or the `CRUMBS` environment variable); `project.toml` is searched for upwards from
+the current directory (or use `-C DIR`).
 
 ## Performance
 
@@ -123,9 +160,40 @@ Integer literals adapt to their context (`let x: u8 = 200`); `as` is always avai
 
 `--strict-casts` turns every warning in that table into an error.
 
-**Increment / decrement and wrapping assignment.** `i++`, `i--`, `++i`, `--i` work as statements and as expressions
-(`cells[p++] = x`) on any mutable integer/float place, with overflow checks. `+%= -%= *%=` are the wrapping compound
-assignments (`cell +%= 1` wraps at 255 instead of panicking).
+**Integer overflow.** `+ - *` and unary `-` (and `+= -= *=`, `++`, `--`) wrap around in two's complement, like C: `255u8 + 1`
+is `0`. Build with `--overflow-panic` to make overflow a panic with a location instead (`cookie`'s debug profile does this).
+Division by zero and `MIN / -1` stay defined: zero panics; `MIN / -1` wraps (panics with `--overflow-panic`).
+
+**Increment / decrement.** `i++`, `i--`, `++i`, `--i` work as statements and as expressions
+(`cells[p++] = x`) on any mutable integer/float place.
+
+**Methods (`impl`).** Functions can live on a type. `self` borrows the value; `mut self` is for methods that change it, so the
+variable must be `let mut`. `Self` names the type inside the block, and a field that holds a function pointer wins over a method of the
+same name.
+
+```
+struct Point { x: i32, y: i32 }
+impl Point {
+    pub fn new(x: i32, y: i32) -> Point { return Point { x: x, y: y }; }   // Point.new(1, 2)
+    pub fn sum(self) -> i32 { return self.x + self.y; }                     // p.sum()
+    pub fn shift(mut self, d: i32) { self.x += d; self.y += d; }            // p.shift(1)
+}
+struct Pair<T> { a: T, b: T }
+impl<T> Pair<T> { pub fn first(self) -> T { return self.a; } }
+```
+
+Methods work on temporaries too (`Duration.from_ms(5).to_string()`), on pointers (`p.sum()` with `p: *Point`), and on built-in
+types: `impl String { ... }`, `impl str { ... }`. `String`, `str` and `List<T>` have their methods without any import:
+
+```
+let mut a = String.new("  Hello  ");
+a = a.strip();                     // String methods that return text return a new String
+a.push('!');  a.append(" ok");     // mut self
+println(a.upper(), " ", a.starts_with("He"), " ", a.replace("l", "L"));   // every `str` function works on a String
+let mut xs: List<str> = List.new();
+xs.push("Hi");  xs.push("there");
+println(xs.len, " ", xs.get(1), " ", str.join(xs.view(), "+"));
+```
 
 **`mut` parameters.** Parameters are immutable unless declared `mut`; `fn f(mut n: i32) { n--; }` gives the function
 its own mutable copy (the caller's value is unchanged).
@@ -184,12 +252,30 @@ function pointers and nested lists. It owns its elements and is released automat
 `String`s). API: `new`, `with_capacity`, `from_slice`, `push`, `pop` (`T!`, `Empty`), `at` (pointer, any `T`), `get`, `set`, `insert`, `remove`,
 `swap_remove`, `extend`, `view`, `clear`, `release`, `reverse`, `sort_by(l, cmp)` (heap sort, `cmp` like C's `qsort`), `for_each`, `find_by`.
 
-**Garbage collector (`--gc`).** A conservative, single-threaded mark-and-sweep collector (Linux; glibc or musl) manages `alloc()`,
+**Garbage collector (on by default; `--no-gc` for plain malloc).** A conservative, single-threaded mark-and-sweep collector (Linux; glibc or musl) manages `alloc()`,
 `String` buffers and the string arena. It scans the stack, registers and data segment, follows pointers into the middle of blocks, and
 never scans blocks it knows hold no pointers (numbers, bytes). Collection is triggered by allocation volume; `gc_collect()` forces
-one and `gc_bytes()` reports the bytes in use (both are no-ops / 0 without `--gc`). `free()` and destructors stay legal and release
+one, `gc_bytes()` reports the bytes in use and `gc_collections()` counts the collections run (all three are no-ops / 0 with `--no-gc`). `free()` and destructors stay legal and release
 memory immediately, so code works the same with or without the collector. Caveats: memory given to C and kept only on the C side is
 not seen (keep a Crumbs reference to it); under AddressSanitizer use `ASAN_OPTIONS=detect_stack_use_after_return=0`.
+
+**Lifetimes: `region` blocks.** A region is a scoped arena. `alloc_in(T, n, r)` returns a zeroed `[]T` that lives exactly as long
+as `region r { ... }`; the whole region is released in one step on *every* way out (end of block, `break`, `continue`, `return`).
+Its memory is never traced or swept one object at a time, so allocating in a region does not wake the collector, but the collector
+does scan live regions as roots, so pointers from a region into the ordinary heap stay valid.
+
+```
+region scratch {
+    let xs = alloc_in(i64, 1000, scratch);
+    for i in 0..xs.len { xs[i] = i * i; }
+    total += xs[999];                       // numbers copied out are fine
+}                                           // xs is gone; one free for everything
+```
+
+The compiler tracks which region every pointer, slice and struct came from and rejects what would outlive it: returning it, assigning
+it to a variable or field declared outside the block (or in an outer region), `free`-ing it, or storing it through a pointer of unknown origin.
+It is an intra-function check: a callee that you pass a region pointer to could still stash it somewhere. Freed region memory is overwritten
+with `0xDD` (unless `--unchecked`) so a stale use is loud. Not available with `--no-stdruntime`.
 
 **Safety rules (checked at compile time)**
 - Conditions must be `bool`. Variables are initialised and immutable unless `let mut`.
@@ -198,14 +284,23 @@ not seen (keep a Crumbs reference to it); under AddressSanitizer use `ASAN_OPTIO
 - Pointers come from `&`, from C, or from a typed `null`; dereferencing null panics. Out-of-range literals, constant out-of-bounds indices and division by a literal 0 are errors.
 - Warnings: unused variables/imports, unreachable code.
 
-**Runtime checks (panic with `file:line:col`, exit code 101):** integer overflow (`+ - * neg`),
-division by zero, array/slice/string bounds, slice ranges, shift amounts, allocation failure.
-Wrapping operators `+% -% *%` are available for hashing etc.
+**Runtime checks (panic with `file:line:col`, exit code 101):** division by zero, array/slice/string bounds, slice ranges, shift
+amounts, null dereference, narrowing conversions, allocation failure, and (with `--overflow-panic`) integer overflow.
+`--unchecked` removes all of them.
+
+**Freestanding builds (`--no-stdruntime`).** Only the integer/bounds helpers are emitted: no libc headers, no `print`, `String`,
+`alloc`, GC, regions or `std.*` imports (except `std.mem`). A panic becomes a trap. Use it with `--entry=` and `export fn` to produce an
+object file with no libc symbols (`nm -u` shows none), or call C yourself through `extern fn`.
 
 **Modules:** `import a.b;` loads `a/b.cb` (relative to the entry file's directory, or `std/` for `std.*`);
 the name is the last segment (or `as alias`). Only `pub` items are visible to importers; cycles are
 rejected. All modules are emitted into one C translation unit, so cross-module calls inline.
-Standard library (`std/`, written in Crumbs): `math`, `conv`, `str` (trim, find/rfind, split, join, replace, case conversion, compare, ...), `rand`, `list`, `mem`, `io`.
+Standard library (`std/`, written in Crumbs): `math`, `conv`, `str` (trim, find/rfind, split, join, replace, case conversion, compare, ...), `rand`, `list`, `mem`, `io`, and
+
+- **`std.time`**: `monotonic_ns()`, `unix()`, `unix_ms()`, `sleep_ms(n)`; `Duration` (`from_ms`, `as_secs_f64`, `to_string()` -> `"1.500s"`, ...), `Stopwatch` (`start`, `elapsed`, `lap`, `reset`),
+  and calendar dates: `from_unix(secs)`, `now_utc()`, `now_local()`, `DateTime.new(y, m, d, h, mi, s)`, `.format()`, `.iso()`, `.weekday_name()`, `.add_days(n)`, `is_leap_year`, `days_in_month`.
+- **`std.fs`**: `read_to_string`, `read_lines`, `write`, `append`, `exists`, `is_file`, `is_dir`, `size`, `remove`, `make_dir` (errors `NotFound`, `IoError`).
+- **`std.env`**: `args()`, `arg(i)`, `arg_count()`, `get(name)` (`NotSet`), `has(name)`.
 
 ## Compiler layout
 
@@ -216,10 +311,12 @@ Standard library (`std/`, written in Crumbs): `math`, `conv`, `str` (trim, find/
 | `crumbsc/loader.py` | import resolution, cycle detection, dependency order |
 | `crumbsc/checker.py` | name resolution, types, mutability, const-eval, control-flow analysis |
 | `crumbsc/codegen.py` | C emission |
-| `crumbsc/runtime.c` | the C runtime (checked arithmetic, strings, collector), embedded into every output by `runtime.py` |
+| `crumbsc/runtime.c` | the C runtime (arithmetic, strings, collector, regions, time/fs/env helpers), embedded into every output by `runtime.py` |
+| `crumbsc/timing.py` | phase timing behind `-v` |
+| `cookie.py` | the build tool (projects, profiles, option forwarding) |
 | `crumbsc/diag.py` | rustc-style diagnostics with "did you mean" suggestions |
 | `driver.py` | build pipeline, link plan (`link`/`--link`/`--pkg`), command line |
 
 ## Known limits (it is a toy)
-No generic enums, trait bounds, closures or methods; the collector is conservative and single-threaded. Slices are mutable views even of
+No generic enums, trait bounds or closures; no `if` expressions; the collector is conservative and single-threaded. Slices are mutable views even of
 immutable arrays. The generated C needs GCC/Clang (statement expressions, overflow builtins).

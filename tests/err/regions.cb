@@ -1,0 +1,39 @@
+struct Node { value: i32, next: *Node }
+struct Holder { items: []i32 }
+
+fn leak() -> []i32 {
+    region r {
+        let xs = alloc_in(i32, 4, r);
+        return xs; // ERROR: cannot be returned
+    }
+    return alloc(i32, 1);
+}
+
+fn leak_view() -> *i32 {
+    region r {
+        let xs = alloc_in(i32, 4, r);
+        let p = &xs[0];
+        return p; // ERROR: cannot be returned
+    }
+    return null;
+}
+
+fn main() {
+    let mut outside: []i32 = alloc(i32, 1);
+    let mut h = Holder { items: alloc(i32, 1) };
+    region r {
+        let xs = alloc_in(i32, 4, r);
+        outside = xs; // ERROR: would outlive the region
+        h.items = xs; // ERROR: would outlive the region
+        free(xs); // ERROR: freed when the region ends
+        let ys = xs[0..2];
+        outside = ys; // ERROR: would outlive the region
+        let n = alloc_in(Node, 1, r);
+        region inner {
+            let m = alloc_in(Node, 1, inner);
+            n[0].next = &m[0]; // ERROR: would outlive the region
+        }
+        let z = r; // ERROR: can only be used as the last argument of `alloc_in`
+    }
+    let bad = alloc_in(i32, 1, nothing); // ERROR: cannot find
+}

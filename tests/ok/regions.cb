@@ -1,0 +1,84 @@
+// Regions: lifetimes for allocations. Everything from `alloc_in(T, n, r)` lives exactly as long as the
+// `region r { ... }` block, is freed in one step on every way out, and is never traced by the collector.
+struct Node { value: i32, next: *Node }
+
+fn sum_to(n: i32) -> i64 {
+    let mut total: i64 = 0;
+    region scratch {
+        let xs = alloc_in(i64, n as i64, scratch);
+        for i in 0..xs.len { xs[i] = i * i; }
+        for i in 0..xs.len { total += xs[i]; }
+    }                                  // `xs` is gone here; `total` was declared outside and holds plain numbers
+    return total;
+}
+
+fn early_exit(limit: i32) -> i32 {
+    region r {
+        let buf = alloc_in(i32, 100, r);
+        for i in 0..100 { buf[i] = i; }
+        if limit < 50 { return buf[limit as i64]; }     // returning a number read from the region is fine
+    }
+    return -1;
+}
+
+fn main() {
+    println(sum_to(1000), " ", sum_to(10));
+
+    // a linked list built inside a region, walked and discarded with it
+    region list {
+        let mut head: *Node = null;
+        for i in 0..5 {
+            let n = alloc_in(Node, 1, list);
+            n[0].value = i * 10;
+            n[0].next = head;
+            head = &n[0];
+        }
+        let mut sum = 0;
+        let mut p = head;
+        while p != null { sum += p.value; p = p.next; }
+        println("list sum ", sum);
+    }
+
+    // nested regions, and break / continue / return leaving a region
+    region outer {
+        let a = alloc_in(u8, 16, outer);
+        a[0] = 7;
+        for i in 0..3 {
+            region inner {
+                let b = alloc_in(u8, 16, inner);
+                b[0] = a[0] + i as u8;                  // inner memory may point at outer memory, not the reverse
+                if i == 1 { continue; }
+                if i == 2 { break; }
+                println("inner ", b[0]);
+            }
+        }
+        println("outer ", a[0]);
+    }
+    println(early_exit(7), " ", early_exit(70));
+
+    // regions take no part in garbage collection: a million small allocations never wake the collector
+    let before = gc_collections();
+    let mut s: i64 = 0;
+    for round in 0..1000 {
+        region r {
+            let xs = alloc_in(i64, 1000, r);
+            for i in 0..1000 { xs[i] = i; }
+            s += xs[999];
+        }
+    }
+    println(s, " ", gc_collections() == before);
+
+    // the memory of a region that holds pointers into the ordinary heap keeps those targets alive
+    let mut keep: i64 = 0;
+    region holder {
+        let cells = alloc_in(*i64, 4, holder);
+        for i in 0..4 {
+            let heap = alloc(i64, 1);
+            heap[0] = 100 + i;
+            cells[i] = &heap[0];
+        }
+        gc_collect();
+        for i in 0..4 { keep += *cells[i]; }
+    }
+    println(keep);
+}

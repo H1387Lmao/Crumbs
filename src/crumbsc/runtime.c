@@ -178,12 +178,72 @@ static inline bool cb_str_eq(cb_str a, cb_str b) {
 /* ---- memory: plain malloc, or a conservative mark-and-sweep collector (--gc) ----------------
    cb_mem_alloc(n, atomic)  zeroed memory; `atomic` = contains no pointers, so the collector never scans it
    cb_mem_realloc / cb_mem_free  explicit release is always allowed (and optional under --gc)       */
+/* ---- regions: scoped bump allocators (`region r { ... alloc_in(T, n, r) ... }`) ----------------
+   A region hands out zeroed memory from big chunks and gives all of it back when its block ends,
+   on every way out (end of block, break, continue, return). Nothing inside is traced or swept
+   individually; when the collector runs it scans the live regions' memory as roots, so pointers from a
+   region into the ordinary heap keep their targets alive. Freed memory is poisoned unless --unchecked. */
+typedef struct cb_RegionChunk { struct cb_RegionChunk *next; size_t cap, used; } cb_RegionChunk;
+typedef struct cb_Region { cb_RegionChunk *chunks; struct cb_Region *prev, *next; } cb_Region;
+static cb_Region *cb_regions;
+#define CB_REGION_CHUNK ((size_t)64 << 10)
+static cb_Region *cb_region_new(void) {
+    cb_Region *r = (cb_Region *)calloc(1, sizeof *r);
+    if (!r) { fputs("panic: out of memory (region)\n", stderr); exit(101); }
+    r->next = cb_regions;
+    if (cb_regions) cb_regions->prev = r;
+    cb_regions = r;
+    return r;
+}
+static void *cb_region_alloc(cb_Region *r, int64_t n, int64_t size, const char *l) {
+    if (CB_UNLIKELY(n < 0)) cb_panic(l, "negative allocation size");
+    size_t total;
+    if (CB_UNLIKELY(__builtin_mul_overflow((size_t)n, (size_t)size, &total))) cb_panic(l, "allocation size overflow");
+    total = (total + 15) & ~(size_t)15;
+    if (total == 0) total = 16;
+    cb_RegionChunk *c = r->chunks;
+    if (!c || c->cap - c->used < total) {
+        size_t cap = total > CB_REGION_CHUNK ? total : CB_REGION_CHUNK;
+        c = (cb_RegionChunk *)calloc(1, sizeof *c + 16 + cap);
+        if (!c) cb_panic(l, "out of memory");
+        c->cap = cap;
+        c->next = r->chunks;
+        r->chunks = c;
+    }
+    /* data starts at a 16-byte boundary after the header */
+    uint8_t *base = (uint8_t *)(((uintptr_t)(c + 1) + 15) & ~(uintptr_t)15);
+    void *p = base + c->used;
+    c->used += total;
+    return p;
+}
+static void cb_region_free(cb_Region *r) {
+    for (cb_RegionChunk *c = r->chunks, *nx; c; c = nx) {
+        nx = c->next;
+#ifndef CB_UNCHECKED
+        memset((void *)(c + 1), 0xDD, c->cap);        /* a pointer that outlived its region reads 0xDD.. instead of old data */
+#endif
+        free(c);
+    }
+    if (r->prev) r->prev->next = r->next; else cb_regions = r->next;
+    if (r->next) r->next->prev = r->prev;
+    free(r);
+}
+#ifdef CB_GC
+static void cb_gc_scan(const void *lo, const void *hi);
+static void cb_region_roots(void) {
+    for (cb_Region *r = cb_regions; r; r = r->next)
+        for (cb_RegionChunk *c = r->chunks; c; c = c->next)
+            cb_gc_scan((const void *)(c + 1), (const uint8_t *)(c + 1) + 16 + c->used);
+}
+#endif
+
 #ifndef CB_GC
 static void *cb_mem_alloc(size_t n, int atomic) { (void)atomic; return calloc(n ? n : 1, 1); }
 static void *cb_mem_realloc(void *p, size_t old, size_t n) { (void)old; return realloc(p, n); }
 static void cb_mem_free(void *p) { free(p); }
 static void cb_gc_collect(void) {}
 static int64_t cb_gc_bytes(void) { return 0; }
+static int64_t cb_gc_collections(void) { return 0; }
 #define CB_GC_INIT() ((void)0)
 #else
 /* Single-threaded, Linux/glibc or musl. Every block has a 32-byte header in a doubly linked list.
@@ -193,7 +253,7 @@ typedef struct cb_hdr { size_t n; struct cb_hdr *prev, *next; uintptr_t flags; }
 extern char __data_start[] __attribute__((weak));
 extern char _end[] __attribute__((weak));
 static cb_hdr *cb_gc_all;
-static size_t cb_gc_live, cb_gc_since, cb_gc_next = (size_t)8 << 20;
+static size_t cb_gc_live, cb_gc_since, cb_gc_next = (size_t)8 << 20, cb_gc_runs;
 static void *cb_gc_stack_bottom;
 static cb_hdr **cb_gc_idx; static size_t cb_gc_nidx;
 static cb_hdr **cb_gc_work; static size_t cb_gc_nwork, cb_gc_capwork;
@@ -239,6 +299,7 @@ __attribute__((noinline, no_sanitize("address"))) static void cb_gc_collect(void
     if (cb_gc_stack_bottom) cb_gc_scan(sp < cb_gc_stack_bottom ? sp : cb_gc_stack_bottom,
                                        sp < cb_gc_stack_bottom ? cb_gc_stack_bottom : sp);
     if (__data_start && _end) cb_gc_scan(__data_start, _end);
+    cb_region_roots();                       /* pointers stored inside live regions keep their targets alive */
     while (cb_gc_nwork) {
         cb_hdr *h = cb_gc_work[--cb_gc_nwork];
         cb_gc_scan(h + 1, (uint8_t *)(h + 1) + h->n);
@@ -254,6 +315,7 @@ __attribute__((noinline, no_sanitize("address"))) static void cb_gc_collect(void
     free(cb_gc_idx); cb_gc_idx = 0; cb_gc_nidx = 0;
     cb_gc_live = live;
     cb_gc_since = 0;
+    cb_gc_runs++;
     cb_gc_next = live > ((size_t)4 << 20) ? live : ((size_t)4 << 20);   /* collect again after allocating this much more */
 }
 static void *cb_mem_alloc(size_t n, int atomic) {
@@ -290,6 +352,7 @@ static void *cb_mem_realloc(void *p, size_t old, size_t n) {
     return q;
 }
 static int64_t cb_gc_bytes(void) { return (int64_t)cb_gc_live; }
+static int64_t cb_gc_collections(void) { return (int64_t)cb_gc_runs; }
 #endif
 
 static inline void *cb_alloc(int64_t n, int64_t size, int atomic, const char *l) {
@@ -480,6 +543,105 @@ static inline void *cb_nn(void *p, const char *loc) { (void)loc; return p; }
 #else
 CB_COLD static void cb_panic_null(const char *loc) { cb_panic(loc, "null pointer dereference"); }
 static inline void *cb_nn(void *p, const char *loc) { if (CB_UNLIKELY(!p)) cb_panic_null(loc); return p; }
+#endif
+
+#ifndef CB_NOSTD
+/* ---- helpers behind std.time, std.fs and std.env ------------------------------------------- */
+#include <time.h>
+#include <errno.h>
+#include <sys/stat.h>
+static int64_t cb_time_mono_ns(void) {
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000000000LL + t.tv_nsec;
+}
+static int64_t cb_time_unix_ns(void) {
+    struct timespec t; clock_gettime(CLOCK_REALTIME, &t);
+    return (int64_t)t.tv_sec * 1000000000LL + t.tv_nsec;
+}
+static void cb_time_sleep_ns(int64_t ns) {
+    if (ns <= 0) return;
+    fflush(stdout);
+    struct timespec t = { (time_t)(ns / 1000000000LL), (long)(ns % 1000000000LL) };
+    while (nanosleep(&t, &t) == -1 && errno == EINTR) {}
+}
+static int64_t cb_time_local_offset(int64_t secs) {      /* seconds east of UTC at that moment */
+    time_t t = (time_t)secs; struct tm tm;
+    if (!localtime_r(&t, &tm)) return 0;
+    return (int64_t)tm.tm_gmtoff;
+}
+
+static char *cb_path_c(cb_str s) {
+    char *p = (char *)malloc((size_t)s.len + 1);
+    if (!p) return NULL;
+    if (s.len) memcpy(p, s.ptr, (size_t)s.len);
+    p[s.len] = 0;
+    return p;
+}
+/* 0 = ok, 1 = cannot open, 2 = read/write failed */
+static int cb_fs_read(cb_str path, cb_String *out) {
+    char *p = cb_path_c(path);
+    if (!p) return 2;
+    FILE *f = fopen(p, "rb");
+    free(p);
+    if (!f) return 1;
+    cb_String s = {0};
+    char buf[16384];
+    size_t n;
+    int rc = 0;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) s = cb_string_append(s, (cb_str){(const uint8_t *)buf, (int64_t)n}, "std.fs");
+    if (ferror(f)) rc = 2;
+    fclose(f);
+    *out = s;
+    return rc;
+}
+static int cb_fs_write(cb_str path, cb_str data, int append) {
+    char *p = cb_path_c(path);
+    if (!p) return 2;
+    FILE *f = fopen(p, append ? "ab" : "wb");
+    free(p);
+    if (!f) return 1;
+    int rc = (data.len && fwrite(data.ptr, 1, (size_t)data.len, f) != (size_t)data.len) ? 2 : 0;
+    if (fclose(f) != 0) rc = 2;
+    return rc;
+}
+static int cb_fs_stat(cb_str path, int64_t *size) {     /* 0 = missing, 1 = file, 2 = directory */
+    char *p = cb_path_c(path);
+    if (!p) return 0;
+    struct stat st;
+    int ok = stat(p, &st) == 0;
+    free(p);
+    if (!ok) return 0;
+    *size = (int64_t)st.st_size;
+    return S_ISDIR(st.st_mode) ? 2 : 1;
+}
+static int cb_fs_remove(cb_str path) {
+    char *p = cb_path_c(path);
+    if (!p) return 1;
+    int rc = remove(p);
+    free(p);
+    return rc;
+}
+static int cb_fs_mkdir(cb_str path) {
+    char *p = cb_path_c(path);
+    if (!p) return 1;
+    int rc = mkdir(p, 0777);
+    free(p);
+    return rc;
+}
+
+static int cb_argc_v;
+static char **cb_argv_v;
+static int64_t cb_argc(void) { return cb_argc_v; }
+static cb_str cb_argv_at(int64_t i) { return cb_from_cstr(cb_argv_v[i]); }
+static int cb_env_get(cb_str name, cb_String *out) {
+    char *p = cb_path_c(name);
+    if (!p) return 0;
+    const char *v = getenv(p);
+    free(p);
+    if (!v) return 0;
+    *out = cb_string_from(cb_from_cstr(v), "std.env");
+    return 1;
+}
 #endif
 
 #ifndef CB_NOSTD

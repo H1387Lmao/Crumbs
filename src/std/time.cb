@@ -1,0 +1,257 @@
+// std.time: clocks, durations, sleeping and calendar dates.
+//
+//   import std.time;
+//   let sw = time.Stopwatch.start();
+//   ... work ...
+//   println("took ", sw.elapsed().to_string());
+//   time.sleep_ms(250);
+//   println(time.now_utc().iso());
+extern fn cb_time_mono_ns() -> i64;
+extern fn cb_time_unix_ns() -> i64;
+extern fn cb_time_sleep_ns(ns: i64);
+extern fn cb_time_local_offset(secs: i64) -> i64;
+
+pub const NS_PER_US: i64 = 1000;
+pub const NS_PER_MS: i64 = 1000000;
+pub const NS_PER_SEC: i64 = 1000000000;
+
+// ---- raw clocks -------------------------------------------------------------------------
+// nanoseconds on a clock that only moves forward (use it to measure elapsed time)
+pub fn monotonic_ns() -> i64 { return cb_time_mono_ns(); }
+// nanoseconds since 1970-01-01 00:00:00 UTC (the wall clock; it can jump)
+pub fn unix_ns() -> i64 { return cb_time_unix_ns(); }
+pub fn unix() -> i64 { return cb_time_unix_ns() / NS_PER_SEC; }
+pub fn unix_ms() -> i64 { return cb_time_unix_ns() / NS_PER_MS; }
+pub fn sleep_ms(ms: i64) { cb_time_sleep_ns(ms * NS_PER_MS); }
+pub fn sleep_secs(s: f64) { cb_time_sleep_ns((s * 1000000000.0) as i64); }
+
+// ---- Duration -----------------------------------------------------------------------------
+pub struct Duration { ns: i64 }
+
+impl Duration {
+    pub fn from_ns(ns: i64) -> Duration { return Duration { ns: ns }; }
+    pub fn from_us(us: i64) -> Duration { return Duration { ns: us * NS_PER_US }; }
+    pub fn from_ms(ms: i64) -> Duration { return Duration { ns: ms * NS_PER_MS }; }
+    pub fn from_secs(s: i64) -> Duration { return Duration { ns: s * NS_PER_SEC }; }
+    pub fn from_secs_f64(s: f64) -> Duration { return Duration { ns: (s * 1000000000.0) as i64 }; }
+
+    pub fn as_ns(self) -> i64 { return self.ns; }
+    pub fn as_us(self) -> i64 { return self.ns / NS_PER_US; }
+    pub fn as_ms(self) -> i64 { return self.ns / NS_PER_MS; }
+    pub fn as_secs(self) -> i64 { return self.ns / NS_PER_SEC; }
+    pub fn as_secs_f64(self) -> f64 { return self.ns as f64 / 1000000000.0; }
+
+    pub fn add(self, o: Duration) -> Duration { return Duration { ns: self.ns + o.ns }; }
+    pub fn sub(self, o: Duration) -> Duration { return Duration { ns: self.ns - o.ns }; }
+    pub fn mul(self, k: i64) -> Duration { return Duration { ns: self.ns * k }; }
+    pub fn less(self, o: Duration) -> bool { return self.ns < o.ns; }
+
+    pub fn sleep(self) { cb_time_sleep_ns(self.ns); }
+
+    // "850ns", "12.500us", "3.250ms", "1.500s", "2m05.250s"
+    pub fn to_string(self) -> String {
+        let mut n = self.ns;
+        let mut out = string_new();
+        if n < 0 { out += '-'; n = 0 - n; }
+        if n < NS_PER_US {
+            out += to_str(n);
+            out += "ns";
+        } else if n < NS_PER_MS {
+            out += frac(n, NS_PER_US);
+            out += "us";
+        } else if n < NS_PER_SEC {
+            out += frac(n, NS_PER_MS);
+            out += "ms";
+        } else if n < 60 * NS_PER_SEC {
+            out += frac(n, NS_PER_SEC);
+            out += "s";
+        } else {
+            let mins = n / (60 * NS_PER_SEC);
+            out += to_str(mins);
+            out += "m";
+            let rest = n - mins * 60 * NS_PER_SEC;
+            let secs = frac(rest, NS_PER_SEC);
+            if rest < 10 * NS_PER_SEC { out += '0'; }
+            out += secs;
+            out += "s";
+        }
+        return out;
+    }
+}
+
+// n / unit with three decimals, e.g. frac(1500000, 1000000) == "1.500"
+fn frac(n: i64, unit: i64) -> String {
+    let whole = n / unit;
+    let thousandths = (n % unit) * 1000 / unit;
+    let mut out = string_from(to_str(whole));
+    out += '.';
+    if thousandths < 100 { out += '0'; }
+    if thousandths < 10 { out += '0'; }
+    out += to_str(thousandths);
+    return out;
+}
+
+// ---- Stopwatch ----------------------------------------------------------------------------
+pub struct Stopwatch { began: i64 }
+
+impl Stopwatch {
+    pub fn start() -> Stopwatch { return Stopwatch { began: cb_time_mono_ns() }; }
+    pub fn elapsed(self) -> Duration { return Duration { ns: cb_time_mono_ns() - self.began }; }
+    pub fn elapsed_ms(self) -> i64 { return (cb_time_mono_ns() - self.began) / NS_PER_MS; }
+    pub fn elapsed_secs(self) -> f64 { return (cb_time_mono_ns() - self.began) as f64 / 1000000000.0; }
+    // returns the time since the last start/lap and begins a new lap
+    pub fn lap(mut self) -> Duration {
+        let now = cb_time_mono_ns();
+        let d = Duration { ns: now - self.began };
+        self.began = now;
+        return d;
+    }
+    pub fn reset(mut self) { self.began = cb_time_mono_ns(); }
+}
+
+// ---- calendar dates (proleptic Gregorian) -----------------------------------------------------
+pub struct DateTime {
+    year: i32, month: i32, day: i32,
+    hour: i32, minute: i32, second: i32,
+    weekday: i32,        // 0 = Sunday .. 6 = Saturday
+    yearday: i32,        // 1 .. 366
+    unix: i64            // seconds since the epoch this was made from (UTC)
+}
+
+pub fn is_leap_year(y: i32) -> bool { return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0; }
+
+pub fn days_in_month(y: i32, m: i32) -> i32 {
+    if m == 2 { if is_leap_year(y) { return 29; } return 28; }
+    if m == 4 || m == 6 || m == 9 || m == 11 { return 30; }
+    return 31;
+}
+
+// days since 1970-01-01 of a calendar date (Howard Hinnant's algorithm)
+pub fn days_from_civil(year: i32, month: i32, day: i32) -> i64 {
+    let mut y = year as i64;
+    let m = month as i64;
+    if m <= 2 { y -= 1; }
+    let era = floor_div(y, 400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if a % b != 0 && (a < 0) != (b < 0) { return q - 1; }
+    return q;
+}
+
+// seconds since the epoch of a UTC date and time
+pub fn unix_from(year: i32, month: i32, day: i32, hour: i32, minute: i32, second: i32) -> i64 {
+    return days_from_civil(year, month, day) * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64;
+}
+
+// the UTC date and time of a unix timestamp
+pub fn from_unix(secs: i64) -> DateTime {
+    let days = floor_div(secs, 86400);
+    let rem = secs - days * 86400;
+    let z = days + 719468;
+    let era = floor_div(z, 146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mut m = mp - 9;
+    if mp < 10 { m = mp + 3; }
+    let mut y = yoe + era * 400;
+    if m <= 2 { y += 1; }
+    let wd = ((days % 7) + 11) % 7;              // 1970-01-01 was a Thursday
+    let jan1 = days_from_civil(y as i32, 1, 1);
+    return DateTime {
+        year: y as i32, month: m as i32, day: d as i32,
+        hour: (rem / 3600) as i32, minute: ((rem % 3600) / 60) as i32, second: (rem % 60) as i32,
+        weekday: wd as i32, yearday: (days - jan1 + 1) as i32, unix: secs
+    };
+}
+
+pub fn now_utc() -> DateTime { return from_unix(unix()); }
+
+// the date and time in the machine's time zone
+pub fn now_local() -> DateTime { return local(unix()); }
+pub fn local(secs: i64) -> DateTime { return from_unix(secs + cb_time_local_offset(secs)); }
+// seconds east of UTC for the machine's time zone right now
+pub fn utc_offset() -> i64 { return cb_time_local_offset(unix()); }
+
+fn two(out: *String, n: i32) {
+    if n < 10 { *out += '0'; }
+    *out += to_str(n);
+}
+
+impl DateTime {
+    pub fn new(year: i32, month: i32, day: i32, hour: i32, minute: i32, second: i32) -> DateTime {
+        return from_unix(unix_from(year, month, day, hour, minute, second));
+    }
+    pub fn weekday_name(self) -> str {
+        if self.weekday == 0 { return "Sunday"; }
+        if self.weekday == 1 { return "Monday"; }
+        if self.weekday == 2 { return "Tuesday"; }
+        if self.weekday == 3 { return "Wednesday"; }
+        if self.weekday == 4 { return "Thursday"; }
+        if self.weekday == 5 { return "Friday"; }
+        return "Saturday";
+    }
+    pub fn month_name(self) -> str {
+        if self.month == 1 { return "January"; }
+        if self.month == 2 { return "February"; }
+        if self.month == 3 { return "March"; }
+        if self.month == 4 { return "April"; }
+        if self.month == 5 { return "May"; }
+        if self.month == 6 { return "June"; }
+        if self.month == 7 { return "July"; }
+        if self.month == 8 { return "August"; }
+        if self.month == 9 { return "September"; }
+        if self.month == 10 { return "October"; }
+        if self.month == 11 { return "November"; }
+        return "December";
+    }
+    // "2026-11-01"
+    pub fn date(self) -> String {
+        let mut out = string_from(to_str(self.year));
+        out += '-';
+        two(&out, self.month);
+        out += '-';
+        two(&out, self.day);
+        return out;
+    }
+    // "13:05:09"
+    pub fn clock(self) -> String {
+        let mut out = string_new();
+        two(&out, self.hour);
+        out += ':';
+        two(&out, self.minute);
+        out += ':';
+        two(&out, self.second);
+        return out;
+    }
+    // "2026-11-01 13:05:09"
+    pub fn format(self) -> String {
+        let mut out = self.date();
+        out += ' ';
+        let c = self.clock();
+        out += c;
+        return out;
+    }
+    // "2026-11-01T13:05:09Z" (this is the UTC form; use format() for local times)
+    pub fn iso(self) -> String {
+        let mut out = self.date();
+        out += 'T';
+        let c = self.clock();
+        out += c;
+        out += 'Z';
+        return out;
+    }
+    pub fn add_days(self, n: i64) -> DateTime { return from_unix(self.unix + n * 86400); }
+    pub fn add_secs(self, n: i64) -> DateTime { return from_unix(self.unix + n); }
+    // whole seconds from `o` to this date
+    pub fn since(self, o: DateTime) -> i64 { return self.unix - o.unix; }
+}

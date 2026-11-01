@@ -1,4 +1,6 @@
 """Recursive-descent parser with panic-mode error recovery."""
+import time
+from .timing import TIMINGS
 from .diag import Span
 from .lexer import lex, Token
 from .types import PRIMS
@@ -31,7 +33,7 @@ BIN_PREC = {
 CMP_OPS = {"==", "!=", "<", ">", "<=", ">="}
 ASSIGN_OPS = {"=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="}
 ITEM_START = {"fn", "struct", "enum", "const", "import", "pub", "extern", "error", "export"}
-TYPE_ARG_BUILTINS = {"alloc"}
+TYPE_ARG_BUILTINS = {"alloc", "alloc_in"}
 TYPE_ONLY_BUILTINS = {"size_of"}
 DIRECTIVES = {"link", "include", "define"}
 
@@ -40,7 +42,10 @@ class Parser:
     def __init__(self, src, diags):
         self.src = src
         self.d = diags
-        self.toks = lex(src, diags)
+        t0 = time.perf_counter()
+        with TIMINGS.phase("lex"):
+            self.toks = lex(src, diags)
+        self.lex_time = time.perf_counter() - t0
         self.p = 0
         self.no_struct = False
         self.undo = None
@@ -534,6 +539,12 @@ class Parser:
 
     def parse_stmt(self):
         t = self.tok
+        if t.kind == "ident" and t.val == "region" and self.peek().kind == "ident" and self.peek(2).kind == "op" \
+                and self.peek(2).val == "{":
+            self.advance()
+            nm = self.advance()
+            body = self.parse_block()
+            return N("Region", self.sp(t), name=nm.val, name_span=nm.span, body=body)
         if t.kind == "kw":
             v = t.val
             if v == "let":
@@ -926,4 +937,12 @@ class Parser:
 
 
 def parse(src, diags):
-    return Parser(src, diags).parse_module()
+    p = Parser(src, diags)
+    t0 = time.perf_counter()
+    with TIMINGS.phase("parse"):
+        ast = p.parse_module()
+    if TIMINGS.enabled:
+        TIMINGS.files.append((src.path, src.text.count("\n") + 1, len(p.toks), p.lex_time, time.perf_counter() - t0))
+        TIMINGS.add("tokens", len(p.toks))
+        TIMINGS.add("lines", src.text.count("\n") + 1)
+    return ast

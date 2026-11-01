@@ -1,5 +1,6 @@
 """C code generation from the type-annotated AST."""
 from .runtime import RUNTIME
+from .timing import TIMINGS
 from .types import INTS, STR, STRING, BOOL, VOID, ERR
 
 C_RESERVED = set("""
@@ -18,6 +19,7 @@ PRIM_C = {
     "i8": "int8_t", "i16": "int16_t", "i32": "int32_t", "i64": "int64_t",
     "u8": "uint8_t", "u16": "uint16_t", "u32": "uint32_t", "u64": "uint64_t",
     "f32": "float", "f64": "double", "bool": "bool", "str": "cb_str", "String": "cb_String", "void": "void",
+    "Region": "cb_Region *",
 }
 OPNAME = {"+": "add", "-": "sub", "*": "mul", "/": "div", "%": "rem"}
 
@@ -44,6 +46,15 @@ class Tmp:
     def __init__(self, cname, ty):
         self.cname = cname
         self.ty = ty
+
+
+class RegionLocal:
+    """The scope entry that frees a `region` on every way out of its block."""
+    region = True
+
+    def __init__(self, cname):
+        self.cname = cname
+        self.ty = None
 
 
 class CodeGen:
@@ -293,6 +304,8 @@ class CodeGen:
         if op == "*":
             return f"(*{self.nn(self.ex(e.expr), e.expr.ty, e.span)})"
         if op == "&":
+            if getattr(e, "temp", False):       # a borrowed temporary: point at a copy that lives for the enclosing block
+                return f"(&(({self.ctype(e.expr.ty)}[]){{{self.ex(e.expr)}}})[0])"
             return f"(&{self.ex(e.expr)})"
         raise AssertionError(op)
 
@@ -511,6 +524,15 @@ class CodeGen:
             return all(self.pointer_free(ft) for _, ft, _ in t.sym.fields) if not t.sym.opaque else False
         return False
 
+    def b_alloc_in(self, e):
+        n = self.tmp("cb_n")
+        et = self.ctype(e.elem)
+        return (f"({{ int64_t {n} = (int64_t)({self.ex(e.args[0])}); "
+                f"({self.ctype(e.ty)}){{ ({et} *)cb_region_alloc({e.region_local.cname}, {n}, (int64_t)sizeof({et}), {self.loc(e.span)}), {n} }}; }})")
+
+    def b_gc_collections(self, e):
+        return "cb_gc_collections()"
+
     def b_free(self, e):
         if e.args[0].ty == STRING:
             return f"cb_string_free({self.ex(e.args[0])})"
@@ -611,7 +633,25 @@ class CodeGen:
             self.stmt(st)
         sc = self.dscopes.pop()
         for loc in reversed(sc):
-            self.emit(f"if ({loc.cname}__live) {self.glue_fn(loc.ty)}(&{loc.cname});")
+            self.emit(self.drop_stmt(loc))
+
+    def drop_stmt(self, loc):
+        if getattr(loc, "region", False):
+            return f"if ({loc.cname}__live) {{ cb_region_free({loc.cname}); {loc.cname}__live = 0; }}"
+        return f"if ({loc.cname}__live) {self.glue_fn(loc.ty)}(&{loc.cname});"
+
+    def s_Region(self, s):
+        name = s.local.cname
+        self.emit("{")
+        self.ind += 1
+        self.emit(f"cb_Region *{name} = cb_region_new(); bool {name}__live = 1;")
+        mark = RegionLocal(name)
+        self.dscopes.append([mark])
+        self.block_body(s.body)
+        self.dscopes.pop()
+        self.emit(self.drop_stmt(mark))
+        self.ind -= 1
+        self.emit("}")
 
     def block(self, b):
         self.ind += 1
@@ -679,7 +719,7 @@ class CodeGen:
         out = []
         for sc in reversed(self.dscopes[base:]):
             for loc in reversed(sc):
-                out.append(f"if ({loc.cname}__live) {self.glue_fn(loc.ty)}(&{loc.cname});")
+                out.append(self.drop_stmt(loc))
         return out
 
     def drop_value(self, t, x):
@@ -911,7 +951,7 @@ class CodeGen:
                 self.dscopes[0].append(loc)
         self.block_body(sym.node.body)
         for loc in reversed(self.dscopes[0]):
-            self.emit(f"if ({loc.cname}__live) {self.glue_fn(loc.ty)}(&{loc.cname});")
+            self.emit(self.drop_stmt(loc))
         if sym.ret.kind == "eu":
             self.emit(f"return ({self.ctype(sym.ret)}){{0}};" if sym.ret.inner == VOID else "__builtin_unreachable();")
         elif sym.ret != VOID:
@@ -977,6 +1017,13 @@ class CodeGen:
                 [g for i, g in enumerate(glue) if i in keep_glue])
 
     def generate(self, src_name):
+        with TIMINGS.phase("codegen"):
+            out = self._generate(src_name)
+        TIMINGS.add("c_lines", out.count("\n"))
+        TIMINGS.add("c_bytes", len(out))
+        return out
+
+    def _generate(self, src_name):
         ck = self.ck
         fns = [s for s in ck.fns if not s.extern]
         bodies = [self.gen_fn(s) for s in fns]
@@ -1113,8 +1160,9 @@ class CodeGen:
         m = ck.main_sym
         if m is not None:
             r = m.ret
-            L.append("int main(void) {")
+            L.append("int main(void) {" if self.nostd else "int main(int argc, char **argv) {")
             if not self.nostd:
+                L.append("    cb_argc_v = argc; cb_argv_v = argv;")
                 L.append("    CB_GC_INIT();")
             if r.kind == "eu":
                 L.append(f"    {self.ctype(r)} r = {m.cname}();")

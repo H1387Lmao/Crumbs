@@ -254,6 +254,7 @@ class Options:
         self.pkg = list(project.b.get("pkg", [])) + list(getattr(args, "pkg", None) or [])
         self.cflags = list(project.b.get("cflags", [])) + list(getattr(args, "cflag", None) or [])
         self.extra = list(getattr(args, "crumbs_arg", None) or [])
+        self.verbose = int(getattr(args, "verbose", 0) or 0)
         if self.unchecked and getattr(args, "overflow_panic", None) is True:
             warn("`--overflow-panic` has no effect together with `--unchecked`",
                  "--unchecked removes every runtime check, including overflow panics")
@@ -275,7 +276,7 @@ class Options:
         return ", ".join(bits)
 
     def common_flags(self):
-        flags = []
+        flags = ["-v"] * self.verbose
         for d in self.include:
             flags += ["-I", d]
         if self.no_warn:
@@ -556,7 +557,9 @@ def add_common(p):
     g.add_argument("-C", "--directory", metavar="DIR", help="use the project in DIR (default: search upwards for project.toml)")
     g.add_argument("--release", action="store_true",
                    help="use the release profile (default: debug)")
-    g.add_argument("-v", "--verbose", action="store_true", help="print the exact compiler command before running it")
+    g.add_argument("-v", "--verbose", action="count", default=0,
+                   help="print the exact compiler command and have the compiler log the time spent lexing, parsing, "
+                        "checking and generating code (-vv adds a per-file table)")
     g.add_argument("-n", "--dry-run", action="store_true", help="print the compiler command without running it")
     g = p.add_argument_group("language options (forwarded to the compiler)")
     g.add_argument("-I", dest="include", action="append", metavar="DIR", help="extra module search directory")

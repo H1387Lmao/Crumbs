@@ -1,16 +1,19 @@
 """Compilation pipeline and command-line interface."""
 import argparse
 import os
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 from . import __version__
 from .checker import Checker
 from .codegen import CodeGen, C_RESERVED
 from .diag import Diagnostics, CompileError
 from .loader import Loader
+from .timing import TIMINGS
 
 
 class LinkPlan:
@@ -48,6 +51,7 @@ def compile_to_c(path, include_dirs=(), color=None, quiet_warnings=False, strict
     except CompileError as e:
         print(f"error: {e}", file=sys.stderr)
         return None, d, LinkPlan()
+    TIMINGS.stats_modules = [m.name for m in mods]
     plan = make_plan(mods)
     if d.has_errors:
         return None, d, plan
@@ -57,6 +61,50 @@ def compile_to_c(path, include_dirs=(), color=None, quiet_warnings=False, strict
         return None, d, plan
     cg = CodeGen(ck, gc=gc, nostd=nostd, overflow_panic=overflow_panic)
     return cg.generate(mods[-1].src.path), d, plan
+
+
+def ms(sec):
+    return f"{sec * 1000:8.1f} ms" if sec < 10 else f"{sec:8.2f} s "
+
+
+def verbose_header(args):
+    if not args.verbose:
+        return
+    TIMINGS.enabled = True
+    opts = [f"entry={args.entry or '(none)'}", "no-stdruntime" if args.no_stdruntime else ("gc" if args.gc else "no-gc"),
+            "overflow-panic" if args.overflow_panic else "wrap-on-overflow"]
+    if getattr(args, "unchecked", False):
+        opts.append("unchecked")
+    if args.strict_casts:
+        opts.append("strict-casts")
+    print(f"[crumbs] {__version__}  {args.file}", file=sys.stderr)
+    print(f"[crumbs] options   {', '.join(opts)}", file=sys.stderr)
+
+
+def verbose_front(args):
+    """Timing lines for the compiler's own phases (everything before the C compiler runs)."""
+    if not args.verbose:
+        return
+    T = TIMINGS
+    mods = getattr(T, "stats_modules", [])
+    out = sys.stderr
+
+    def line(name, sec, extra=""):
+        print(f"[crumbs] {name:<9} {ms(sec)}{('   ' + extra) if extra else ''}", file=out)
+    if mods:
+        shown = ", ".join(mods[:6]) + (f", ... (+{len(mods) - 6})" if len(mods) > 6 else "")
+        print(f"[crumbs] modules   {len(mods)}: {shown}", file=out)
+    if args.verbose > 1:
+        for path, lines, toks, lx, ps in T.files:
+            print(f"[crumbs]   {os.path.relpath(path) if os.path.isabs(path) else path:<38} {lines:>5} lines {toks:>6} tokens"
+                  f"  lex {lx * 1000:6.2f} ms  parse {ps * 1000:6.2f} ms", file=out)
+    n = T.calls.get("lex", 0)
+    line("lex", T.excl.get("lex", 0), f"{n} file{'s' if n != 1 else ''}, {T.stats.get('tokens', 0):,} tokens")
+    line("parse", T.excl.get("parse", 0), f"{T.stats.get('lines', 0):,} lines")
+    line("load", T.excl.get("load", 0), "reading files, resolving imports")
+    line("check", T.excl.get("check", 0), "types, moves, mutability")
+    if "codegen" in T.excl:
+        line("codegen", T.excl["codegen"], f"{T.stats.get('c_lines', 0):,} lines / {T.stats.get('c_bytes', 0) / 1024:.1f} KB of C")
 
 
 def report(d, quiet_warnings=False):
@@ -98,7 +146,7 @@ def pkg_config(pkgs):
 
 def cc_command(cc, c_path, out_path, opt, unchecked, extra, plan=None, libs=(), libdirs=(), files=(), pkgs=(), compile_only=False):
     plan = plan or LinkPlan()
-    cmd = [cc, "-std=gnu11", f"-O{opt}", "-Wno-unused-function", "-Wno-unused-variable",
+    cmd = [cc, "-std=gnu11", "-Uunix", "-Ulinux", "-Ui386", f"-O{opt}", "-Wno-unused-function", "-Wno-unused-variable",
            "-Wno-unused-but-set-variable", "-Wno-unused-value"]
     if unchecked:
         cmd[1:1] = ["-DCB_UNCHECKED", "-fwrapv"]
@@ -126,8 +174,10 @@ def build(args, run_after=False):
     if run_after and not args.entry:
         print("error: `run` needs an entry point (this build has --entry=)", file=sys.stderr)
         return 1
+    verbose_header(args)
     c_src, d, plan = compile_to_c(args.file, args.include, strict=args.strict_casts, entry=args.entry, gc=args.gc,
                                  nostd=args.no_stdruntime, overflow_panic=args.overflow_panic)
+    verbose_front(args)
     report(d, args.no_warn)
     if c_src is None:
         return 1
@@ -149,7 +199,15 @@ def build(args, run_after=False):
         except RuntimeError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
+        if args.verbose:
+            print(f"[crumbs] cc        {' '.join(shlex.quote(c) for c in cmd)}", file=sys.stderr)
+        t_cc = time.perf_counter()
         r = subprocess.run(cmd, capture_output=True, text=True)
+        if args.verbose:
+            print(f"[crumbs] cc        {ms(time.perf_counter() - t_cc)}   {cc} {'ok' if r.returncode == 0 else 'FAILED'}", file=sys.stderr)
+            if r.returncode == 0:
+                size = os.path.getsize(out) if os.path.exists(out) else 0
+                print(f"[crumbs] output    {out} ({size / 1024:.1f} KB)", file=sys.stderr)
         if r.returncode != 0:
             linking = any(w in r.stderr for w in ("undefined reference", "ld returned", "cannot find -l", "Undefined symbols",
                                                   "cannot open shared object", "file format not recognized"))
@@ -163,6 +221,9 @@ def build(args, run_after=False):
             print(r.stderr, file=sys.stderr)
             print(f"generated C kept at {c_path}", file=sys.stderr)
             return 2
+        if args.verbose:
+            print(f"[crumbs] total     {ms(TIMINGS.total())}   (before running the program)" if run_after
+                  else f"[crumbs] total     {ms(TIMINGS.total())}", file=sys.stderr)
         if not run_after:
             return 0
         try:
@@ -182,6 +243,9 @@ def main(argv=None):
     def common(p):
         p.add_argument("file", help="entry source file (.cb)")
         p.add_argument("-I", dest="include", action="append", default=[], help="extra module search directory")
+        p.add_argument("-v", "--verbose", action="count", default=0,
+                       help="log what the compiler does: time spent lexing, parsing, checking and generating code, "
+                            "and the C compiler command (-vv adds a per-file table)")
         p.add_argument("--no-warn", action="store_true", help="hide warnings")
         p.add_argument("--strict-casts", action="store_true",
                        help="treat implicit-conversion and signedness warnings as errors")
@@ -235,14 +299,19 @@ def main(argv=None):
 
 
 def _dispatch(a):
+    a.file_ = a.file
+    if a.cmd in ("check", "emit"):
+        verbose_header(a)
     if a.cmd == "check":
         c, d, _ = compile_to_c(a.file, a.include, strict=a.strict_casts, entry=a.entry, gc=a.gc,
                                  nostd=a.no_stdruntime, overflow_panic=a.overflow_panic)
+        verbose_front(a)
         report(d, a.no_warn)
         return 0 if c is not None else 1
     if a.cmd == "emit":
         c, d, _ = compile_to_c(a.file, a.include, strict=a.strict_casts, entry=a.entry, gc=a.gc,
                                  nostd=a.no_stdruntime, overflow_panic=a.overflow_panic)
+        verbose_front(a)
         report(d, a.no_warn)
         if c is None:
             return 1

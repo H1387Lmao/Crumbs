@@ -41,6 +41,10 @@ def run_all(report):
         missing = [w for w in want if w not in cmd]
         report("cookie/forwards every option", not missing, f"missing {missing} in: {cmd}")
 
+        r = cookie(proj, "run", "-vv")
+        report("cookie/-vv shows phase timings", r.returncode == 0 and "[crumbs] lex" in r.stderr and "[crumbs] codegen" in r.stderr
+               and "[crumbs] cc" in r.stderr, r.stderr)
+
         r = cookie(proj, "build", "-n", "--release")
         cmd = next((l for l in r.stdout.splitlines() if "crumbs.py build" in l), "")
         report("cookie/profiles", "-O3" in cmd and "--overflow-panic" not in cmd, cmd)
@@ -58,7 +62,7 @@ def run_all(report):
         r = cookie(proj, "check")
         report("cookie/check", r.returncode == 0, r.stderr)
         r = cookie(proj, "emit")
-        report("cookie/emit", r.returncode == 0 and "int main(void)" in r.stdout, r.stderr)
+        report("cookie/emit", r.returncode == 0 and "int main(" in r.stdout, r.stderr)
 
         # an error in the program makes the build fail with the compiler's diagnostics
         with open(os.path.join(proj, "src", "main.cb"), "w") as f:

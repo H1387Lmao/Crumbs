@@ -100,6 +100,7 @@ U8, U16, U32, U64 = PRIMS["u8"], PRIMS["u16"], PRIMS["u32"], PRIMS["u64"]
 F32, F64 = PRIMS["f32"], PRIMS["f64"]
 BOOL, STR, VOID = PRIMS["bool"], PRIMS["str"], PRIMS["void"]
 STRING = PRIMS["String"]
+REGION = Ty("prim", name="Region")   # the handle introduced by `region r { ... }`; not nameable in source
 ERR = Ty("err")          # the `error` type: an error code
 POISON = Ty("poison")    # result of an earlier error; compatible with everything
 NEVER = Ty("never")

@@ -35,23 +35,47 @@
           "title": "Managing your projects",
           "features": [
             {
-              "id": "init",
+              "id": "new",
               "title": "Creation",
-              "desc": "To initialize a project, run the `init` command",
-              "command": "cookie init my_project"
+              "desc": "Create a project in a new directory (`--lib` for a library), or turn the current directory into one with `init`.",
+              "command": "cookie new my_project"
             },
             {
               "id": "build",
               "title": "Build",
-              "desc": "To compile your project, go to your projects root directory and run the `build` command",
-              "command": "cookie build"
+              "desc": "Compile the project. `--release` picks the release profile; every option is forwarded to the compiler under its real name.",
+              "command": "cookie build --release"
             },
             {
-              "id": "init",
+              "id": "run",
               "title": "Run",
-              "desc": "To run your current project, either build it or run the `run` command",
-              "command": "cookie run"
-            }      
+              "desc": "Compile and run. Arguments after `--` go to your program.",
+              "command": "cookie run -- arg1 arg2"
+            },
+            {
+              "id": "check",
+              "title": "Check, emit, clean",
+              "desc": "Type-check only, print the generated C, or delete the build directory.",
+              "command": "cookie check"
+            },
+            {
+              "id": "verbose",
+              "title": "See what it does",
+              "desc": "`-n` prints the exact compiler command, `-v` logs time spent lexing, parsing, checking and generating code, `-vv` adds a per-file table. `cookie info` shows the commands for each profile.",
+              "command": "cookie build -v"
+            }
+          ]
+        },
+        {
+          "id": "project_toml",
+          "title": "project.toml",
+          "features": [
+            {
+              "id": "profiles",
+              "title": "Profiles and defaults",
+              "desc": "Settings merge as command line > profile > [build] > default. Debug builds with -O0 and overflow panics; release builds with -O3. Unknown keys are reported with a suggestion.",
+              "command": "cookie info"
+            }
           ]
         }
       ]
@@ -383,6 +407,67 @@
               "id": "known-limits",
               "title": "Current Language Limitations",
               "desc": "Crumbs is a toy language. The README lists no generic enums, trait bounds, closures, or methods. The collector is conservative and single-threaded. Slices are mutable views even when created from immutable arrays. Generated C currently relies on GCC/Clang statement expressions and overflow builtins."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "newer",
+      "title": "Methods, memory and the standard library",
+      "description": "Added alongside the build tool.",
+      "subsections": [
+        {
+          "id": "methods",
+          "title": "Methods",
+          "features": [
+            {
+              "id": "impl",
+              "title": "impl blocks",
+              "desc": "Declare functions on a type: `Point.new(1, 2)`, `p.sum()`. `self` borrows, `mut self` mutates. String, str and List have their methods with no import.",
+              "command": "let mut a = String.new(\"  Hi \");\na = a.strip();\nlet mut xs: List<i32> = List.new();\nxs.push(1);"
+            }
+          ]
+        },
+        {
+          "id": "memory",
+          "title": "Memory",
+          "features": [
+            {
+              "id": "gc",
+              "title": "Garbage collector on by default",
+              "desc": "Use `--no-gc` for plain malloc. `--no-stdruntime` builds freestanding code with no libc.",
+              "command": "crumbs build app.cb --no-gc"
+            },
+            {
+              "id": "regions",
+              "title": "Regions (lifetimes)",
+              "desc": "`region r { alloc_in(T, n, r) }` frees everything on every exit path. The compiler rejects returning or storing region memory where it would outlive the region.",
+              "command": "region r {\n    let xs = alloc_in(i64, 100, r);\n}"
+            },
+            {
+              "id": "overflow",
+              "title": "Integer overflow",
+              "desc": "`+ - *` wrap by default; `--overflow-panic` turns overflow into a panic.",
+              "command": "crumbs run app.cb --overflow-panic"
+            }
+          ]
+        },
+        {
+          "id": "stdlib",
+          "title": "Standard library",
+          "features": [
+            {
+              "id": "time",
+              "title": "std.time",
+              "desc": "Clocks, sleep, Duration, Stopwatch and calendar dates.",
+              "command": "let sw = time.Stopwatch.start();\nprintln(sw.elapsed().to_string());"
+            },
+            {
+              "id": "fs",
+              "title": "std.fs and std.env",
+              "desc": "Read and write files, query the file system, read arguments and environment variables.",
+              "command": "let text = fs.read_to_string(\"notes.txt\") catch |e| { panic(\"missing\"); };"
             }
           ]
         }

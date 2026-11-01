@@ -1,0 +1,85 @@
+// std.fs: whole-file reading and writing, and a few file-system queries.
+//
+//   import std.fs;
+//   let text = fs.read_to_string("notes.txt") catch |e| { panic("cannot read"); };
+//   fs.write("out.txt", "hello\n") catch |e| { ... };
+pub error NotFound;
+pub error IoError;
+
+extern fn cb_fs_read(path: str, out: *String) -> i32;
+extern fn cb_fs_write(path: str, data: str, append: i32) -> i32;
+extern fn cb_fs_stat(path: str, size: *i64) -> i32;
+extern fn cb_fs_remove(path: str) -> i32;
+extern fn cb_fs_mkdir(path: str) -> i32;
+
+// the whole file as a String
+pub fn read_to_string(path: str) -> String! {
+    let mut out = string_new();
+    let rc = cb_fs_read(path, &out);
+    if rc == 1 { throw NotFound; }
+    if rc != 0 { throw IoError; }
+    return out;
+}
+
+// the file split into lines (without the line terminators)
+pub fn read_lines(path: str) -> List<String>! {
+    let text = try read_to_string(path);
+    let mut lines: List<String> = List.new();
+    let mut start: i64 = 0;
+    let mut i: i64 = 0;
+    while i < text.len {
+        if text[i] == '\n' {
+            let mut end = i;
+            if end > start && text[end - 1] == '\r' { end -= 1; }
+            lines.push(string_from(text[start..end]));
+            start = i + 1;
+        }
+        i += 1;
+    }
+    if start < text.len { lines.push(string_from(text[start..])); }
+    return lines;
+}
+
+// creates or replaces the file
+pub fn write(path: str, data: str) -> void! {
+    let rc = cb_fs_write(path, data, 0);
+    if rc == 1 { throw NotFound; }
+    if rc != 0 { throw IoError; }
+}
+
+// adds to the end of the file (creating it if needed)
+pub fn append(path: str, data: str) -> void! {
+    let rc = cb_fs_write(path, data, 1);
+    if rc == 1 { throw NotFound; }
+    if rc != 0 { throw IoError; }
+}
+
+pub fn exists(path: str) -> bool {
+    let mut size: i64 = 0;
+    return cb_fs_stat(path, &size) != 0;
+}
+
+pub fn is_file(path: str) -> bool {
+    let mut size: i64 = 0;
+    return cb_fs_stat(path, &size) == 1;
+}
+
+pub fn is_dir(path: str) -> bool {
+    let mut size: i64 = 0;
+    return cb_fs_stat(path, &size) == 2;
+}
+
+// size in bytes of a file
+pub fn size(path: str) -> i64! {
+    let mut n: i64 = 0;
+    if cb_fs_stat(path, &n) == 0 { throw NotFound; }
+    return n;
+}
+
+pub fn remove(path: str) -> void! {
+    if cb_fs_remove(path) != 0 { throw NotFound; }
+}
+
+pub fn make_dir(path: str) -> void! {
+    if cb_fs_mkdir(path) != 0 { throw IoError; }
+}
