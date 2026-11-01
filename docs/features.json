@@ -26,6 +26,45 @@
   },
   "sections": [
     {
+      "id": "installation",
+      "title": "Installation",
+      "description": "Install python>=3.14, git and curl before running this command!",
+      "subsections": [
+        {
+          "id": "install",
+          "title": "Installing crumbs & cookies",
+          "features": [
+            {
+              "id": "dependencies",
+              "title": "Dependencies",
+              "desc": "Crumbs rely on dependencies to run, due to it being written in python. You first need to install the needed dependencies before running crumbs",
+              "command": "sudo apt install python3 clang git curl"
+            },
+            {
+              "id": "cloning-repo",
+              "title": "Repository",
+              "desc": "Clone the repo and get the source code of crumbs",
+              "command": "git clone --depth=1 https://github.com/H1387Lmao/Crumbs.git ~/crumbs"
+            },
+            {
+              "id": "running",
+              "title": "Running crumbs",
+              "desc": "To check whether crumbs is actually installed, run these commands",
+              "command": "cd ~/crumbs\npython crumbs.py --version\npython cookie.py --version",
+              "note": "If they both succeed, congrats you have successfully downloaded crumbs!"
+            },
+            {
+              "id": "aliasing",
+              "title": "Aliasing",
+              "desc": "Running crumbs like a real program is easy using aliases",
+              "command": "alias crumbs='python ~/crumbs/crumbs.py'\nalias cookie='~/crumbs/cookie.py'",
+              "note": "This is completely an optional addition, you can skip this step if you want.\nTo make it persist you can put it in your profile file of your shell (eg. '~/.bashrc', '~/.profile')"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "cookie",
       "title": "Cookie",
       "description": "The Crumbs Build system",
