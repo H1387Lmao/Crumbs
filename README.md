@@ -1,17 +1,19 @@
-# Crumbs
 <p align="center">
   <img src="docs/resources/crumbs-big.png" alt="Crumbs programming language logo" width="220" />
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/4%2C000%2B-Lines%20of%20code-white?style=flat&labelColor=black&logo=github" alt="5,000+ lines of code" />
+  <img src="https://img.shields.io/badge/6%2C000%2B-Lines%20of%20code-white?style=flat&labelColor=black&logo=github" alt="6,000+ lines of code" />
   <img src="https://img.shields.io/badge/Written%20in-Python-yellow?style=flat&labelColor=blue&logo=python&logoColor=white&logoSize=auto" alt="Written in Python" />
+  <a href="https://h1387lmao.github.io/Crumbs">
+    <img src="https://img.shields.io/badge/View-Documentation-e6820e?style=for-the-badge&labelColor=white&logo=html5" alt="Badge">
+  </a>
 </p>
 
 A small, statically typed, C-style toy programming language that compiles to C.
 
-Crumbs is implemented in Python, with **5,500+ lines of code**, including approximately
-**4,800 lines of Python**. It compiles to a single C source file, which is then built
+Crumbs is implemented in Python, with **8,000+ lines of code**, including approximately
+**6,500+ lines of Python**. It compiles to a single C source file, which is then built
 with GCC or Clang using `-O2`.
 
 ```
