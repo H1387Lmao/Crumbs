@@ -264,7 +264,7 @@
 <body>
   <header class="topbar">
     <a class="brand" href="#top" aria-label="Crumbs documentation home">
-      <img id="brand-logo" src="../resources/crumbs-logo.svg" alt="">
+      <img id="brand-logo" src="github.com/H1387Lmao/Crumbs/resources/crumbs-logo.svg" alt="">
       <span>Crumbs</span>
     </a>
     <div class="topbar-right">
@@ -299,11 +299,9 @@
         <section class="intro-grid" id="install">
           <div class="panel">
             <h2>Installation</h2>
+            <div id="install-script"></div>
 
             <div class="quickstart-item">
-              <code>
-                curl -fsSL https://github.com/H1387Lmao/crumbs/resources/install.sh | sh
-              </code>
               <span>
                 Note: Shell script has not been tested thoroughly and might fail! If it does please make a github issue!
               </span>
@@ -335,7 +333,7 @@
       "import", "pub", "struct", "enum", "error", "const", "fn", "let", "mut",
       "if", "else", "for", "in", "match", "return", "break", "continue", "try",
       "catch", "throw", "drop", "extern", "include", "link", "define", "export",
-      "as", "null", "true", "false"
+      "as", "null", "true", "false", "impl", "region"
     ]);
     const TYPES = new Set([
       "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
@@ -346,6 +344,93 @@
       "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
     })[char]);
 
+    const SHELL_KEYWORDS = new Set([
+      'if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'while', 'until', 'do', 'done',
+      'in', 'function', 'return', 'exit', 'local', 'export', 'alias', 'select', 'time'
+    ]);
+
+    const SHELL_BUILTINS = new Set([
+      'echo', 'printf', 'cd', 'pwd', 'ls', 'grep', 'sed', 'awk', 'cat', 'set', 'shift', 
+      'read', 'eval', 'exec', 'test', 'expr', 'true', 'false', 'type', 'command'
+    ]);
+
+    function highlightShell(source) {
+      const tokenPattern = /(#[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\}|\?|\d)|\b[A-Za-z_][A-Za-z0-9_-]*\b|\b\d+\b|&&|\|\||\||;|<<|>>|[><!=]=?|\\\n|[^\s])/g;
+
+      let output = "";
+      let lastIndex = 0;
+      let isLineStart = true;
+
+      for (const match of source.matchAll(tokenPattern)) {
+        const token = match[0];
+        const index = match.index;
+
+        const skippedText = source.slice(lastIndex, index);
+        output += escapeHTML(skippedText);
+
+        if (skippedText.includes('\n') && !skippedText.endsWith('\\\n')) {
+          isLineStart = true;
+        }
+
+        let kind = "";
+
+        if (token.startsWith("#")) {
+          kind = "comment";
+          inLineStart = false;
+        } 
+        else if (token.startsWith('"') || token.startsWith("'")) {
+          kind = "string";
+          isLineStart = false;
+        } 
+        else if (token.startsWith("$")) {
+          kind = "variable";
+          isLineStart = false;
+        } 
+        else if (token === '\\\n') {
+          kind = "";
+          isLineStart = false;
+        }
+        else if (/^[A-Za-z_]/.test(token) && /^\s*\(\)/.test(source.slice(index + token.length))) {
+          kind = "function";
+          isLineStart = false;
+        }
+        else if (/^(&&|\|\||\||;|<<|>>|[><!=]=?|[+*%=])$/.test(token)) {
+          if (token === "--"){
+            kind = "comment";
+            isLineStart = false;
+          }else {
+            kind = "operator";
+            isLineStart = true;           
+          }
+        } 
+        else if (/^\d+$/.test(token)) {
+          kind = "number";
+          isLineStart = false;
+        } 
+        else if (/^[A-Za-z_]/.test(token)) {
+          if (isLineStart) {
+            kind = "keyword";
+          } else if (SHELL_KEYWORDS.has(token)) {
+            kind = "keyword";
+          } else if (SHELL_BUILTINS.has(token)) {
+            kind = "builtin";
+          }
+          isLineStart = false;
+        }
+        else {
+          if (token.trim().length > 0) {
+            isLineStart = false;
+          }
+        }
+
+        output += kind ? `<span class="tok-${kind}">${escapeHTML(token)}</span>` : escapeHTML(token);
+        lastIndex = index + token.length;
+      }
+
+      output += escapeHTML(source.slice(lastIndex));
+      return output;
+    }
+    
     function highlightCrumbs(source) {
       const tokenPattern = /(\/\/[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b[A-Za-z_][A-Za-z0-9_]*\b|\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b|->|=>|\.\.=|\.\.|\+%=|-%=|\*%=|==|!=|<=|>=|\+%|-%|\*%|&&|\|\||[^\s])/g;
       let output = "";
@@ -376,10 +461,10 @@
       return node;
     }
 
-    function renderCode(code, highlight=true) {
+    function renderCode(code, highlighter=highlightCrumbs, title="Crumbs") {
       const wrap = element("div", "code-wrap");
       const top = element("div", "code-top");
-      top.append(element("span", "", "CRUMBS"));
+      top.append(element("span", "", title));
       const copy = element("button", "copy-button", "Copy");
       copy.type = "button";
       copy.addEventListener("click", async () => {
@@ -394,7 +479,7 @@
       top.append(copy);
       const pre = document.createElement("pre");
       const codeNode = document.createElement("code");
-      codeNode.innerHTML = highlight ? highlightCrumbs(code) : code;
+      codeNode.innerHTML = highlighter(code);
       pre.append(codeNode);
       wrap.append(top, pre);
       return wrap;
@@ -407,11 +492,12 @@
       document.getElementById("hero-title").textContent = project.name;
       document.getElementById("hero-tagline").textContent = project.tagline;
       document.getElementById("hero-description").textContent = project.description;
+      document.getElementById("install-script").append(renderCode("curl -fsSL https://github.com/H1387Lmao/crumbs/resources/install.sh | sh", highlightShell, "Installation"));
 
       const quickstart = document.getElementById("quickstart-list");
       for (const item of project.quickstart || []) {
-        const row = element("div", "quickstart-item");
-        row.append(element("code", "", item.command), element("span", "", item.description));
+        const row = element("div");
+        row.append(renderCode(item.command, highlightShell, "Shell Script"), element("span", "muted-note", item.description));
         quickstart.append(row);
       }
       const navigation = document.getElementById("navigation");
@@ -451,7 +537,17 @@
             featureNode.append(element("p", "", feature.desc));
             if (feature.code) featureNode.append(renderCode(feature.code));
             if (feature.note) featureNode.append(element("div", "feature-note", feature.note));
-            if (feature.command) featureNode.append(element("code", "", feature.command))
+            if (feature.command){
+              // if (feature.command.includes("\n")) {
+              const commandNode = renderCode(feature.command, highlightShell, "Shell Script");
+              featureNode.append(commandNode)
+              // }else {
+              //  const commandNode = element("div", "quickstart-item");
+              //  commandNode.append(element("code", "", feature.command));
+              //  featureNode.append(commandNode);
+              //}
+            }
+            
             featureList.append(featureNode);
 
             const featureLink = element("a", "nav-feature", feature.title);

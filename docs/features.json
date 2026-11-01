@@ -68,7 +68,7 @@
         },
         {
           "id": "project_toml",
-          "title": "project.toml",
+          "title": "Project Configuration",
           "features": [
             {
               "id": "profiles",
@@ -289,7 +289,7 @@
               "id": "garbage-collector",
               "title": "Garbage Collection",
               "desc": "Build with `--gc` to enable a conservative, single-threaded mark-and-sweep collector on Linux with glibc or musl. It manages `alloc()` blocks, `String` buffers, and the string arena. Explicit `free` and destructors remain valid.",
-              "code": "// Build with the compiler flag:\n// python3 crumbs.py build main.cb --gc\n\ngc_collect();\nprintln(gc_bytes());",
+              "code": "// Build with the compiler flag:\n// crumbs build main.cb --gc\n\ngc_collect();\nprintln(gc_bytes());",
               "note": "Pointers retained only on the C side are not visible to the collector. Keep a Crumbs reference to memory that C must retain."
             }
           ]
@@ -377,13 +377,13 @@
               "id": "cli-commands",
               "title": "Compiler Commands",
               "desc": "The command-line driver can run, build, emit generated C, or type-check a source file. GCC and Clang are supported as C compilers.",
-              "code": "python3 crumbs.py run examples/hello.cb\npython3 crumbs.py build examples/hello.cb -o hello\npython3 crumbs.py emit examples/hello.cb\npython3 crumbs.py check examples/hello.cb"
+              "command": "crumbs run examples/hello.cb\ncrumbs build examples/hello.cb -o hello\ncrumbs emit examples/hello.cb\ncrumbs check examples/hello.cb"
             },
             {
               "id": "compiler-flags",
               "title": "Build Options",
               "desc": "Useful options include `--unchecked` to remove overflow and bounds checks, `-O3` for optimization, `--cc clang` to select the C compiler, `--keep-c` to retain generated C, `--entry` to choose an entry function, and `--gc` to enable the collector.",
-              "code": "python3 crumbs.py build main.cb \\\n    --unchecked -O3 --cc clang --keep-c out.c\n\npython3 crumbs.py build library.cb --entry="
+              "command": "crumbs build main.cb \\\n    --unchecked -O3 --cc clang --keep-c out.c\n\ncrumbs build library.cb --entry="
             }
           ]
         },
@@ -402,11 +402,6 @@
               "title": "Runtime Safety Checks",
               "desc": "The runtime panics with a source location and exit code 101 for integer overflow, division by zero, array/slice/string bounds, invalid slice ranges, invalid shift amounts, and allocation failure.",
               "code": "let values = [1, 2, 3];\nprintln(values[8]); // bounds panic"
-            },
-            {
-              "id": "known-limits",
-              "title": "Current Language Limitations",
-              "desc": "Crumbs is a toy language. The README lists no generic enums, trait bounds, closures, or methods. The collector is conservative and single-threaded. Slices are mutable views even when created from immutable arrays. Generated C currently relies on GCC/Clang statement expressions and overflow builtins."
             }
           ]
         }
@@ -425,7 +420,7 @@
               "id": "impl",
               "title": "impl blocks",
               "desc": "Declare functions on a type: `Point.new(1, 2)`, `p.sum()`. `self` borrows, `mut self` mutates. String, str and List have their methods with no import.",
-              "command": "let mut a = String.new(\"  Hi \");\na = a.strip();\nlet mut xs: List<i32> = List.new();\nxs.push(1);"
+              "code": "let mut a = String.new(\"  Hi \");\na = a.strip();\nlet mut xs: List<i32> = List.new();\nxs.push(1);"
             }
           ]
         },
@@ -443,7 +438,7 @@
               "id": "regions",
               "title": "Regions (lifetimes)",
               "desc": "`region r { alloc_in(T, n, r) }` frees everything on every exit path. The compiler rejects returning or storing region memory where it would outlive the region.",
-              "command": "region r {\n    let xs = alloc_in(i64, 100, r);\n}"
+              "code": "region r {\n    let xs = alloc_in(i64, 100, r);\n}"
             },
             {
               "id": "overflow",
@@ -459,15 +454,15 @@
           "features": [
             {
               "id": "time",
-              "title": "std.time",
+              "title": "Time",
               "desc": "Clocks, sleep, Duration, Stopwatch and calendar dates.",
-              "command": "let sw = time.Stopwatch.start();\nprintln(sw.elapsed().to_string());"
+              "code": "import std.time;\nlet sw = time.Stopwatch.start();\nprintln(sw.elapsed().to_string());"
             },
             {
               "id": "fs",
-              "title": "std.fs and std.env",
+              "title": "Filesystem & Enviroment",
               "desc": "Read and write files, query the file system, read arguments and environment variables.",
-              "command": "let text = fs.read_to_string(\"notes.txt\") catch |e| { panic(\"missing\"); };"
+              "code": "import std.fs;\nimport std.env;\nlet text = fs.read_to_string(\"notes.txt\") catch |e| { panic(\"missing\"); };"
             }
           ]
         }

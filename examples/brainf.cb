@@ -1,0 +1,109 @@
+// brainfuck interpreter written in Crumbs
+
+import std.list;
+import std.io;
+
+struct BFState {
+  cells: []u8,
+  ptr: u8,
+  ref_stack: list.List<u16>,
+  pc: u64,
+  instructions: String
+}                                                 
+
+impl BFState {
+  pub fn new() -> BFState {
+    let mut reference = list.new<u16>();
+    return BFState {
+      cells: alloc(u8, 256),
+      ptr: 0,
+      ref_stack: reference,
+      pc: 0,
+      instructions: String.new("hi")
+    };
+  }                                               
+
+  pub fn get_inst(self) -> u8 {
+    return self.instructions[self.pc];
+  }
+}                                                 
+
+fn main() -> void {
+  let mut state = BFState.new();
+  loop {
+    let cur_line = io.get_line() catch |e| {
+      break;
+    };
+
+    if (cur_line.len == 0) {
+      break;
+    }
+                                                      
+    state.instructions = cur_line;
+    state.pc = 0;
+
+    loop {
+      if (state.pc >= (state.instructions.len as u64)) {
+        break;
+      }
+
+      let inst = state.get_inst();
+      state.pc++;
+      
+      match (inst) {
+        '+' => {
+          state.cells[state.ptr]++;
+        }
+        '-' => {
+          state.cells[state.ptr]--;
+        }
+        '>' => {
+          state.ptr++;
+        }
+        '<' => {
+          state.ptr--;
+        }
+        '.' => {
+          io.putc(state.cells[state.ptr]);
+        }
+        ',' => {
+          let ch = io.getc() catch |e| {
+            return;
+          };
+          state.cells[state.ptr] = ch;
+        }
+        '[' => {
+          if (state.cells[state.ptr] == 0) {
+            let mut depth = 1;
+            loop {
+              if (state.pc >= state.instructions.len as u64) { break; }
+              let next_inst = state.instructions[state.pc];
+              state.pc++;
+              if (next_inst == '[') { depth++; }
+              if (next_inst == ']') { depth--; }
+              if (depth == 0) { break; }
+            }
+          } else {
+            state.ref_stack.push((state.pc - 1) as u16);
+          }
+        }
+        ']' => {
+          if (state.ref_stack.len == 0) {
+            println("Found ']' but theres no starting '['!");
+            return;
+          }
+          let _old_sp = state.ref_stack.pop() catch |e| {
+            return;
+          };
+          
+          if (state.cells[state.ptr] != 0) {
+            state.pc = _old_sp as u64;
+          }
+        }
+        _ => {
+          continue;
+        }
+      }
+    }
+  }
+}
