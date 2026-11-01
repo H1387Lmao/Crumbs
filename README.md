@@ -1,6 +1,6 @@
 # Crumbs
 <p align="center">
-  <img src="resources/crumbs-logo.svg" alt="Crumbs programming language logo" width="220" />
+  <img src="docs/resources/crumbs-big.png" alt="Crumbs programming language logo" width="220" />
 </p>
 
 <p align="center">

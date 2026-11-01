@@ -295,8 +295,8 @@
       gap: 22px;
     }
     .hero-logo {
-      width: 76px;
-      height: 76px;
+      width: 30vw;
+      height: auto;
       object-fit: contain;
       flex-shrink: 0;
       animation: pulseLogo 4s ease-in-out infinite;
@@ -588,7 +588,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
       </button>
       <a class="brand" id="brand-home" aria-label="Crumbs documentation home">
-        <img id="brand-logo" src="../resources/crumbs-logo.svg" alt="Crumbs Logo">
+        <img id="brand-logo" src="resources/crumbs-logo.svg" alt="Crumbs Logo">
         <span>Crumbs</span>
       </a>
       <span class="brand-divider" aria-hidden="true"></span>
@@ -633,8 +633,9 @@
   </div>
 
   <script>
-    const DATA_URL = "features.json";
-    const KEYWORDS = new Set([
+    const IS_MOBILE = window.matchMedia("(max-width: 768px)").matches;
+    const DATA_URL  = "features.json";
+    const KEYWORDS  = new Set([
       "import", "pub", "struct", "enum", "error", "const", "fn", "let", "mut",
       "if", "else", "for", "in", "match", "return", "break", "continue", "try",
       "catch", "throw", "drop", "extern", "include", "link", "define", "export",
@@ -790,19 +791,25 @@
       // Hero Section with crumbs logo displayed inside
       const hero = make("section", "hero");
       const heroHeader = make("div", "hero-header");
+
+      const crumbsText = make("h1", "", project.name || "Crumbs");
       
       const heroText = make("div");
       heroText.append(make("p", "eyebrow", "Language documentation"));
-      heroText.append(make("h1", "", project.name || "Crumbs"));
+      heroText.append(crumbsText);
       heroText.append(make("p", "hero-tagline", project.tagline || "A small language. Straight to C."));
       heroText.append(make("p", "hero-description", project.description || ""));
 
       const logoImg = document.createElement("img");
       logoImg.className = "hero-logo";
-      logoImg.src = project.logo || "../resources/crumbs-logo.svg";
-      logoImg.alt = `${project.name || "Crumbs"} Logo`;
+      logoImg.src = "resources/crumbs-logo.svg";
 
-      heroHeader.append(heroText, logoImg);
+      heroHeader.append(heroText);
+      if (!IS_MOBILE){
+        heroHeader.append(logoImg);
+      }else{
+        crumbsText.append(logoImg);
+      }
       hero.append(heroHeader);
 
       const heroActions = make("div", "hero-actions");
