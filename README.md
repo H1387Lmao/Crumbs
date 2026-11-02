@@ -164,6 +164,34 @@ let u = t;                           // moves t (a String has one owner); `t` ca
 free(s);                             // optional: free early (this moves `s`)
 ```
 `str + str` also works and yields a `str` backed by a bump arena (never freed, appends are amortised O(1));
+**String interpolation.** `f"text {expr} more"` embeds any expression; `{expr:spec}` formats it, `{{` / `}}` are literal braces, and the
+result is a `str`. The spec is `[[fill]align][sign][#][0][width][,|_][.precision][type]`:
+
+```
+let n = 255;  let pi = 3.14159;  let name = "world";
+println(f"hello {name}! {1 + 2}");                      // hello world! 3
+println(f"{n:x} {n:#b} {n:08.3f} {n:+} {1234567:,}");   // ff 0b11111111 0255.000 +255 1,234,567
+println(f"[{name:>8}] [{name:*^9}] [{name:.3}] {pi:.2}"); // [   world] [**world**] [wor] 3.14
+```
+
+align `<` `>` `^`; sign `+` or space; `#` adds `0x`/`0b`/`0o`; `0` zero-pads numbers; `,` `_` group digits; `.N` is decimals for floats
+and a character limit for text; types `d x X b o c` (integers), `f F e E g G` (floats), `?` (automatic representation). A bad spec is a
+compile error pointing at it.
+
+**Showing your own types (`Display`).** Implement the prelude trait `Display` (no import) and `println(x)`, `to_str(x)` and `f"{x}"` use
+your text; the spec's width/alignment apply to it. `{x:?}` prints an automatic representation (`Point { x: 3, y: -4 }`) for any struct,
+enum, array or slice of printable things. A struct with neither is a compile error that says what to add. `T: Display` is a valid bound;
+numeric types and `bool` implement it, and `Duration` / `DateTime` already do.
+
+```
+struct Point { x: i32, y: i32 }
+impl Display for Point {
+    fn to_string(self) -> String { return string_from(f"({self.x}, {self.y})"); }
+}
+println(Point { x: 3, y: -4 });          // (3, -4)
+println(f"{p:>10} {p:?}");               // "    (3, -4) Point { x: 3, y: -4 }"
+```
+
 `to_str(x)` converts numbers/bool/enums to `str`. `==` / `!=` compare any mix of `str` and `String`.
 A `String` is moved, not copied (see Destructors); `let v: str = s;` and passing `s` where a `str` is expected only *borrow* it,
 so a `str` view must not outlive its `String` (returning a view of a local `String` is a compile error). Temporary `String`s
@@ -314,8 +342,21 @@ slice, field or `write_at`, which dirties a 512-byte card; minor and mid collect
 stop-the-world; young generations are swept immediately and the old generation lazily (a few blocks per allocation). Interior pointers keep
 a block alive, and blocks known to hold no pointers (numbers, bytes) are never scanned.
 
-Controls: `gc_collect()` forces a major collection, `gc_collect_gen(g)` collects generations `0..g`, `gc_bytes()` reports bytes in use,
-`gc_collections()` counts all cycles, and `gc_gen_bytes(g)` / `gc_gen_collections(g)` report one generation (all no-ops / 0 with `--no-gc`).
+**Collector modes (`--gc-mode`, cookie: `gc_mode` / `gc_interval`).**
+
+| mode | who decides when to collect | for |
+|---|---|---|
+| `auto` (default) | the allocator, when the nursery fills | everyone; nothing to configure |
+| `thread` | a background collector thread, every `--gc-interval` ms (default 100) | beginners who want it hands-off: allocating code never stops to collect |
+| `manual` | you, with `gc_collect()` / `gc_collect_gen(g)` | advanced users with frame loops or latency budgets |
+
+In `thread` mode the compiler adds a cheap safepoint check at function entry and in every loop iteration so the collector can stop the
+program promptly (allocations, sleeps and blocking input are safepoints too). `manual` never collects by itself, so memory grows until you
+collect. `gc_collect_gen` is available only in `manual` mode (elsewhere it is a compile error pointing at `--gc-mode=manual`).
+
+Controls: `gc_collect()` forces a major collection in every mode, `gc_collect_gen(g)` (manual mode) collects generations `0..g`,
+`gc_bytes()` reports bytes in use, `gc_collections()` counts all cycles, and `gc_gen_bytes(g)` / `gc_gen_collections(g)` report one
+generation (all no-ops / 0 with `--no-gc`).
 Compile with `--cflag=-DCB_GC_VERIFY` to check every collection against a full trace of the heap (it aborts on a missed barrier or a
 grey block left over); the thresholds can be tuned with `-DCB_GC_NURSERY=`, `CB_GC_MID`, `CB_GC_MID_EVERY`, `CB_GC_MAJOR_MIN` and
 `CB_GC_CARD_BUDGET`. `free()` and destructors stay legal and release memory immediately. Caveats: memory given to C and kept only on the C
@@ -363,7 +404,7 @@ rejected. All modules are emitted into one C translation unit, so cross-module c
 
 ## Standard library
 
-Written in Crumbs and imported with `import std.name;` (`String`, `str` and `List<T>` need no import). Related modules are grouped:
+Written in Crumbs and imported with `import std.name;` (`String`, `str`, `List<T>` and the `Display` trait need no import). Related modules are grouped:
 
 | area | modules | what they give you |
 |---|---|---|
@@ -419,4 +460,4 @@ Not supported: `#include` (use `import`, or `include "x.h";` for C headers). Mac
 
 ## Known limits (it is a toy)
 No generic enums, trait objects, generic traits or closures; no `if` expressions; the collector is conservative and stop-the-world (generational, so most pauses are short). Slices are mutable views even of
-immutable arrays. The generated C needs GCC/Clang (statement expressions, overflow builtins).
+immutable arrays. Interpolated strings must fit on one line, and `Display` is static (no `dyn Display`). The generated C needs GCC/Clang (statement expressions, overflow builtins).

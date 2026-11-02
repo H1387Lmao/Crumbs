@@ -1,0 +1,38 @@
+// FLAGS: --gc-mode=manual
+// Manual mode: the collector never runs by itself. Nothing is collected until the program asks, and
+// gc_collect_gen(g) chooses how far to go (0 = nursery, 1 = + middle, 2 = everything).
+struct Box { value: i64, next: *Box }
+
+fn churn(rounds: i64) {
+    for i in 0..rounds {
+        let junk = alloc(i64, 1000);
+        junk[0] = i;
+    }
+}
+
+fn main() {
+    let keep = alloc(Box, 1);
+    keep[0].value = 7;
+    churn(5000);                                     // ~40 MB of garbage: auto mode would have collected many times
+    println("no automatic collection ", gc_collections() == 0);
+    println("garbage piled up ", gc_bytes() > 30 * 1024 * 1024);
+    println("everything is still in the nursery ", gc_gen_bytes(0) == gc_bytes());
+
+    gc_collect_gen(0);                               // a minor collection: the garbage goes, `keep` moves to generation 1
+    println("minor ", gc_gen_collections(0), " bytes small ", gc_bytes() < 1024 * 1024);
+    println("survivor in gen1 ", gc_gen_bytes(1) > 0, " gen0 empty ", gc_gen_bytes(0) == 0);
+
+    let child = alloc(Box, 1);
+    child[0].value = 8;
+    keep[0].next = &child[0];                        // an old-to-young store, found by the write barrier
+    churn(100);
+    gc_collect_gen(0);
+    println("child kept ", keep[0].next.value);
+
+    gc_collect_gen(1);                               // mid: survivors become old
+    println("mid ", gc_gen_collections(1), " gen2 holds data ", gc_gen_bytes(2) > 0, " young empty ", gc_gen_bytes(0) + gc_gen_bytes(1) == 0);
+    gc_collect();                                    // plain gc_collect() is a major collection
+    println("major ", gc_gen_collections(2));
+    println("total ", gc_collections());
+    println("keep ", keep[0].value, " ", keep[0].next.value);
+}

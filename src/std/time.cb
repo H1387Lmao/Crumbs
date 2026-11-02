@@ -18,6 +18,8 @@ extern const CLOCK_MONOTONIC: i32;
 extern const EINTR: i32;
 extern fn clock_gettime(clock: i32, out: *Timespec) -> i32;
 extern fn nanosleep(req: *Timespec, rem: *Timespec) -> i32;
+extern fn cb_gc_blocking_begin();      // a sleeping thread is at a safepoint: the collector need not wait for it
+extern fn cb_gc_blocking_end();
 extern fn localtime_r(t: *i64, out: *Tm) -> *Tm;
 extern fn fflush(f: *void) -> i32;
 extern "__errno_location" fn errno_ptr() -> *i32;
@@ -33,7 +35,9 @@ fn sleep_ns(ns: i64) {
     if ns <= 0 { return; }
     fflush(null);
     let mut req = Timespec { sec: ns / 1000000000, nsec: ns % 1000000000 };
+    cb_gc_blocking_begin();
     while nanosleep(&req, &req) == -1 && *errno_ptr() == EINTR { }
+    cb_gc_blocking_end();
 }
 // seconds east of UTC at that moment
 fn local_offset(secs: i64) -> i64 {
@@ -79,9 +83,11 @@ impl Duration {
     pub fn less(self, o: Duration) -> bool { return self.ns < o.ns; }
 
     pub fn sleep(self) { sleep_ns(self.ns); }
+}
 
+impl Display for Duration {
     // "850ns", "12.500us", "3.250ms", "1.500s", "2m05.250s"
-    pub fn to_string(self) -> String {
+    fn to_string(self) -> String {
         let mut n = self.ns;
         let mut out = string_new();
         if n < 0 { out += '-'; n = 0 - n; }
@@ -286,4 +292,9 @@ impl DateTime {
     pub fn add_secs(self, n: i64) -> DateTime { return from_unix(self.unix + n); }
     // whole seconds from `o` to this date
     pub fn since(self, o: DateTime) -> i64 { return self.unix - o.unix; }
+}
+
+// `println(now)` and `f"{now}"` show the local time, like format()
+impl Display for DateTime {
+    fn to_string(self) -> String { return self.format(); }
 }

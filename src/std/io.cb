@@ -7,10 +7,19 @@ extern fn getchar() -> i32;
 extern fn putchar(c: i32) -> i32;
 extern fn ungetc(c: i32, f: *void) -> i32;
 extern fn fflush(f: *void) -> i32;
+extern fn cb_gc_blocking_begin();      // waiting for input is a collector safepoint (see --gc-mode=thread)
+extern fn cb_gc_blocking_end();
+
+fn read_byte() -> i32 {
+    cb_gc_blocking_begin();
+    let c = getchar();
+    cb_gc_blocking_end();
+    return c;
+}
 
 // Read one byte from stdin. Fails with io.Eof at end of input (or Ctrl+D).
 pub fn getc() -> u8! {
-    let c = getchar();
+    let c = read_byte();
     if c < 0 { throw Eof; }
     return c as u8;
 }
@@ -21,7 +30,7 @@ pub fn putc(c: u8) {
 }
 
 fn peek() -> i32 {
-    let c = getchar();
+    let c = read_byte();
     if c >= 0 { ungetc(c, stdin_file); }
     return c;
 }
@@ -32,7 +41,7 @@ pub fn get_line() -> String! {
     let mut line = string_new();
     let mut got = false;
     loop {
-        let c = getchar();
+        let c = read_byte();
         if c < 0 {
             if !got { throw Eof; }
             return line;
@@ -40,7 +49,7 @@ pub fn get_line() -> String! {
         got = true;
         if c == 10 { return line; }
         if c == 13 {
-            if peek() == 10 { getchar(); }
+            if peek() == 10 { read_byte(); }
             return line;
         }
         line += c as u8;

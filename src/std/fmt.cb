@@ -1,0 +1,30 @@
+// std.fmt: how values turn into text.
+//
+// `Display` is the trait behind `println(x)`, `to_str(x)` and `f"{x}"` for your own types: implement it and
+// the value prints the way you wrote. It is part of the prelude, so no import is needed.
+//
+//     struct Point { x: i32, y: i32 }
+//     impl Display for Point {
+//         fn to_string(self) -> String { return string_from(f"({self.x}, {self.y})"); }
+//     }
+//     println(Point { x: 1, y: 2 });        // (1, 2)
+//     println(f"at {p:>10}");               // the format applies to the text `to_string` returns
+//
+// Types without an impl can still be shown with `{value:?}`, the automatic representation:
+// `Point { x: 1, y: 2 }`.
+pub trait Display {
+    fn to_string(self) -> String;
+}
+
+// The built-in types implement it too, so `T: Display` bounds accept them and `n.to_string()` works.
+impl Display for i8 { fn to_string(self) -> String { return string_from(to_str(*self)); } }
+impl Display for i16 { fn to_string(self) -> String { return string_from(to_str(*self)); } }
+impl Display for i32 { fn to_string(self) -> String { return string_from(to_str(*self)); } }
+impl Display for i64 { fn to_string(self) -> String { return string_from(to_str(*self)); } }
+impl Display for u8 { fn to_string(self) -> String { return string_from(to_str(*self)); } }
+impl Display for u16 { fn to_string(self) -> String { return string_from(to_str(*self)); } }
+impl Display for u32 { fn to_string(self) -> String { return string_from(to_str(*self)); } }
+impl Display for u64 { fn to_string(self) -> String { return string_from(to_str(*self)); } }
+impl Display for f32 { fn to_string(self) -> String { return string_from(to_str(*self)); } }
+impl Display for f64 { fn to_string(self) -> String { return string_from(to_str(*self)); } }
+impl Display for bool { fn to_string(self) -> String { return string_from(to_str(*self)); } }

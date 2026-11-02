@@ -100,13 +100,14 @@ def load_toml(path):
 
 
 STR_LIST = "list of strings"
+GC_MODES = ("auto", "thread", "manual")
 
 PROJECT_KEYS = {"name": str, "version": str, "description": str, "source_dir": str, "entry": str,
                 "entry_fn": str, "build_dir": str, "crumbs_path": str}
-BUILD_KEYS = {"cc": str, "gc": bool, "no_stdruntime": bool, "strict_casts": bool, "no_warn": bool,
+BUILD_KEYS = {"cc": str, "gc": bool, "gc_mode": str, "gc_interval": int, "no_stdruntime": bool, "strict_casts": bool, "no_warn": bool,
               "include": STR_LIST, "libs": STR_LIST, "lib_dirs": STR_LIST, "link": STR_LIST,
               "pkg": STR_LIST, "cflags": STR_LIST, "defines": STR_LIST}
-PROFILE_KEYS = {"opt": (str, int), "unchecked": bool, "overflow_panic": bool, "gc": bool,
+PROFILE_KEYS = {"opt": (str, int), "unchecked": bool, "overflow_panic": bool, "gc": bool, "gc_mode": str, "gc_interval": int,
                 "strict_casts": bool}
 
 
@@ -127,6 +128,10 @@ def check_table(table, schema, where):
             what = " or ".join({str: "a string", bool: "true/false", int: "an integer"}[t] for t in types)
         if not ok:
             raise CookieError(f"`{key}` in [{where}] must be {what}")
+    if "gc_mode" in table and table["gc_mode"] not in GC_MODES:
+        raise CookieError(f"`gc_mode` in [{where}] must be one of {', '.join(GC_MODES)}, not `{table['gc_mode']}`")
+    if "gc_interval" in table and not 1 <= table["gc_interval"] <= 60000:
+        raise CookieError(f"`gc_interval` in [{where}] must be between 1 and 60000 (milliseconds)")
     if "opt" in table and str(table["opt"]) not in OPT_LEVELS:
         raise CookieError(f"`opt` in [{where}] must be one of {', '.join(OPT_LEVELS)}, not `{table['opt']}`")
 
@@ -225,7 +230,7 @@ class Options:
     """Everything that decides how the compiler is invoked, after merging
     command line > profile > [build] > defaults."""
 
-    FIELDS = ("opt", "unchecked", "overflow_panic", "gc", "no_stdruntime", "strict_casts", "no_warn", "cc")
+    FIELDS = ("opt", "unchecked", "overflow_panic", "gc", "gc_mode", "gc_interval", "no_stdruntime", "strict_casts", "no_warn", "cc")
 
     def __init__(self, project, args, profile):
         self.profile = profile
@@ -241,6 +246,8 @@ class Options:
         self.unchecked = bool(pick("unchecked", False))
         self.overflow_panic = bool(pick("overflow_panic", False))
         self.gc = bool(pick("gc", True))
+        self.gc_mode = str(pick("gc_mode", "auto"))
+        self.gc_interval = int(pick("gc_interval", 100))
         self.no_stdruntime = bool(pick("no_stdruntime", False))
         self.strict_casts = bool(pick("strict_casts", False))
         self.no_warn = bool(pick("no_warn", False))
@@ -260,6 +267,9 @@ class Options:
         if self.unchecked and getattr(args, "overflow_panic", None) is True:
             warn("`--overflow-panic` has no effect together with `--unchecked`",
                  "--unchecked removes every runtime check, including overflow panics")
+        if self.gc_mode != "auto" and not self.gc and not self.no_stdruntime:
+            raise CookieError(f"`gc_mode = \"{self.gc_mode}\"` needs the collector, but `gc` is off",
+                              "set `gc = true`, or use the default `gc_mode = \"auto\"`")
         if self.no_stdruntime and self.gc and getattr(args, "gc", None) is True:
             warn("`--gc` has no effect together with `--no-stdruntime`")
 
@@ -272,7 +282,7 @@ class Options:
         if self.no_stdruntime:
             bits.append("no-stdruntime")
         else:
-            bits.append("gc" if self.gc else "no-gc")
+            bits.append(("gc" if self.gc_mode == "auto" else f"gc:{self.gc_mode}") if self.gc else "no-gc")
         if self.strict_casts:
             bits.append("strict-casts")
         return ", ".join(bits)
@@ -287,6 +297,10 @@ class Options:
             flags.append("--strict-casts")
         flags.append(f"--entry={self.entry}")
         flags.append("--gc" if self.gc else "--no-gc")
+        if self.gc_mode != "auto":
+            flags.append(f"--gc-mode={self.gc_mode}")
+        if self.gc_mode == "thread" and self.gc_interval != 100:
+            flags.append(f"--gc-interval={self.gc_interval}")
         if self.no_stdruntime:
             flags.append("--no-stdruntime")
         if self.overflow_panic:
@@ -486,6 +500,8 @@ entry = "{entry}"
 
 # [build]
 # gc = true                 # conservative garbage collector (default); false = plain malloc
+# gc_mode = "auto"          # "auto": collect when needed | "thread": background collector thread | "manual": only gc_collect()/gc_collect_gen()
+# gc_interval = 100         # gc_mode = "thread": milliseconds between collections
 # no_stdruntime = false     # freestanding build without libc
 # strict_casts = false
 # include = ["lib"]         # extra module search directories (-I)
@@ -574,6 +590,11 @@ def add_common(p):
                    help="entry function (default: `entry_fn` from project.toml, normally `main`); `--entry=` builds an object file")
     g.add_argument("--gc", action=argparse.BooleanOptionalAction, default=None,
                    help="conservative garbage collector (default on); --no-gc uses plain malloc")
+    g.add_argument("--gc-mode", choices=GC_MODES, default=None,
+                   help="auto (default): the allocator collects when the nursery is full; thread: a background collector thread "
+                        "collects periodically; manual: only gc_collect() / gc_collect_gen(g)")
+    g.add_argument("--gc-interval", type=int, default=None, metavar="MS",
+                   help="--gc-mode=thread: how often the collector thread wakes up (default 100 ms)")
     g.add_argument("--no-stdruntime", action="store_true", default=None,
                    help="freestanding build: only integer helpers, no libc")
     g.add_argument("--overflow-panic", action=argparse.BooleanOptionalAction, default=None,

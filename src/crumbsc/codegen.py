@@ -58,9 +58,12 @@ class RegionLocal:
 
 
 class CodeGen:
-    def __init__(self, ck, gc=False, nostd=False, overflow_panic=False):
+    def __init__(self, ck, gc=False, nostd=False, overflow_panic=False, gc_mode="auto", gc_interval=100):
         self.ck = ck
         self.gc = gc and not nostd
+        self.gc_mode = gc_mode if self.gc else "auto"
+        self.gc_interval = gc_interval
+        self.polls = self.gc_mode == "thread"      # safepoint polls: only the collector thread needs them
         self.nostd = nostd
         self.overflow_panic = overflow_panic
         self.out = []
@@ -68,6 +71,8 @@ class CodeGen:
         self.n = 0
         self.reg = {}
         self.arrs = []
+        self.dbg_done = {}
+        self.dbg_todo = []
         self.slices = []
         self.eus = []
         self.fnts = []
@@ -86,6 +91,11 @@ class CodeGen:
 
     def emit(self, line):
         self.out.append("    " * self.ind + line)
+
+    def poll(self):
+        """A safepoint for the background collector thread (--gc-mode=thread): park here if a collection is waiting."""
+        if self.polls:
+            self.emit("cb_gc_poll();")
 
     def capture(self, fn):
         saved, self.out = self.out, []
@@ -240,6 +250,113 @@ class CodeGen:
 
     def g_Bool(self, e):
         return "true" if e.value else "false"
+
+    # ------------------------------------------------------------ interpolation
+    def dbg_fn(self, t):
+        """Name of the C function writing the automatic `{:?}` representation of a `t` into a cb_fb."""
+        got = self.dbg_done.get(t.key)
+        if got:
+            return got
+        name = f"cb_dbg_{len(self.dbg_done) + 1}"
+        self.dbg_done[t.key] = name
+        self.dbg_todo.append((name, t))
+        return name
+
+    def gen_dbg(self, name, t):
+        ct = self.ctype(t)
+        L = [f"static void {name}(cb_fb *b, const {ct} *p) {{"]
+        if t.is_int:
+            L.append("    cb_fb_i(b, (long long)*p);" if t.signed else "    cb_fb_u(b, (unsigned long long)*p);")
+        elif t.is_float:
+            L.append(f"    cb_fb_f(b, (double)*p, {1 if t.name == 'f32' else 0});")
+        elif t == BOOL:
+            L.append('    cb_fb_cstr(b, *p ? "true" : "false");')
+        elif t == STR:
+            L.append("    cb_fb_q(b, *p);")
+        elif t == STRING:
+            L.append("    cb_fb_q(b, cb_string_view(*p));")
+        elif t == ERR:
+            L.append("    cb_fb_cstr(b, cb_err_names[*p]);")
+        elif t.kind == "enum":
+            L.append(f"    cb_fb_cstr(b, {t.sym.cname}__names[*p]);")
+        elif t.kind in ("ptr", "fn"):
+            L.append("    cb_fb_ptr(b, (const void *)*p);")
+        elif t.kind in ("arr", "slice"):
+            inner = self.dbg_fn(t.inner)
+            n = str(t.n) if t.kind == "arr" else "p->len"
+            el = "p->v[i]" if t.kind == "arr" else "p->ptr[i]"
+            L.append('    cb_fb_cstr(b, "[");')
+            L.append(f"    for (int64_t i = 0; i < {n}; i++) {{")
+            L.append('        if (i) cb_fb_cstr(b, ", ");')
+            L.append(f"        {inner}(b, &{el});")
+            L.append("    }")
+            L.append('    cb_fb_cstr(b, "]");')
+        elif t.kind == "struct":
+            L.append(f"    cb_fb_cstr(b, {c_string(t.sym.name.encode())});")
+            fields = list(t.sym.fields)
+            if fields:
+                L.append('    cb_fb_cstr(b, " { ");')
+                for i, (fname, ft, _) in enumerate(fields):
+                    sep = ", " if i else ""
+                    L.append(f'    cb_fb_cstr(b, "{sep}{fname}: ");')
+                    L.append(f"    {self.dbg_fn(ft)}(b, &p->{self.fld(fname)});")
+                L.append('    cb_fb_cstr(b, " }");')
+        else:
+            raise AssertionError(t)
+        L.append("}")
+        return "\n".join(L)
+
+    def spec_lit(self, sp, type_override=None):
+        def ch(c):
+            return str(ord(c)) if c else "0"
+        ty = sp.type if type_override is None else type_override
+        grp = {"": 0, ",": 1, "_": 2}[sp.group]
+        return (f"(&(const cb_fspec){{{ch(sp.fill)}, {ch(sp.align)}, {ch(sp.sign)}, {ch(ty)}, "
+                f"{int(sp.alt)}, {int(sp.zero)}, {grp}, {sp.width}, {sp.prec}}})")
+
+    def g_FStr(self, e):
+        from .fmtspec import Spec
+        b = self.tmp("cb_fb")
+        out = [f"cb_fb {b}; cb_fb_init(&{b});"]
+        for part in e.parts:
+            if part.lit is not None:
+                if part.lit:
+                    out.append(f"cb_fb_put(&{b}, {c_string(part.lit)}, {len(part.lit)});")
+                continue
+            sp = getattr(part, "pspec", None) or Spec()
+            t = part.expr.ty
+            x = self.ex(part.expr)
+            mode = part.mode
+            lit = self.spec_lit(sp)
+            if mode == "int":
+                out.append(f"cb_fmt_int(&{b}, (long long)({x}), {1 if t.signed else 0}, {lit});")
+            elif mode == "float":
+                out.append(f"cb_fmt_float(&{b}, (double)({x}), {1 if t.name == 'f32' else 0}, {lit});")
+            elif mode == "bool":
+                out.append(f'cb_fmt_str(&{b}, cb_str_view_c(({x}) ? "true" : "false"), {lit});')
+            elif mode == "text":
+                if t == STR:
+                    v = x
+                elif t == STRING:
+                    v = f"cb_string_view({x})"
+                else:
+                    v = f"cb_str_view_c(cb_err_names[{x}])"
+                out.append(f"cb_fmt_str(&{b}, {v}, {lit});")
+            elif mode == "enum":
+                if sp.type == "d":
+                    out.append(f"cb_fmt_int(&{b}, (long long)({x}), 1, {self.spec_lit(sp, '')});")
+                else:
+                    out.append(f"cb_fmt_str(&{b}, cb_str_view_c({t.sym.cname}__names[{x}]), {self.spec_lit(sp, 's')});")
+            elif mode == "ptr":
+                out.append(f"cb_fmt_ptr(&{b}, (const void *)({x}), {lit});")
+            elif mode == "debug":
+                v, tb = self.tmp(), self.tmp("cb_fb")
+                out.append(f"{{ {self.ctype(t)} {v} = {x}; cb_fb {tb}; cb_fb_init(&{tb}); {self.dbg_fn(t)}(&{tb}, &{v}); "
+                           f"cb_fmt_str(&{b}, (cb_str){{(const uint8_t *){tb}.p, (int64_t){tb}.len}}, {self.spec_lit(sp, 's')}); cb_fb_free(&{tb}); }}")
+            else:
+                raise AssertionError(mode)
+        out.append(f"cb_fb_finish(&{b}, {self.loc(e.span)});")
+        return "({ " + " ".join(out) + " })"
 
     def g_Str(self, e):
         return f"((cb_str){{(const uint8_t *){c_string(e.value)}, {len(e.value)}}})"
@@ -891,6 +1008,7 @@ class CodeGen:
 
     def s_While(self, s):
         self.emit(f"while ({self.strip(self.ex(s.cond))}) {{")
+        self.poll()
         self.loop_bases.append(len(self.dscopes))
         self.block(s.body)
         self.loop_bases.pop()
@@ -898,6 +1016,7 @@ class CodeGen:
 
     def s_Loop(self, s):
         self.emit("for (;;) {")
+        self.poll()
         self.loop_bases.append(len(self.dscopes))
         self.block(s.body)
         self.loop_bases.pop()
@@ -984,6 +1103,7 @@ class CodeGen:
             self.emit(f"for (int64_t {i} = 0; {i} < {n}; {i}++) {{")
             if s.local is not None:
                 self.emit(f"    {et} {var} = {p}[{i}];")
+        self.poll()
         self.loop_bases.append(len(self.dscopes))
         self.block(s.body)
         self.loop_bases.pop()
@@ -1027,6 +1147,7 @@ class CodeGen:
         self.dscopes = [[]]
         self.loop_bases = []
         self.try_stack = []
+        self.poll()
         for loc in getattr(sym, "param_locals", []):
             if loc.glue:
                 self.emit(f"bool {loc.cname}__live = 1;")
@@ -1114,6 +1235,10 @@ class CodeGen:
         while self.glue_todo:
             name, t = self.glue_todo.pop(0)
             glue.append(self.gen_glue(name, t))
+        dbg = []
+        while self.dbg_todo:      # generating one may need more (fields), and the glue/debug passes feed each other
+            name, t = self.dbg_todo.pop(0)
+            dbg.append(self.gen_dbg(name, t))
         fns, bodies, protos, glue = self.prune(fns, bodies, protos, glue)
         for s in ck.fns:     # private prototypes for user-declared C functions, bound to the real symbol
             if s.extern:
@@ -1137,7 +1262,9 @@ class CodeGen:
                     line = f'#include "{val}"'
                     if line not in includes:
                         includes.append(line)
-        gcdef = (["#define CB_GC 1"] if self.gc else []) + (["#define CB_NOSTD 1"] if self.nostd else []) \
+        modedef = {"manual": ["#define CB_GC_MANUAL 1"],
+                   "thread": ["#define CB_GC_THREAD 1", f"#define CB_GC_INTERVAL_MS {self.gc_interval}"]}.get(self.gc_mode, []) if self.gc else []
+        gcdef = (["#define CB_GC 1"] + modedef if self.gc else []) + (["#define CB_NOSTD 1"] if self.nostd else []) \
             + (["#define CB_OVERFLOW_PANIC 1"] if self.overflow_panic else [])
         L = [f"/* Generated by Crumbs from {src_name}. Do not edit. */"] + gcdef + defines + [RUNTIME] + includes
 
@@ -1235,6 +1362,11 @@ class CodeGen:
             L.append("/* destructors */")
             L += [g.split("\n", 1)[0].rstrip(" {") + ";" for g in glue]     # glue functions call each other in any order
             L += glue
+            L.append("")
+        if dbg:
+            L.append("/* debug representations */")
+            L += [g.split("\n", 1)[0].rstrip(" {") + ";" for g in dbg]
+            L += dbg
             L.append("")
         L.append("/* functions */")
         L += bodies

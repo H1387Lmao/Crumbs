@@ -1,0 +1,10 @@
+no automatic collection true
+garbage piled up true
+everything is still in the nursery true
+minor 1 bytes small true
+survivor in gen1 true gen0 empty true
+child kept 8
+mid 1 gen2 holds data true young empty true
+major 1
+total 4
+keep 7 8

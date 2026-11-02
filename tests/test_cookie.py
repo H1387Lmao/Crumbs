@@ -41,6 +41,19 @@ def run_all(report):
         missing = [w for w in want if w not in cmd]
         report("cookie/forwards every option", not missing, f"missing {missing} in: {cmd}")
 
+        r = cookie(proj, "build", "-n", "--gc-mode=thread", "--gc-interval=20")
+        cmd = next((l for l in r.stdout.splitlines() if "crumbs.py build" in l), "")
+        report("cookie/forwards --gc-mode and --gc-interval", "--gc-mode=thread" in cmd and "--gc-interval=20" in cmd, cmd)
+        with open(os.path.join(proj, "project.toml"), "a") as f:
+            f.write('\n[build]\ngc_mode = "manual"\n')
+        r = cookie(proj, "build", "-n")
+        cmd = next((l for l in r.stdout.splitlines() if "crumbs.py build" in l), "")
+        report("cookie/gc_mode from project.toml", "--gc-mode=manual" in cmd, cmd + r.stderr)
+        r = cookie(proj, "build", "-n", "--no-gc")
+        report("cookie/gc_mode needs the collector", r.returncode != 0 and "needs the collector" in r.stderr, r.stdout + r.stderr)
+        with open(os.path.join(proj, "project.toml"), "w") as f:
+            f.write('[project]\nname = "demo"\n')
+
         r = cookie(proj, "run", "-vv")
         report("cookie/-vv shows phase timings", r.returncode == 0 and "[crumbs] lex" in r.stderr and "[crumbs] codegen" in r.stderr
                and "[crumbs] cc" in r.stderr, r.stderr)
@@ -75,6 +88,8 @@ def run_all(report):
                            ('[project]\nname = "x"\n[profile.fast]\nopt = 1\n', "unknown profile"),
                            ('[project]\nname = "x"\n[build]\ngc = "yes"\n', "must be true/false"),
                            ('[project]\nversion = "1"\n', "needs a `name`"),
+                           ('[project]\nname = "x"\n[build]\ngc_mode = "fast"\n', "must be one of auto, thread, manual"),
+                           ('[project]\nname = "x"\n[build]\ngc_interval = 0\n', "between 1 and 60000"),
                            ('[project]\nname = "x"\n[profile.debug]\nopt = 9\n', "must be one of")):
             with open(os.path.join(proj, "project.toml"), "w") as f:
                 f.write(text)

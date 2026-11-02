@@ -958,6 +958,30 @@ class Parser:
         self.expect_op("]", "after index")
         return N("Index", self.sp(start), obj=base, idx=idx)
 
+    def parse_fstr(self, t):
+        """`f"a {expr:spec} b"` -> FStr(parts); a part is FPart(lit=bytes) or FPart(expr=, spec=)."""
+        parts = []
+        for fp in t.val:
+            if fp.lit is not None:
+                parts.append(N("FPart", t.span, lit=fp.lit, expr=None, spec="", spec_span=None))
+                continue
+            toks = list(fp.toks) + [Token("eof", None, fp.span)]
+            if len(toks) == 1:
+                self.d.error(fp.span, "empty `{}` in an interpolated string", label="expected an expression here",
+                             help="write `{name}` or `{a + b}`; use `{{` and `}}` for literal braces")
+                continue
+            saved = (self.toks, self.p, self.no_struct)
+            self.toks, self.p, self.no_struct = toks, 0, False
+            try:
+                ex = self.parse_expr()
+                if self.tok.kind != "eof":
+                    self.d.error(self.tok.span, "unexpected token in an interpolated expression",
+                                 help="only one expression fits between the braces; a format goes after `:`, as in `{x:>8.2f}`")
+            finally:
+                self.toks, self.p, self.no_struct = saved
+            parts.append(N("FPart", fp.span, lit=None, expr=ex, spec=fp.spec, spec_span=fp.spec_span))
+        return N("FStr", t.span, parts=parts)
+
     def parse_primary(self):
         t = self.tok
         k = t.kind
@@ -973,6 +997,9 @@ class Parser:
         if k == "str":
             self.advance()
             return N("Str", t.span, value=t.val)
+        if k == "fstr":
+            self.advance()
+            return self.parse_fstr(t)
         if k == "kw" and t.val in ("true", "false"):
             self.advance()
             return N("Bool", t.span, value=(t.val == "true"))

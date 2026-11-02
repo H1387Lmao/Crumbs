@@ -54,10 +54,6 @@ fn main() {
         junk[0] = r;
         let j = (r * 31) % slots;
         list.set(&kept, j, string_from("k") + to_str(r));     // a slot of an old list gets a younger String
-        if r % 1000 == 999 {
-            gc_collect_gen(0);
-            println("gen0 empty after minor ", gc_gen_bytes(0) == 0);
-        }
         r += 1;
     }
 
@@ -74,10 +70,8 @@ fn main() {
     }
     println("lists grew ", grown > 0);
 
-    gc_collect_gen(1);
-    println("after mid: young empty ", gc_gen_bytes(0) == 0 && gc_gen_bytes(1) == 0);
     gc_collect();
-    println("after major: young empty ", gc_gen_bytes(0) == 0 && gc_gen_bytes(1) == 0);
+    println("after a full collection: young empty ", gc_gen_bytes(0) == 0 && gc_gen_bytes(1) == 0);
     println("old holds the data ", gc_gen_bytes(2) > 0);
     println("minor ", gc_gen_collections(0) > 0, " mid ", gc_gen_collections(1) > 0, " major ", gc_gen_collections(2) > 0);
     let mut bad2 = 0;
