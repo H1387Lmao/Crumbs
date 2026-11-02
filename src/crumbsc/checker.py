@@ -9,7 +9,7 @@ from .timing import TIMINGS
 from .diag import suggest
 from .parser import N, Parser
 from .types import (INTS, PRIMS, Ty, I8, I16, I32, I64, U8, U16, U32, U64, F32, F64, BOOL, STR, VOID,
-                    ERR, POISON, STRING, REGION, ptr, arr, slc, eu, fnty, same)
+                    ERR, POISON, STRING, REGION, ptr, arr, slc, eu, opt, fnty, same)
 
 BUILTINS = {"print", "println", "format", "panic", "assert", "alloc", "free", "exit", "to_str",
             "string_new", "string_from", "string_clear",
@@ -399,6 +399,8 @@ class Checker:
             return f"[{getattr(tn.size, 'value', '?')}]" + self.canon(tn.inner, m, selfc)
         if k == "TErrUnion":
             return self.canon(tn.inner, m, selfc) + "!"
+        if k == "TOpt":
+            return self.canon(tn.inner, m, selfc) + "?"
         if k == "TFn":
             ret = self.canon(tn.ret, m, selfc) if tn.ret is not None else "void"
             return "fn(" + ",".join(self.canon(x, m, selfc) for x in tn.params) + ")->" + ret
@@ -416,6 +418,8 @@ class Checker:
             return f"[{getattr(tn.size, 'value', '..')}]" + self.tn_text(tn.inner)
         if k == "TErrUnion":
             return self.tn_text(tn.inner) + "!"
+        if k == "TOpt":
+            return self.tn_text(tn.inner) + "?"
         if k == "TFn":
             return f"fn({', '.join(self.tn_text(x) for x in tn.params)})" + (f" -> {self.tn_text(tn.ret)}" if tn.ret is not None else "")
         return "?"
@@ -720,6 +724,15 @@ class Checker:
             if inner.poison or not self.sized(inner, tn.span):
                 return POISON
             return arr(inner, n)
+        if k == "TOpt":
+            inner = self.resolve_type(tn.inner, m)
+            if inner.poison:
+                return POISON
+            if inner.kind in ("eu", "opt"):
+                self.d.error(tn.span, f"`{inner}?` is not allowed: optional and error types cannot be stacked",
+                             help="use one of them, or wrap one in a struct")
+                return POISON
+            return opt(inner)
         if k == "TErrUnion":
             inner = self.resolve_type(tn.inner, m, allow_void=True)
             if inner.poison:
@@ -1281,7 +1294,7 @@ class Checker:
         k = t.kind
         if t == STRING:
             return True                 # an owned String frees its buffer when it goes out of scope
-        if k == "arr":
+        if k in ("arr", "opt"):
             return self.has_glue(t.inner)
         if k != "struct":
             return False
@@ -1307,7 +1320,7 @@ class Checker:
             e.move = True
             self.moved[e.local] = e.span
             return
-        if k in ("Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch"):
+        if k in ("Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch", "Ternary"):
             e.owned = True              # a temporary whose ownership passes to the receiver
             return
         what = None
@@ -1396,7 +1409,19 @@ class Checker:
 
     def expect(self, e, exp, eu_ok=False):
         t = self.check(e, exp, eu=eu_ok)
+        return self.coerce(e, t, exp)
+
+    def coerce(self, e, t, exp):
+        """Convert the checked expression `e` (of type `t`) implicitly to `exp`, or report a mismatch."""
         e.conv = None
+        e.wrap_opt = None
+        if exp.kind == "opt" and not same(t, exp):
+            if t.poison:
+                return POISON
+            if self.coerce(e, t, exp.inner).poison:
+                return POISON
+            e.wrap_opt = exp                                 # a plain value becomes `Some(value)`
+            return exp
         if exp == STR and t == STRING:
             e.coerce = True
             return exp
@@ -1422,8 +1447,12 @@ class Checker:
             return self.untyped(e.l) and self.untyped(e.r)
         return False
 
+    def is_null(self, e):
+        return e.kind == "Ident" and e.name == "null" and not self.lookup("null")
+
     def check(self, e, exp=None, eu=False):
-        t = getattr(self, "ex_" + e.kind)(e, exp)
+        hint = exp.inner if (exp is not None and exp.kind == "opt" and not self.is_null(e) and e.kind != "Ternary") else exp
+        t = getattr(self, "ex_" + e.kind)(e, hint)
         e.ty = t
         if t.kind == "eu" and not eu and self.fn is not None and self.fn.try_stack and e.kind == "Call":
             return self.auto_try(e, t)
@@ -1502,6 +1531,124 @@ class Checker:
     def ex_Str(self, e, exp):
         return STR
 
+    # ----------------------------------------------- optionals, ternary
+    def ex_Coalesce(self, e, exp):
+        """`a ?? b`: `a` if it holds a value (or is a non-null pointer), else `b`."""
+        lt = self.check(e.l, None)
+        if lt.poison:
+            self.check(e.r)
+            return POISON
+        if lt.kind == "opt":
+            T, e.cmode = lt.inner, "opt"
+        elif lt.kind == "ptr":
+            T, e.cmode = lt, "ptr"
+        else:
+            self.d.error(e.l.span, f"the left side of `??` must be optional or a pointer, found `{lt}`",
+                         label="this can never be empty",
+                         help="declare it as `T?`, e.g. `let name: str? = null;`")
+            self.check(e.r)
+            return POISON
+        e.l.conv = None
+        rt = self.check(e.r, T)
+        if e.cmode == "opt" and rt.kind == "opt" and same(rt.inner, T):
+            e.r.conv = None
+            e.chain = True
+            return rt                                              # `a ?? b` with an optional `b` stays optional
+        e.chain = False
+        if self.coerce(e.r, rt, T).poison:
+            return POISON
+        self.consume(e.l)
+        return T
+
+    def ex_Ternary(self, e, exp):
+        self.expect(e.cond, BOOL)
+        r = self.ternary_arms(e, exp)
+        if not r.poison:
+            self.consume(e.a)               # the chosen arm's value is the result: an owned arm moves into it
+            self.consume(e.b)
+        return r
+
+    def ternary_arms(self, e, exp):
+        if exp is not None and exp.kind == "opt":
+            self.expect(e.a, exp)
+            self.expect(e.b, exp)
+            return exp
+        if self.untyped(e.a) and not self.untyped(e.b):
+            tb = self.check(e.b, exp)
+            if tb.poison:
+                self.check(e.a)
+                return POISON
+            self.expect(e.a, tb)
+            e.b.conv = None
+            return tb
+        ta = self.check(e.a, exp)
+        if ta.poison:
+            self.check(e.b)
+            return POISON
+        e.a.conv = None
+        if self.expect(e.b, ta).poison:
+            return POISON
+        return ta
+
+    def ex_OptPayload(self, e, exp):
+        return e.ty
+
+    def ex_OptChain(self, e, exp):
+        """`a?.b` / `a?.f(x)`: the field or call result, or nothing when `a` is empty (or a null pointer)."""
+        ot = self.check(e.obj, None)
+        args = e.args or []
+        if ot.poison:
+            for a in args:
+                self.check(a)
+            return POISON
+        if ot.kind == "opt":
+            pt, e.cmode = ot.inner, "opt"
+        elif ot.kind == "ptr" and ot.inner != VOID:
+            pt, e.cmode = ot, "ptr"
+        else:
+            self.d.error(e.obj.span, f"`?.` needs an optional value or a pointer, found `{ot}`",
+                         label="this is never empty", help="use `.` for values that are always present")
+            for a in args:
+                self.check(a)
+            return POISON
+        self.push()
+        loc = self.declare_local("$opt", pt, True, e.span)
+        loc.used = True
+        e.payload_local = loc
+        base = N("Ident", e.span, name="$opt")
+        node = N("Field", e.span, obj=base, name=e.name, name_span=e.name_span)
+        if e.args is not None:
+            node = N("Call", e.span, callee=node, args=list(e.args), targ=None, targs=None)
+        e.inner = node
+        it = self.check(node, None)
+        self.pop()
+        if it.poison:
+            return POISON
+        if it == VOID:
+            self.d.error(e.span, "`?.` needs a result: this call returns nothing", help="use `if x != null { x.f(); }` instead")
+            return POISON
+        e.flat = it.kind == "opt"
+        return it if e.flat else opt(it)
+
+    OPT_METHODS = ("is_some", "is_none", "unwrap", "unwrap_or")
+
+    def opt_method(self, e):
+        c = e.callee
+        t = c.obj.ty.inner
+        n = c.name
+        want = 1 if n == "unwrap_or" else 0
+        if len(e.args) != want:
+            self.d.error(e.span, f"`{n}` takes {want} argument{'s' if want != 1 else ''} but {len(e.args)} were supplied")
+            for a in e.args:
+                self.check(a)
+            return POISON
+        e.opt_method = n
+        if n in ("is_some", "is_none"):
+            return BOOL
+        if n == "unwrap_or":
+            self.expect(e.args[0], t)
+        return t
+
     # ------------------------------------------------------- Display / interpolation
     def display_impl(self, t):
         """The `to_string` method of `impl Display for T`, or None."""
@@ -1522,8 +1669,10 @@ class Checker:
         return call if not ty.poison else None
 
     def display_help(self, t):
+        if t.kind == "opt":
+            return "unwrap it first (`x ?? default`, `x.unwrap()`), or show it with `{x:?}`"
         if t.kind in ("struct", "enum", "arr", "slice"):
-            return "implement `Display` for it (`impl Display for T { fn to_string(self) -> String { .. } }`), or use `f\"{x:?}\"` for the automatic representation"
+            return "implement `Display` for it (`impl Display for T { fn to_string(self) -> String { .. } }`), or use `{x:?}` for the automatic representation"
         return None
 
     DEBUG_KINDS = ("struct", "enum", "arr", "slice", "ptr", "fn")
@@ -1532,7 +1681,7 @@ class Checker:
         """Can the automatic `{:?}` representation show a value of type `t`? Returns the offending type or None."""
         if t.poison or t.is_numeric or t in (BOOL, STR, STRING, ERR) or t.kind in ("enum", "ptr", "fn"):
             return None
-        if t.kind in ("arr", "slice"):
+        if t.kind in ("arr", "slice", "opt"):
             return self.debuggable(t.inner)
         if t.kind == "struct":
             seen = seen or set()
@@ -1708,12 +1857,12 @@ class Checker:
     def ex_Ident(self, e, exp):
         if e.name == "null" and not self.lookup("null"):
             e.is_null = True
-            if exp is not None and exp.kind in ("ptr", "fn"):
+            if exp is not None and exp.kind in ("ptr", "fn", "opt"):
                 return exp
             if exp is not None and exp.poison:
                 return POISON
-            self.d.error(e.span, "cannot infer the pointer type of `null`",
-                         help="write `null as *T`, or give the variable a pointer type, e.g. `let p: *i32 = null;`")
+            self.d.error(e.span, "cannot infer the type of `null`",
+                         help="write `null as *T`, or give the variable a pointer or optional type, e.g. `let p: *i32 = null;` or `let n: i32? = null;`")
             return POISON
         loc = self.lookup(e.name)
         if loc:
@@ -1926,7 +2075,7 @@ class Checker:
             if t.poison:
                 return t
             if not self.is_place(e.expr) and getattr(e, "auto_ref", False) and e.expr.kind in (
-                    "Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch", "Cast", "Field", "Index"):
+                    "Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch", "Ternary", "Cast", "Field", "Index"):
                 e.temp = True                   # `make().method()`: the receiver is a temporary that lives for the statement
                 return ptr(t)
             if not self.is_place(e.expr):
@@ -1991,6 +2140,25 @@ class Checker:
                                  help="compare explicitly, e.g. `x != 0`" if t.is_numeric else None)
                     return BOOL
             return BOOL
+        if op == "??":
+            return self.ex_Coalesce(e, exp)
+        if op in ("==", "!=") and (self.is_null(l) or self.is_null(r)) and not (self.is_null(l) and self.is_null(r)):
+            other = r if self.is_null(l) else l
+            ot = self.check(other, None)
+            if ot.kind == "opt":
+                e.opt_null = True
+                e.opt_side = "l" if other is l else "r"            # which operand holds the optional
+                e.opty = BOOL
+                nul = l if other is r else r
+                nul.is_null = True
+                nul.ty = ot
+                nul.conv = None
+                other.conv = None
+                return BOOL
+            if ot.poison:
+                return BOOL
+            # not an optional: fall through to the ordinary pointer comparison
+            e.l.conv = e.r.conv = None
         arith_like = op in ARITH or op in BITWISE
         if op in SHIFT:
             lt = self.check(l, exp if exp is not None and exp.is_int else None)
@@ -2544,6 +2712,8 @@ class Checker:
             hit = self.find_method(e)
             if hit == "bad":
                 return POISON
+            if hit == "opt":
+                return self.opt_method(e)
             if hit is not None:
                 ent = ("sym", hit)
         if ent is None or ent[0] != "sym" or ent[1].kind != "fn":
@@ -2621,6 +2791,8 @@ class Checker:
             for a in e.args:
                 self.check(a)
             return "bad"
+        if ot.kind == "opt" and c.name in self.OPT_METHODS:
+            return "opt"
         base = ot.inner if (ot.kind == "ptr" and ot.inner != VOID) else ot
         if base.kind == "struct" and c.name in base.sym.field_map:
             return None
@@ -2956,12 +3128,19 @@ class Checker:
                              help="end the block with `return`, `throw`, `break`, `continue` or `panic(...)`, "
                                   "or use `catch <default value>`")
         else:
+            e.binder_local = None
+            self.push()
+            if e.binder:
+                loc = self.declare_local(e.binder, ERR, False, e.binder_span)
+                loc.used = True
+                e.binder_local = loc
             if T == VOID:
                 self.d.error(h.span, "a default value makes no sense here: the call yields no value",
                              help="use `catch { ... }` or `catch |e| { ... }`")
                 self.check(h)
             else:
                 self.expect(h, T)
+            self.pop()
         return T
 
     def check_handler_loosely(self, e):
@@ -3009,7 +3188,9 @@ class Checker:
             t = STR
         s.init.conv = None
         if ann is not None:
-            if ann.is_numeric and t.is_numeric and t != ann:
+            if ann.kind == "opt" and not same(t, ann):
+                self.coerce(s.init, t, ann)
+            elif ann.is_numeric and t.is_numeric and t != ann:
                 self.implicit_conv(s.init, t, ann)
             elif self.ptr_ok(ann, t):
                 pass

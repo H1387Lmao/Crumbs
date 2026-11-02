@@ -24,7 +24,7 @@ class ParseAbort(Exception):
 
 
 BIN_PREC = {
-    "||": 2, "&&": 3,
+    "??": 1, "||": 2, "&&": 3,
     "==": 4, "!=": 4, "<": 4, ">": 4, "<=": 4, ">=": 4,
     "|": 5, "^": 6, "&": 7, "<<": 8, ">>": 8,
     "+": 9, "-": 9,
@@ -549,6 +549,16 @@ class Parser:
 
     def parse_type(self):
         t = self.tok
+        ty = self.parse_type_base()
+        while self.is_op("?") or self.is_op("??"):                 # `T?`: a value or nothing
+            q = self.advance()
+            if ty.kind == "TOpt" or q.val == "??":
+                self.fail("optional types cannot be nested", tok=q, help="`T??` is the same as `T?`")
+            ty = N("TOpt", t.span.join(q.span), inner=ty)
+        return ty
+
+    def parse_type_base(self):
+        t = self.tok
         if t.kind == "op" and t.val == "*":
             self.advance()
             inner = self.parse_type()
@@ -773,7 +783,16 @@ class Parser:
     # -------------------------------------------------------- expressions
     def parse_expr(self):
         start = self.tok
-        lhs = self.parse_bin(2)
+        lhs = self.parse_bin(1)
+        if self.is_op("?"):                                        # cond ? a : b
+            self.advance()
+            saved = self.no_struct
+            self.no_struct = False
+            a = self.parse_expr()
+            self.no_struct = saved
+            self.expect_op(":", "in the `cond ? a : b` expression")
+            b = self.parse_expr()
+            lhs = N("Ternary", self.sp(start), cond=lhs, a=a, b=b)
         while self.is_kw("catch"):
             self.advance()
             binder = None
@@ -788,7 +807,7 @@ class Parser:
             else:
                 if binder is not None:
                     self.fail("expected `{` after `catch |name|`")
-                handler = self.parse_bin(2)
+                handler = self.parse_bin(1)
             lhs = N("Catch", self.sp(start), expr=lhs, binder=binder.val if binder else None,
                     binder_span=binder.span if binder else None, handler=handler)
         return lhs
@@ -890,6 +909,34 @@ class Parser:
                 self.no_struct = False
                 e = self.parse_index_tail(start, e)
                 self.no_struct = saved
+            elif t.val == "?." :                      # optional chain: `a?.b`, `a?.f(x)`
+                self.advance()
+                nm = self.expect_ident("field or method name")
+                args = None
+                if self.is_op("("):
+                    self.advance()
+                    args = self.parse_args()
+                e = N("OptChain", self.sp(start), obj=e, name=nm.val, name_span=nm.span, args=args)
+            elif t.val == "?" and self.is_op("??", 1):  # `name? ?? "x"`: the `?` just marks the chain as optional
+                self.advance()
+            elif t.val == "." and self.is_kw("catch", 1) and self.is_op("(", 2):     # expr.catch(|e| handler)
+                self.advance()
+                self.advance()
+                self.advance()
+                binder = None
+                if self.accept_op("|"):
+                    binder = self.expect_ident("error binding")
+                    self.expect_op("|", "after the error name")
+                saved = self.no_struct
+                self.no_struct = False
+                if self.is_op("{"):
+                    handler = self.parse_block()
+                else:
+                    handler = self.parse_expr()
+                self.no_struct = saved
+                self.expect_op(")", "after the catch handler")
+                e = N("Catch", self.sp(start), expr=e, binder=binder.val if binder else None,
+                      binder_span=binder.span if binder else None, handler=handler, lambda_form=True)
             elif t.val == ".":
                 self.advance()
                 nm = self.expect_ident("field name")

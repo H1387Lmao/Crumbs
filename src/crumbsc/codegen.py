@@ -1,7 +1,7 @@
 """C code generation from the type-annotated AST."""
 from .runtime import RUNTIME
 from .timing import TIMINGS
-from .types import INTS, STR, STRING, BOOL, VOID, ERR
+from .types import INTS, STR, STRING, BOOL, VOID, ERR, opt as opt_ty
 
 C_RESERVED = set("""
 auto break case char const continue default do double else enum extern float for goto if inline int long
@@ -75,6 +75,7 @@ class CodeGen:
         self.dbg_todo = []
         self.slices = []
         self.eus = []
+        self.opts = []
         self.fnts = []
         self.cur_ret = VOID
         self.dscopes = []        # per C scope: locals whose type has a destructor
@@ -129,6 +130,14 @@ class CodeGen:
             name = f"cb_fn_{len(self.reg) + 1}"
             self.reg[t.key] = name
             self.fnts.append(f"typedef {ret} (*{name})({', '.join(ps) or 'void'});")
+            return name
+        if k == "opt":
+            if t.key in self.reg:
+                return self.reg[t.key]
+            self.ctype(t.inner)
+            name = f"cb_opt_{len(self.reg) + 1}"
+            self.reg[t.key] = name
+            self.opts.append((name, t))
             return name
         if k in ("arr", "slice", "eu"):
             if t.key in self.reg:
@@ -218,7 +227,10 @@ class CodeGen:
                 c = f"cb_cvt_{dst.name}((__int128)({c}), {self.loc(e.span)})"
             else:
                 c = f"(({self.ctype(dst)})({c}))"
-        if (self.stmt_temps is not None and e.kind in ("Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch")
+        wrap = getattr(e, "wrap_opt", None)
+        if wrap is not None:                  # a plain value where an optional is expected
+            c = f"(({self.ctype(wrap)}){{1, {c}}})"
+        if (self.stmt_temps is not None and e.kind in ("Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch", "Ternary")
                 and not getattr(e, "owned", False) and e.ty is not None and not e.ty.poison and e.ty.kind != "eu"
                 and self.ck.has_glue(e.ty)):
             # a temporary that is only borrowed (printed, viewed, compared, ...): destroy it after the statement
@@ -281,6 +293,8 @@ class CodeGen:
             L.append(f"    cb_fb_cstr(b, {t.sym.cname}__names[*p]);")
         elif t.kind in ("ptr", "fn"):
             L.append("    cb_fb_ptr(b, (const void *)*p);")
+        elif t.kind == "opt":
+            L.append(f'    if (p->has) {self.dbg_fn(t.inner)}(b, &p->v); else cb_fb_cstr(b, "null");')
         elif t.kind in ("arr", "slice"):
             inner = self.dbg_fn(t.inner)
             n = str(t.n) if t.kind == "arr" else "p->len"
@@ -368,6 +382,8 @@ class CodeGen:
 
     def g_Ident(self, e):
         if getattr(e, "is_null", False):
+            if e.ty.kind == "opt":
+                return f"(({self.ctype(e.ty)}){{0}})"
             return f"(({self.ctype(e.ty)})0)"
         loc = getattr(e, "local", None)
         if loc is not None:
@@ -452,6 +468,11 @@ class CodeGen:
         raise AssertionError(op)
 
     def g_Binary(self, e):
+        if e.op == "??":
+            return self.g_Coalesce_(e)
+        if getattr(e, "opt_null", False):
+            x = self.ex(e.l if e.opt_side == "l" else e.r)
+            return f"(({x}).has)" if e.op == "!=" else f"(!({x}).has)"
         if e.op == "+" and getattr(e, "strk", None):
             parts = []
 
@@ -557,6 +578,19 @@ class CodeGen:
         b = getattr(e, "builtin", None)
         if b:
             return getattr(self, "b_" + b)(e)
+        om = getattr(e, "opt_method", None)
+        if om:
+            obj = e.callee.obj
+            x = self.ex(obj)
+            if om == "is_some":
+                return f"(({x}).has)"
+            if om == "is_none":
+                return f"(!({x}).has)"
+            t = self.tmp()
+            if om == "unwrap":
+                return (f'({{ {self.ctype(obj.ty)} {t} = {x}; '
+                        f'if (CB_UNLIKELY(!{t}.has)) cb_panic({self.loc(e.span)}, "`unwrap` on an empty optional"); {t}.v; }})')
+            return f"({{ {self.ctype(obj.ty)} {t} = {x}; {t}.has ? {t}.v : ({self.ex(e.args[0])}); }})"
         args = ", ".join(self.ex(a) for a in e.args)
         if getattr(e, "indirect", False):
             return f"{self.nn(self.ex(e.callee), e.callee.ty, e.span)}({args})"
@@ -772,6 +806,36 @@ class CodeGen:
         self.ind -= 1
         self.emit("}")
 
+    def g_Ternary(self, e):
+        return f"(({self.ex(e.cond)}) ? ({self.ex(e.a)}) : ({self.ex(e.b)}))"
+
+    def g_OptPayload(self, e):
+        raise AssertionError("payload placeholder")
+
+    def g_Coalesce_(self, e):
+        ot = e.l.ty
+        t = self.tmp()
+        if e.cmode == "ptr":
+            return f"({{ {self.ctype(ot)} {t} = {self.ex(e.l)}; {t} ? {t} : ({self.ex(e.r)}); }})"
+        if e.chain:
+            return f"({{ {self.ctype(ot)} {t} = {self.ex(e.l)}; {t}.has ? {t} : ({self.ex(e.r)}); }})"
+        return f"({{ {self.ctype(ot)} {t} = {self.ex(e.l)}; {t}.has ? {t}.v : ({self.ex(e.r)}); }})"
+
+    def g_OptChain(self, e):
+        ot = e.obj.ty
+        t, r = self.tmp(), self.tmp()
+        loc = e.payload_local
+        rt = self.ctype(e.ty)
+        if e.cmode == "opt":
+            cond, bind = f"{t}.has", f"{self.ctype(ot.inner)} {loc.cname} = {t}.v;"
+        else:
+            cond, bind = f"{t} != NULL", f"{self.ctype(ot)} {loc.cname} = {t};"
+        live = f"bool {loc.cname}__live = 0; (void){loc.cname}__live;"
+        inner = self.ex(e.inner)
+        val = inner if e.flat else f"(({rt}){{1, {inner}}})"
+        return (f"({{ {self.ctype(ot)} {t} = {self.ex(e.obj)}; {rt} {r} = ({rt}){{0}}; "
+                f"if ({cond}) {{ {bind} {live} {r} = {val}; }} {r}; }})")
+
     def g_Catch(self, e):
         t = self.tmp()
         lt = e.expr.ty
@@ -779,6 +843,8 @@ class CodeGen:
         call = self.ex(e.expr)
         h = e.handler
         if h.kind != "Block":
+            if getattr(e, "binder_local", None) is not None:
+                return (f"({{ {self.ctype(lt)} {t} = {call}; {t}.err ? ({{ int32_t {e.binder_local.cname} = {t}.err; {self.ex(h)}; }}) : {t}.val; }})")
             return f"({{ {self.ctype(lt)} {t} = {call}; {t}.err ? ({self.ex(h)}) : {t}.val; }})"
         saved_ind = self.ind
         body_lines = []
@@ -872,6 +938,8 @@ class CodeGen:
             L.append("    p->ptr = 0; p->len = 0; p->cap = 0;")
         elif t.kind == "arr":
             L.append(f"    for (int64_t i = 0; i < {t.n}; i++) {self.glue_fn(t.inner)}(&p->v[i]);")
+        elif t.kind == "opt":
+            L.append(f"    if (p->has) {self.glue_fn(t.inner)}(&p->v);")
         else:
             d = self.ck.drop_fn_of(t.sym)
             if d is not None:
@@ -1277,10 +1345,13 @@ class CodeGen:
             comps[("s", s.full)] = s
         for name, t, _ in self.arrs:
             comps[("a", t.key)] = (name, t)
+        for name, t in self.opts:
+            comps[("o", t.key)] = (name, t)
         fwd = [f"typedef struct {s.cname} {s.cname};" for s in ck.structs]
         fwd += [f"typedef struct {name} {name};" for name, _, _ in self.arrs]
         fwd += [f"typedef struct {name} {name};" for name, _, _ in self.slices]
         fwd += [f"typedef struct {name} {name};" for name, _, _ in self.eus]
+        fwd += [f"typedef struct {name} {name};" for name, _ in self.opts]
         L.append("/* forward declarations */")
         L += fwd
         L.append("")
@@ -1320,6 +1391,8 @@ class CodeGen:
                 yield ("s", t.sym.full)
             elif t.kind == "arr":
                 yield ("a", t.key)
+            elif t.kind == "opt":
+                yield ("o", t.key)
 
         def emit_comp(key):
             if key in done:
@@ -1336,6 +1409,11 @@ class CodeGen:
                         emit_comp(d)
                 body = " ".join(f"{self.ctype(ft)} {self.fld(fn)};" for fn, ft, _ in node.fields)
                 L.append(f"struct {node.cname} {{ {body} }};")
+            elif key[0] == "o":
+                name, t = node
+                for d in deps_of(t.inner):
+                    emit_comp(d)
+                L.append(f"struct {name} {{ bool has; {self.ctype(t.inner)} v; }};")
             else:
                 name, t = node
                 for d in deps_of(t.inner):

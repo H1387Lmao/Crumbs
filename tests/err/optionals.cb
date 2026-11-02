@@ -1,0 +1,19 @@
+// Misusing optionals, `??`, `?.` and the ternary operator.
+fn find() -> i32? { return null; }
+fn fails() -> i32! { return 1; }
+fn main() {
+    let a = find();
+    let n: i32 = find(); // ERROR: mismatched types
+    let k = 5 ?? 1; // ERROR: the left side of `??` must be optional or a pointer, found `i32`
+    let m = 5?.x; // ERROR: `?.` needs an optional value or a pointer, found `i32`
+    let q = a ?? "text"; // ERROR: mismatched types
+    println(a); // ERROR: cannot print a value of type `i32?`
+    let t = true ? 1 : "two"; // ERROR: mismatched types
+    let u = 1 ? 2 : 3; // ERROR: mismatched types
+    let w: str? = 5; // ERROR: mismatched types
+    a.unwrap(1); // ERROR: `unwrap` takes 0 arguments but 1 were supplied
+    let z = null; // ERROR: cannot infer the type of `null`
+    let g = 5.catch(|e| 0); // ERROR: `catch` needs an expression that can fail
+    let h = find().catch(|e| 0); // ERROR: `catch` needs an expression that can fail
+    let ok = fails().catch(|e| 0);
+}
