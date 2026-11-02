@@ -98,11 +98,7 @@ pub fn current_id() -> u64 { return pthread_self(); }
 pub fn yield_now() { sched_yield(); }
 pub fn cpu_count() -> i64 { return sysconf(_SC_NPROCESSORS_ONLN); }
 
-pub fn sleep_ms(ms: i64) {
-    cb_gc_blocking_begin();
-    time.sleep_ms(ms);
-    cb_gc_blocking_end();
-}
+pub fn sleep_ms(ms: i64) { time.sleep_ms(ms); }      // std.time marks the sleep as a collector safepoint
 
 // ---- Mutex ---------------------------------------------------------------------------------------
 // Make one with Mutex.new() and share the pointer between threads.

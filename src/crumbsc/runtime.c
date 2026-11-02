@@ -28,6 +28,7 @@ typedef struct { const uint8_t *ptr; int64_t len; } cb_str;
 
 #ifdef CB_NOSTD
 #define cb_wb_range(p, n) ((void)0)       /* no collector, so no write barrier */
+#define cb_gc_poll() ((void)0)
 /* no libc: a panic just traps (there is nothing to print with) */
 CB_COLD static void cb_panic(const char *loc, const char *msg) { (void)loc; (void)msg; __builtin_trap(); }
 CB_COLD static void cb_panic_str(const char *loc, cb_str m) { (void)loc; (void)m; __builtin_trap(); }
@@ -257,6 +258,7 @@ static void cb_gc_collect_gen(int64_t g, const char *loc) { (void)g; (void)loc; 
 static int64_t cb_gc_gen_bytes(int64_t g, const char *loc) { (void)g; (void)loc; return 0; }
 static int64_t cb_gc_gen_collections(int64_t g, const char *loc) { (void)g; (void)loc; return 0; }
 #define cb_wb_range(p, n) ((void)0)
+#define cb_gc_poll() ((void)0)
 void cb_gc_write_barrier(const void *p, size_t n) { (void)p; (void)n; }
 #define CB_GC_INIT() ((void)0)
 /* without the collector there is nothing for threads to coordinate with */
@@ -281,6 +283,15 @@ void cb_gc_blocking_end(void) {}
                                                                                   cards are dirty)
        major  collects everything. Survivors of 0 and 1 move to generation 2; generation 2 is swept lazily.
    gc_collect() runs a major collection and finishes the sweep.
+
+   Three modes (chosen at build time, see --gc-mode):
+       auto    (default) the allocator starts a collection itself when the nursery is full.
+       manual  nothing is collected unless the program asks (gc_collect, gc_collect_gen), except as a last resort
+               when the system is out of memory. For programs that want to choose their own pause points.
+       thread  a background collector thread wakes every CB_GC_INTERVAL_MS milliseconds (and early when the nursery
+               is full) and collects. Threads are stopped at safepoints: the compiler emits a cheap poll at every
+               function entry and loop iteration, plus allocations and blocking calls are safepoints too. Allocation
+               only collects by itself as an emergency, when the nursery has grown to 8 times its limit.
 
    A collection marks only the generations it collects: their blocks are painted white and put in a sorted index,
    and a pointer is followed only if it lands inside an indexed block. A pointer into an older generation is
@@ -311,6 +322,7 @@ void cb_gc_blocking_end(void) {}
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
+#include <errno.h>
 #include <time.h>
 typedef struct cb_hdr { size_t n; struct cb_hdr *prev, *next; uintptr_t flags; } cb_hdr;   /* flags: bit 1 atomic, bits 2-3 colour, bits 4-5 generation, bit 6 verify mark */
 #define CB_HDR_ATOMIC 2u
@@ -335,6 +347,9 @@ typedef struct cb_hdr { size_t n; struct cb_hdr *prev, *next; uintptr_t flags; }
 #ifndef CB_GC_MAJOR_MIN
 #define CB_GC_MAJOR_MIN ((size_t)16 << 20)   /* generation 2 must grow by at least this much (and by as much as it held) before a major one */
 #endif
+#ifndef CB_GC_INTERVAL_MS
+#define CB_GC_INTERVAL_MS 100                /* thread mode: how often the collector thread wakes up */
+#endif
 #ifndef CB_GC_CARD_BUDGET
 #define CB_GC_CARD_BUDGET 8192               /* dirty cards in old memory that make the next collection a mid one */
 #endif
@@ -346,10 +361,25 @@ static size_t cb_gc_gbytes[3], cb_gc_live, cb_gc_marked, cb_gc_runs[3];
 static size_t cb_gc_trigger = CB_GC_NURSERY, cb_gc_g2_grow, cb_gc_g2_limit = CB_GC_MAJOR_MIN, cb_gc_ndirty;
 static unsigned cb_gc_minors_since_mid;
 static int cb_gc_force_major;
+#ifdef CB_GC_THREAD
+#define cb_gc_collector_owns_sweep 1     /* thread mode: the collector thread does the lazy sweep, allocations do not */
+#else
+#define cb_gc_collector_owns_sweep 0
+#endif
 static void *cb_gc_stack_bottom;
 static cb_hdr **cb_gc_idx; static size_t cb_gc_nidx;      /* sorted index of the blocks being collected */
 static cb_hdr **cb_gc_work; static size_t cb_gc_nwork, cb_gc_capwork;
+#ifdef CB_GC_THREAD
+static void cb_gc_collector_start(void);
+static volatile int cb_gc_stop;                  /* a collection is waiting for every thread to reach a safepoint */
+static void cb_gc_park(void);
+static void cb_gc_request(void);
+#define CB_GC_INIT() (cb_gc_stack_bottom = __builtin_frame_address(0), cb_gc_collector_start())
+#define cb_gc_poll() do { if (CB_UNLIKELY(cb_gc_stop)) cb_gc_park(); } while (0)
+#else
 #define CB_GC_INIT() (cb_gc_stack_bottom = __builtin_frame_address(0))
+#define cb_gc_poll() ((void)0)
+#endif
 
 /* ---- the card table: one bit per 512 bytes of address space, in leaves of 2^21 cards (1 GiB) ---- */
 #define CB_CARD_SHIFT 9
@@ -721,14 +751,14 @@ __attribute__((noinline, no_sanitize("address"))) static void cb_gc_roots(void) 
     cb_region_roots();                       /* pointers stored inside live regions keep their targets alive */
 }
 /* level 0 = minor, 1 = mid, 2 = major */
-__attribute__((noinline, no_sanitize("address"))) static void cb_gc_collect_locked(int level) {
+__attribute__((noinline, no_sanitize("address"))) static int cb_gc_collect_impl(int level) {
     if (cb_gc_force_major) level = 2;
-    if (!cb_gc_stop_world()) { cb_gc_trigger = cb_gc_gbytes[0] + CB_GC_NURSERY; return; }   /* a thread is busy: try again later */
+    if (!cb_gc_stop_world()) { cb_gc_trigger = cb_gc_gbytes[0] + CB_GC_NURSERY; return 0; }   /* a thread is busy: try again later */
     if (level == 2) cb_gc_sweep_step((size_t)-1);                    /* finish the previous major's sweep before repainting */
     size_t n = 0;
     for (int g = 0; g <= level; g++) for (cb_hdr *h = cb_gc_head[g]; h; h = h->next) n++;
     cb_gc_idx = (cb_hdr **)malloc((n ? n : 1) * sizeof *cb_gc_idx);
-    if (!cb_gc_idx) return;
+    if (!cb_gc_idx) return 0;
     cb_gc_nidx = 0;
     for (int g = 0; g <= level; g++)
         for (cb_hdr *h = cb_gc_head[g]; h; h = h->next) { CB_SETCOLOR(h, CB_WHITE); cb_gc_idx[cb_gc_nidx++] = h; }
@@ -759,6 +789,17 @@ __attribute__((noinline, no_sanitize("address"))) static void cb_gc_collect_lock
     } else cb_gc_minors_since_mid++;
     cb_gc_runs[level]++;
     cb_gc_trigger = CB_GC_NURSERY;
+    return 1;
+}
+static int cb_gc_collect_locked(int level) {      /* returns 0 if it had to give up because a thread would not stop */
+#ifdef CB_GC_THREAD
+    cb_gc_stop = 1;                          /* ask every thread to park at its next safepoint */
+#endif
+    int ok = cb_gc_collect_impl(level);
+#ifdef CB_GC_THREAD
+    cb_gc_stop = 0;
+#endif
+    return ok;
 }
 static int cb_gc_pick_level(void) {
     if (cb_gc_force_major || cb_gc_g2_grow >= cb_gc_g2_limit) return 2;
@@ -770,9 +811,19 @@ static void *cb_mem_alloc(size_t n, int atomic) {
         extern void *__libc_stack_end __attribute__((weak));
         cb_gc_stack_bottom = &__libc_stack_end ? __libc_stack_end : __builtin_frame_address(0);
     }
+#ifdef CB_GC_THREAD
+    cb_gc_collector_start();                /* library mode: no main() ran CB_GC_INIT */
+#endif
     cb_gc_lock();
+#if defined(CB_GC_THREAD)
+    if (cb_gc_gbytes[0] >= cb_gc_trigger) {
+        if (cb_gc_gbytes[0] >= cb_gc_trigger * 8) cb_gc_collect_locked(cb_gc_pick_level());   /* the collector thread is not keeping up */
+        else cb_gc_request();
+    }
+#elif !defined(CB_GC_MANUAL)
     if (cb_gc_gbytes[0] >= cb_gc_trigger) cb_gc_collect_locked(cb_gc_pick_level());
-    else if (cb_gc_cursor) cb_gc_sweep_step(64);
+#endif
+    if (cb_gc_cursor && !cb_gc_collector_owns_sweep) cb_gc_sweep_step(64);
     cb_hdr *h = (cb_hdr *)calloc(1, sizeof(cb_hdr) + (n ? n : 1));
     if (!h) { cb_gc_collect_locked(2); cb_gc_sweep_step((size_t)-1); h = (cb_hdr *)calloc(1, sizeof(cb_hdr) + (n ? n : 1)); }
     if (!h) { cb_gc_unlock(); return 0; }
@@ -823,6 +874,62 @@ static int64_t cb_gc_gen_collections(int64_t g, const char *loc) {
     if (g < 0 || g > 2) cb_panic(loc, "gc_gen_collections: the generation must be 0, 1 or 2");
     return (int64_t)cb_gc_runs[g];
 }
+
+#ifdef CB_GC_THREAD
+/* ---- thread mode: a background collector thread ---------------------------------------------------
+   The thread is an ordinary registered thread. Every CB_GC_INTERVAL_MS milliseconds (or as soon as an allocation
+   finds the nursery full) it takes the heap lock, raises cb_gc_stop and collects. Mutators park at their next
+   safepoint (a poll, an allocation, or a blocking call). If a thread is stuck in a long C call the collection
+   is given up after 100 ms and retried after a longer pause (up to 16 intervals), so a blocked thread
+   cannot make the program pause every interval. */
+static pthread_mutex_t cb_gc_wake_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t cb_gc_wake_cv = PTHREAD_COND_INITIALIZER;
+static int cb_gc_wanted, cb_gc_collector_up;
+static void cb_gc_park(void) {                  /* a safepoint: wait here until the running collection is over */
+    cb_gc_lock_slow();
+    pthread_mutex_unlock(&cb_gc_mu);
+}
+static void cb_gc_request(void) {
+    if (__atomic_load_n(&cb_gc_wanted, __ATOMIC_RELAXED)) return;
+    pthread_mutex_lock(&cb_gc_wake_mu);
+    cb_gc_wanted = 1;
+    pthread_cond_signal(&cb_gc_wake_cv);
+    pthread_mutex_unlock(&cb_gc_wake_mu);
+}
+static void *cb_gc_collector_main(void *rec) {
+    cb_gc_thread_begin(rec);
+    unsigned backoff = 1;
+    for (;;) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        long ms = (long)CB_GC_INTERVAL_MS * (long)backoff;
+        ts.tv_sec += ms / 1000; ts.tv_nsec += (ms % 1000) * 1000000L;
+        if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+        cb_gc_blocking_begin();                 /* asleep: a collection started by someone else need not wait for us */
+        pthread_mutex_lock(&cb_gc_wake_mu);
+        while (!cb_gc_wanted && pthread_cond_timedwait(&cb_gc_wake_cv, &cb_gc_wake_mu, &ts) != ETIMEDOUT) {}
+        cb_gc_wanted = 0;
+        pthread_mutex_unlock(&cb_gc_wake_mu);
+        cb_gc_blocking_end();
+        cb_gc_lock();
+        int ok = 1;
+        if (cb_gc_gbytes[0] > 0 || cb_gc_force_major) ok = cb_gc_collect_locked(cb_gc_pick_level());
+        if (ok && cb_gc_cursor) cb_gc_sweep_step(4096);
+        cb_gc_unlock();
+        backoff = ok ? 1 : (backoff < 16 ? backoff * 2 : 16);
+        if (ok && cb_gc_cursor) backoff = 1;
+    }
+    return 0;
+}
+static void cb_gc_collector_start(void) {
+    if (cb_gc_collector_up) return;
+    cb_gc_collector_up = 1;
+    void *rec = cb_gc_thread_prepare(0);
+    pthread_t th;
+    if (pthread_create(&th, 0, cb_gc_collector_main, rec) != 0) return;   /* no thread: allocation falls back to collecting by itself */
+    pthread_detach(th);
+}
+#endif
 #endif
 
 static inline void *cb_alloc(int64_t n, int64_t size, int atomic, const char *l) {
@@ -928,6 +1035,162 @@ static cb_str cb_str_from_f(double v, int is32, const char *loc) {
     cb_fmt_shortest(b, sizeof b, v, is32);
     return cb_str_copy_cstr(b, loc);
 }
+/* ---- interpolation: f"..{value:spec}.." ----------------------------------
+   Pieces are appended to a malloc'd buffer (cb_fb); the finished text is copied into the string arena. */
+typedef struct { char fill, align, sign, type; uint8_t alt, zero, group; int32_t width, prec; } cb_fspec;
+typedef struct { char *p; size_t len, cap; } cb_fb;
+static void cb_fb_init(cb_fb *b) { b->p = NULL; b->len = b->cap = 0; }
+static void cb_fb_free(cb_fb *b) { free(b->p); b->p = NULL; b->len = b->cap = 0; }
+static void cb_fb_put(cb_fb *b, const void *s, size_t n) {
+    if (b->len + n + 1 > b->cap) {
+        size_t cap = b->cap ? b->cap * 2 : 64;
+        while (cap < b->len + n + 1) cap *= 2;
+        char *q = (char *)realloc(b->p, cap);
+        if (!q) { fputs("out of memory while formatting a string\n", stderr); abort(); }
+        b->p = q; b->cap = cap;
+    }
+    if (n) memcpy(b->p + b->len, s, n);
+    b->len += n;
+    b->p[b->len] = 0;
+}
+static void cb_fb_cstr(cb_fb *b, const char *s) { cb_fb_put(b, s, strlen(s)); }
+static void cb_fb_fill(cb_fb *b, char c, size_t n) { while (n--) cb_fb_put(b, &c, 1); }
+static cb_str cb_fb_finish(cb_fb *b, const char *loc) {
+    uint8_t *buf = cb_arena_alloc(b->len ? b->len : 1, loc);
+    if (b->len) memcpy(buf, b->p, b->len);
+    cb_str r = { buf, (int64_t)b->len };
+    cb_fb_free(b);
+    return r;
+}
+static size_t cb_utf8_count(const char *s, size_t n) {
+    size_t c = 0;
+    for (size_t i = 0; i < n; i++) if (((uint8_t)s[i] & 0xC0) != 0x80) c++;
+    return c;
+}
+/* pad `s` (n bytes, the first `prefix` being a sign / 0x that zero padding goes after) to the spec's width */
+static void cb_fpad(cb_fb *b, const char *s, size_t n, const cb_fspec *f, int numeric, size_t prefix) {
+    size_t chars = cb_utf8_count(s, n);
+    if (f->width <= 0 || (size_t)f->width <= chars) { cb_fb_put(b, s, n); return; }
+    size_t pad = (size_t)f->width - chars;
+    if (numeric && f->zero) {
+        cb_fb_put(b, s, prefix); cb_fb_fill(b, '0', pad); cb_fb_put(b, s + prefix, n - prefix);
+        return;
+    }
+    char fill = f->fill ? f->fill : ' ';
+    char al = f->align ? f->align : (numeric ? '>' : '<');
+    size_t left = al == '>' ? pad : al == '^' ? pad / 2 : 0;
+    cb_fb_fill(b, fill, left); cb_fb_put(b, s, n); cb_fb_fill(b, fill, pad - left);
+}
+/* insert `sep` every `every` digits, counted from the right, into digits[0..n) */
+static size_t cb_fgroup(char *out, const char *d, size_t n, char sep, size_t every) {
+    size_t o = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (i && (n - i) % every == 0) out[o++] = sep;
+        out[o++] = d[i];
+    }
+    return o;
+}
+static void cb_fmt_float(cb_fb *b, double v, int is32, const cb_fspec *f);
+static void cb_fmt_int(cb_fb *b, long long sv, int is_signed, const cb_fspec *f) {
+    char ty = f->type;
+    if (ty == 'f' || ty == 'F' || ty == 'e' || ty == 'E' || ty == 'g' || ty == 'G') {
+        cb_fmt_float(b, is_signed ? (double)sv : (double)(unsigned long long)sv, 0, f);
+        return;
+    }
+    int neg = is_signed && sv < 0;
+    unsigned long long u = neg ? 0ULL - (unsigned long long)sv : (unsigned long long)sv;
+    if (ty == 'c') {
+        char o[8]; size_t n = 0;
+        unsigned long long c = (unsigned long long)sv;
+        if (c < 0x80) o[n++] = (char)c;
+        else if (c < 0x800) { o[n++] = (char)(0xC0 | (c >> 6)); o[n++] = (char)(0x80 | (c & 63)); }
+        else if (c < 0x10000) { o[n++] = (char)(0xE0 | (c >> 12)); o[n++] = (char)(0x80 | ((c >> 6) & 63)); o[n++] = (char)(0x80 | (c & 63)); }
+        else { c &= 0x1FFFFF; o[n++] = (char)(0xF0 | (c >> 18)); o[n++] = (char)(0x80 | ((c >> 12) & 63)); o[n++] = (char)(0x80 | ((c >> 6) & 63)); o[n++] = (char)(0x80 | (c & 63)); }
+        cb_fpad(b, o, n, f, 0, 0);
+        return;
+    }
+    unsigned base = ty == 'x' || ty == 'X' ? 16 : ty == 'b' ? 2 : ty == 'o' ? 8 : 10;
+    const char *digs = ty == 'X' ? "0123456789ABCDEF" : "0123456789abcdef";
+    char raw[72]; size_t rn = 0;
+    do { raw[rn++] = digs[u % base]; u /= base; } while (u);
+    char dd[72];
+    for (size_t i = 0; i < rn; i++) dd[i] = raw[rn - 1 - i];
+    char grouped[160]; size_t gn = rn;
+    if (f->group) gn = cb_fgroup(grouped, dd, rn, f->group == 1 ? ',' : '_', base == 10 ? 3 : 4);
+    char out[200]; size_t o = 0;
+    if (neg) out[o++] = '-'; else if (f->sign) out[o++] = f->sign;
+    if (f->alt && base != 10) { out[o++] = '0'; out[o++] = ty == 'X' ? 'X' : ty == 'b' ? 'b' : ty == 'o' ? 'o' : 'x'; }
+    size_t prefix = o;
+    memcpy(out + o, f->group ? grouped : dd, gn); o += gn;
+    cb_fpad(b, out, o, f, 1, prefix);
+}
+static void cb_fmt_float(cb_fb *b, double v, int is32, const cb_fspec *f) {
+    char num[1200], out[1400];
+    char ty = f->type;
+    if (v != v) snprintf(num, sizeof num, "nan");
+    else if (isinf(v)) snprintf(num, sizeof num, v < 0 ? "-inf" : "inf");
+    else if (!ty && f->prec < 0) cb_fmt_shortest(num, sizeof num, v, is32);
+    else {
+        int prec = f->prec < 0 ? 6 : f->prec;
+        char fm[8] = "%.*f";
+        fm[3] = ty ? ty : 'f';
+        snprintf(num, sizeof num, fm, prec, v);
+    }
+    size_t o = 0; const char *s = num;
+    if (*s == '-') { out[o++] = '-'; s++; }
+    else if (f->sign) out[o++] = f->sign;
+    size_t prefix = o;
+    size_t il = 0;
+    while (s[il] >= '0' && s[il] <= '9') il++;
+    if (f->group && il > 0) o += cb_fgroup(out + o, s, il, f->group == 1 ? ',' : '_', 3);
+    else { memcpy(out + o, s, il); o += il; }
+    size_t rest = strlen(s + il);
+    memcpy(out + o, s + il, rest); o += rest;
+    cb_fpad(b, out, o, f, v == v && !isinf(v), prefix);
+}
+static void cb_fb_q(cb_fb *b, cb_str s) {            /* "text" with escapes */
+    cb_fb_put(b, "\"", 1);
+    for (int64_t i = 0; i < s.len; i++) {
+        uint8_t c = s.ptr[i];
+        if (c == '"') cb_fb_cstr(b, "\\\"");
+        else if (c == '\\') cb_fb_cstr(b, "\\\\");
+        else if (c == '\n') cb_fb_cstr(b, "\\n");
+        else if (c == '\t') cb_fb_cstr(b, "\\t");
+        else if (c == '\r') cb_fb_cstr(b, "\\r");
+        else if (c < 32 || c == 127) { char t[8]; snprintf(t, sizeof t, "\\x%02x", c); cb_fb_cstr(b, t); }
+        else cb_fb_put(b, &c, 1);
+    }
+    cb_fb_put(b, "\"", 1);
+}
+static void cb_fmt_str(cb_fb *b, cb_str s, const cb_fspec *f) {
+    if (f->type == '?') {
+        cb_fb t; cb_fb_init(&t); cb_fb_q(&t, s);
+        cb_fpad(b, t.p, t.len, f, 0, 0);
+        cb_fb_free(&t);
+        return;
+    }
+    size_t n = (size_t)s.len;
+    if (f->prec >= 0) {                                /* at most prec characters */
+        size_t chars = 0, i = 0;
+        while (i < n && chars < (size_t)f->prec) { i++; while (i < n && ((s.ptr[i] & 0xC0) == 0x80)) i++; chars++; }
+        n = i;
+    }
+    cb_fpad(b, (const char *)s.ptr, n, f, 0, 0);
+}
+static void cb_fmt_ptr(cb_fb *b, const void *p, const cb_fspec *f) {
+    char t[32]; snprintf(t, sizeof t, "%p", p);
+    cb_fpad(b, t, strlen(t), f, 0, 0);
+}
+/* the automatic `{:?}` pieces */
+static void cb_fb_i(cb_fb *b, long long v) { char t[32]; snprintf(t, sizeof t, "%lld", v); cb_fb_cstr(b, t); }
+static void cb_fb_u(cb_fb *b, unsigned long long v) { char t[32]; snprintf(t, sizeof t, "%llu", v); cb_fb_cstr(b, t); }
+static void cb_fb_f(cb_fb *b, double v, int is32) {
+    char t[64];
+    if (v != v) cb_fb_cstr(b, "nan");
+    else if (isinf(v)) cb_fb_cstr(b, v < 0 ? "-inf" : "inf");
+    else { cb_fmt_shortest(t, sizeof t, v, is32); cb_fb_cstr(b, t); }
+}
+static void cb_fb_ptr(cb_fb *b, const void *p) { char t[32]; snprintf(t, sizeof t, "%p", p); cb_fb_cstr(b, t); }
 /* ---- String: owned, heap-allocated, growable ---------------------------- */
 typedef struct { uint8_t *ptr; int64_t len; int64_t cap; } cb_String;
 

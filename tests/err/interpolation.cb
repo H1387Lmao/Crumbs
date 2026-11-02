@@ -1,0 +1,15 @@
+// Interpolation errors: bad format specs, values without a text representation, malformed braces.
+struct P { x: i32 }
+struct Q { x: i32 }
+impl Display for Q { } // ERROR: not all required methods of `Display`
+fn main() {
+    let p = P { x: 1 };
+    let n = 5;
+    println(f"{p}"); // ERROR: cannot interpolate a value of type `P`
+    println(p); // ERROR: cannot print a value of type `P`
+    println(f"{n:q}"); // ERROR: unexpected `q` in the format spec
+    println(f"{n:.2}"); // ERROR: a precision does not apply to integers
+    println(f"{n:,x}"); // ERROR: `,` grouping only applies to decimal numbers
+    println(f"{"a":+}"); // ERROR: a sign flag only applies to numbers
+    println(f"{n:#}"); // ERROR: the `#` flag only applies to the types x, X, b and o
+}

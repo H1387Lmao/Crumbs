@@ -1,0 +1,60 @@
+// FLAGS: --gc-mode=thread --gc-interval=10 --cflag=-DCB_GC_VERIFY
+// Thread mode: a background collector thread collects every few milliseconds, so the program never has to
+// think about the collector. Threads are stopped at safepoints (loop iterations, calls, allocations).
+import std.time;
+import std.list;
+
+struct Node { value: i64, next: *Node }
+
+fn busy_ms(ms: i64) -> i64 {                         // pure arithmetic: no allocation, only loop-iteration safepoints
+    let start = time.monotonic_ns();
+    let mut x = 1i64;
+    while time.monotonic_ns() - start < ms * 1000000 { x = (x * 31 + 7) % 1000003; }
+    return x;
+}
+
+fn build(n: i64) -> *Node {
+    let mut head: *Node = null;
+    for i in 0..n {
+        let c = alloc(Node, 1);
+        c[0].value = i;
+        c[0].next = head;
+        head = &c[0];
+    }
+    return head;
+}
+
+fn sum(h: *Node) -> i64 {
+    let mut t = 0i64;
+    let mut cur = h;
+    while cur != null { t += cur.value; cur = cur.next; }
+    return t;
+}
+
+fn main() {
+    // 1. the timer alone: a little garbage, far below the nursery limit, is still collected
+    let small = alloc(i64, 100);
+    small[0] = 5;
+    let c0 = gc_collections();
+    time.sleep_ms(300);
+    println("timer collected ", gc_collections() > c0);
+
+    // 2. a thread that never allocates is stopped at a loop safepoint
+    let tmp = alloc(i64, 100);
+    tmp[0] = 1;
+    let c1 = gc_collections();
+    let x = busy_ms(300);
+    println("compute-bound loop was stopped ", gc_collections() > c1);
+
+    // 3. live data survives while garbage is being thrown away in the background
+    let chain = build(20000);
+    let mut names = list.new<String>();
+    for i in 0..300 { list.push(&names, string_from("n") + to_str(i)); }
+    for r in 0..300000 {
+        let junk = alloc(i64, 8);
+        junk[0] = r;
+        if r % 100000 == 0 { time.sleep_ms(30); }
+    }
+    println("chain ", sum(chain), " names ", names.len, " last ", *list.at(&names, 299));
+    println("bounded ", gc_bytes() < 64 * 1024 * 1024, " small ", small[0], " x ", x >= 0);
+}

@@ -1,0 +1,4 @@
+timer collected true
+compute-bound loop was stopped true
+chain 199990000 names 300 last n299
+bounded true small 5 x true

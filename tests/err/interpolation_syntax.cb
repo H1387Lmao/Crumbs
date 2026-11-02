@@ -1,0 +1,7 @@
+fn main() {
+    let n = 1;
+    println(f"{n"); // ERROR: unclosed `{` in an interpolated string
+    println(f"{}"); // ERROR: empty `{}`
+    println(f"a } b"); // ERROR: single `}`
+    println(f"{n:?} {1 2}"); // ERROR: unexpected token in an interpolated expression
+}

@@ -1,0 +1,73 @@
+// String interpolation: f"text {expression:format} text".
+// The format after the colon is [[fill]align][sign][#][0][width][,|_][.precision][type].
+import std.time;
+
+struct Point { x: i32, y: i32 }
+enum Color { Red, Green }
+enum Mode { Fast, Slow }
+struct Shape { corner: Point, label: str, sides: [2]i32, color: Color, solid: bool, weight: f64 }
+struct Pair<T> { a: T, b: T }
+
+// your own representation: implement Display
+impl Display for Point {
+    fn to_string(self) -> String { return string_from(f"({self.x}, {self.y})"); }
+}
+impl Display for Color {
+    fn to_string(self) -> String {
+        if *self == Color.Red { return string_from("red!"); }
+        return string_from("green!");
+    }
+}
+
+fn show<T: Display>(v: T) -> String { return string_from(f"<{v}>"); }
+
+fn main() {
+    let name = "world";
+    let n = 255;
+    let pi = 3.14159265;
+    println(f"hello {name}! {n} {1 + 2 * 3} {{braces}}");
+
+    // integers
+    println(f"{n:x} {n:X} {n:#x} {n:#b} {n:o} {n:#o} {n:08b} {65:c}");
+    println(f"[{n:>6}] [{n:<6}] [{n:^6}] [{n:*^7}] [{n:+}] [{-n:06}] [{n:+06}] [{n: }]");
+    println(f"{1234567:,} {-1234567:,} {0xdeadbeefu32:#_x} {1000000000000i64:_}");
+
+    // floats
+    println(f"{pi} {pi:.2} {pi:10.3f} {pi:<10.1f}| {pi:e} {pi:.3e} {1500000.0:g} {0.5:08.2f}");
+    println(f"{1234567.891:,.2f} {-0.5:+.1f} {n:.1f} {2.0}");
+
+    // text and bool
+    println(f"[{name:>8}] [{name:<8}] [{name:^9}] [{name:.3}] [{name:?}] [{true}] [{false:>7}]");
+    println(f"{"héllo":>7}|{"héllo":.2}|");
+
+    // enums
+    println(f"{Mode.Slow:d} {Mode.Fast} {Mode.Slow:>6}");
+
+    // your own types
+    let p = Point { x: 3, y: -4 };
+    println(p);
+    println(f"p = {p}, padded [{p:>10}] [{p:*<10}]");
+    println(f"{Color.Green} / {Color.Green:?}");
+    println(show(p), show(Color.Red), show(42));
+    let text = to_str(p);
+    println(text, " has ", to_str(p).len, " bytes");
+
+    // the automatic representation
+    let s = Shape { corner: p, label: "a \"quoted\"\tlabel", sides: [1, 2], color: Color.Green, solid: true, weight: 0.5 };
+    println(f"{s:?}");
+    println(f"{p:?} {[1, 2, 3]:?} {name:?} {n:?} {pi:?}");
+    println(f"{Pair { a: 1, b: 2 }:?}");
+    println(f"[{p:>30?}]");
+
+    // expressions of any shape
+    let words = ["a", "b"];
+    println(f"{words[1]} {words.len} {n * 2 - 1:>5} {name} {to_str(n + 1)}");
+    println(f"{f"nested {n:x}"} and {f"{name:?}":>10}");
+    println(f"{time.Duration.from_ms(1500)} {time.Duration.from_secs(125)}");
+
+    // a built string
+    let mut out = string_new();
+    for i in 0..3 { out += f"{i:02},"; }
+    println(out);
+    println(f"");
+}

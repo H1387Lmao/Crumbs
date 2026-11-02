@@ -42,13 +42,20 @@ def make_plan(mods):
     return plan
 
 
+GC_MODES = ("auto", "thread", "manual")
+
+
 def compile_to_c(path, include_dirs=(), color=None, quiet_warnings=False, strict=False, entry="main", gc=True,
-                 nostd=False, overflow_panic=False, defines=None):
+                 nostd=False, overflow_panic=False, defines=None, gc_mode="auto", gc_interval=100):
     """Returns (c_source or None, diagnostics, link plan)."""
     d = Diagnostics()
     predefined = {}
     if gc:
         predefined["CB_GC"] = "1"
+        if gc_mode == "manual":
+            predefined["CB_GC_MANUAL"] = "1"
+        elif gc_mode == "thread":
+            predefined["CB_GC_THREAD"] = "1"
     if nostd:
         predefined["CB_NO_STDRUNTIME"] = "1"
     if overflow_panic:
@@ -62,10 +69,10 @@ def compile_to_c(path, include_dirs=(), color=None, quiet_warnings=False, strict
     plan = make_plan(mods)
     if d.has_errors:
         return None, d, plan
-    ck = Checker(mods, d, C_RESERVED, strict=strict, entry_name=entry, nostd=nostd).run()
+    ck = Checker(mods, d, C_RESERVED, strict=strict, entry_name=entry, nostd=nostd, gc_mode=gc_mode if gc else "off").run()
     if d.has_errors:
         return None, d, plan
-    cg = CodeGen(ck, gc=gc, nostd=nostd, overflow_panic=overflow_panic)
+    cg = CodeGen(ck, gc=gc, nostd=nostd, overflow_panic=overflow_panic, gc_mode=gc_mode, gc_interval=gc_interval)
     return cg.generate(mods[-1].src.path), d, plan
 
 
@@ -182,7 +189,8 @@ def build(args, run_after=False):
         return 1
     verbose_header(args)
     c_src, d, plan = compile_to_c(args.file, args.include, strict=args.strict_casts, entry=args.entry, gc=args.gc,
-                                 nostd=args.no_stdruntime, overflow_panic=args.overflow_panic, defines=parse_defines(args))
+                                 nostd=args.no_stdruntime, overflow_panic=args.overflow_panic, defines=parse_defines(args),
+                                 gc_mode=args.gc_mode, gc_interval=args.gc_interval)
     verbose_front(args)
     report(d, args.no_warn)
     if c_src is None:
@@ -262,6 +270,10 @@ def preprocess_only(a):
     predef = {}
     if a.gc:
         predef["CB_GC"] = "1"
+        if a.gc_mode == "manual":
+            predef["CB_GC_MANUAL"] = "1"
+        elif a.gc_mode == "thread":
+            predef["CB_GC_THREAD"] = "1"
     if a.no_stdruntime:
         predef["CB_NO_STDRUNTIME"] = "1"
     if a.overflow_panic:
@@ -297,6 +309,12 @@ def main(argv=None):
         p.add_argument("--gc", action=argparse.BooleanOptionalAction, default=True,
                        help="conservative garbage collector for alloc()/String/List (default: on); --no-gc uses plain malloc "
                             "and you must free() everything")
+        p.add_argument("--gc-mode", choices=GC_MODES, default="auto",
+                       help="when the collector runs: auto (default) = the allocator starts a collection when the nursery is full; "
+                            "thread = a background collector thread collects every --gc-interval ms (for beginners: nothing to manage); "
+                            "manual = never automatically, only gc_collect() / gc_collect_gen(g) (for advanced users)")
+        p.add_argument("--gc-interval", type=int, default=100, metavar="MS",
+                       help="--gc-mode=thread: how often the collector thread wakes up, in milliseconds (default 100)")
         p.add_argument("--no-stdruntime", action="store_true",
                        help="freestanding build: only the integer/bounds helpers, no libc (no print, String, alloc, std.* imports)")
         p.add_argument("--overflow-panic", action="store_true",
@@ -343,21 +361,38 @@ def main(argv=None):
         return 70
 
 
+def check_gc_flags(a):
+    """Reject flag combinations that cannot work; returns an exit code or None."""
+    if not 1 <= a.gc_interval <= 60000:
+        print("error: --gc-interval must be between 1 and 60000 milliseconds", file=sys.stderr)
+        return 2
+    if a.gc_mode != "auto" and not a.gc and not a.no_stdruntime:
+        print(f"error: `--gc-mode={a.gc_mode}` needs the collector, but `--no-gc` is set", file=sys.stderr)
+        print("help: drop --no-gc, or use the default --gc-mode=auto", file=sys.stderr)
+        return 2
+    return None
+
+
 def _dispatch(a):
     a.file_ = a.file
+    bad = check_gc_flags(a)
+    if bad is not None:
+        return bad
     if a.cmd == "pp":
         return preprocess_only(a)
     if a.cmd in ("check", "emit"):
         verbose_header(a)
     if a.cmd == "check":
         c, d, _ = compile_to_c(a.file, a.include, strict=a.strict_casts, entry=a.entry, gc=a.gc,
-                                 nostd=a.no_stdruntime, overflow_panic=a.overflow_panic, defines=parse_defines(a))
+                                 nostd=a.no_stdruntime, overflow_panic=a.overflow_panic, defines=parse_defines(a),
+                                 gc_mode=a.gc_mode, gc_interval=a.gc_interval)
         verbose_front(a)
         report(d, a.no_warn)
         return 0 if c is not None else 1
     if a.cmd == "emit":
         c, d, _ = compile_to_c(a.file, a.include, strict=a.strict_casts, entry=a.entry, gc=a.gc,
-                                 nostd=a.no_stdruntime, overflow_panic=a.overflow_panic, defines=parse_defines(a))
+                                 nostd=a.no_stdruntime, overflow_panic=a.overflow_panic, defines=parse_defines(a),
+                                 gc_mode=a.gc_mode, gc_interval=a.gc_interval)
         verbose_front(a)
         report(d, a.no_warn)
         if c is None:

@@ -288,6 +288,12 @@
               "title": "Default methods and supertraits",
               "desc": "A trait method with a body is a default: an `impl` may leave it out and gets the default, or override it. Inside a default, `Self` is the implementing type, so it can call the trait's other methods. `trait Solid: Shape` makes `Shape` a supertrait: every `Solid` type must also implement `Shape`, and the compiler says so when it does not. Supertrait cycles are rejected.",
               "code": "trait Shape {\n    fn area(self) -> f64;\n    fn name(self) -> str;\n    fn describe(self) -> String {\n        return string_from(self.name()) + \" with area \" + to_str(self.area());\n    }\n}\n\ntrait Solid: Shape {\n    fn height(self) -> f64;\n    fn volume(self) -> f64 { return self.area() * self.height(); }\n}"
+            },
+            {
+              "id": "display-trait",
+              "title": "Showing your own types: Display",
+              "desc": "`println`, `to_str` and `f\"{x}\"` know how to show numbers, text, bools and enum names. To show a struct, or to change how an enum looks, implement the prelude trait `Display` (no import needed): its one method `to_string(self) -> String` is what `println(x)` prints and what `{x}` inserts, and the format spec (width, fill, alignment) then applies to that text. Types without an impl can still be shown with `{x:?}`, the automatic representation: `Point { x: 3, y: -4 }`, with arrays as `[1, 2]` and text quoted. `T: Display` works as a bound, and the numeric types and `bool` implement it. Showing a struct without either is a compile error that says which to add. `Duration` and `DateTime` from `std.time` are Display.",
+              "code": "struct Point { x: i32, y: i32 }\n\nimpl Display for Point {\n    fn to_string(self) -> String {\n        return string_from(f\"({self.x}, {self.y})\");\n    }\n}\n\nlet p = Point { x: 3, y: -4 };\nprintln(p);                      // (3, -4)\nprintln(f\"at {p:>10}\");          // at     (3, -4)\nprintln(f\"{p:?}\");               // Point { x: 3, y: -4 }\n\nfn banner<T: Display>(v: T) -> String { return string_from(f\"== {v} ==\"); }"
             }
           ]
         },
@@ -357,6 +363,13 @@
               "code": "let mut text = string_new();\ntext += \"hello\";\ntext += ' ';\nlet message = text + \"world\";\nprintln(message);\n\nlet view: str = text; // borrows text"
             },
             {
+              "id": "string-interpolation",
+              "title": "String interpolation",
+              "desc": "`f\"...\"` embeds expressions in a string: `{expr}` shows the value, `{expr:spec}` formats it, `{{` and `}}` are literal braces. Any expression fits between the braces, including calls and nested `f\"\"` strings. The result is a `str`, so it works with `println`, `+=` on a `String`, or `string_from(...)`. The spec is `[[fill]align][sign][#][0][width][,|_][.precision][type]`: align is `<` `>` `^`; sign is `+` or a space; `#` adds `0x` `0b` `0o`; `0` pads numbers with zeros; `,` or `_` group digits; precision is digits after the point for floats and a maximum length for text; the type is `d x X b o c` for integers, `f F e E g G` for floats and `?` for the automatic representation. Mistakes in a spec are compile errors that point at the spec.",
+              "code": "let name = \"world\";\nlet n = 255;\nlet pi = 3.14159;\nprintln(f\"hello {name}! {1 + 2}\");          // hello world! 3\nprintln(f\"{n:x} {n:#b} {n:08.3f} {n:+}\");   // ff 0b11111111 0255.000 +255\nprintln(f\"[{name:>8}] [{name:*^9}] [{name:.3}]\");\nprintln(f\"{pi:.2} {pi:10.3f}| {1234567:,}\");\nprintln(f\"{{literal}} {name:?}\");              // {literal} \"world\"",
+              "note": "Text is counted in characters, so `{\"héllo\":>7}` pads correctly. Negative numbers in `x`, `b` and `o` show a minus sign and the magnitude. Interpolation needs the standard runtime (not `--no-stdruntime`)."
+            },
+            {
               "id": "destructors",
               "title": "Destructors and Move Semantics",
               "desc": "Define a destructor with `drop TypeName(self)`. Values with destructors are moved rather than copied, and the compiler tracks moved values to prevent later use. Destructors run when values leave scope, including on return and error propagation.",
@@ -377,9 +390,17 @@
             {
               "id": "garbage-collector",
               "title": "Generational garbage collector",
-              "desc": "The default collector has three generations. New blocks are born in the nursery (generation 0). A minor collection looks only at the nursery and moves survivors to generation 1; a mid collection covers generations 0 and 1 and moves survivors to generation 2 (old); a major collection traces everything and sweeps the old generation lazily as you allocate. Most blocks die young, so most collections touch only a small part of the heap. It is conservative (stacks, registers and the data segment are scanned for anything that looks like a pointer), thread-aware, and managed blocks include `alloc()` memory, `String` buffers and the string arena. Explicit `free` and destructors stay valid. `--no-gc` switches to plain malloc.",
-              "code": "// on by default; crumbs build main.cb --no-gc disables it\nlet table = alloc(*Node, 128);\ntable[0] = make_node();     // old -> young store: the compiler adds a write barrier\n\ngc_collect();               // a full (major) collection\nprintln(gc_bytes(), \" \", gc_collections());",
+              "desc": "The default collector has three generations. New blocks are born in the nursery (generation 0). A minor collection looks only at the nursery and moves survivors to generation 1; a mid collection covers generations 0 and 1 and moves survivors to generation 2 (old); a major collection traces everything and sweeps the old generation lazily as you allocate. Most blocks die young, so most collections touch only a small part of the heap. It is conservative (stacks, registers and the data segment are scanned for anything that looks like a pointer), thread-aware, and managed blocks include `alloc()` memory, `String` buffers and the string arena. Explicit `free` and destructors stay valid. `--no-gc` switches to plain malloc. When collections run is your choice: see the collector modes below.",
+              "code": "// on by default; crumbs build main.cb --no-gc disables it\nlet table = alloc(*Node, 128);\ntable[0] = make_node();     // old -> young store: the compiler adds a write barrier\n\ngc_collect();               // a full (major) collection, legal in every mode\nprintln(gc_bytes(), \" \", gc_collections());",
               "note": "Pointers kept only on the C side are not visible to the collector: keep a Crumbs reference to memory that C must retain. C code that stores Crumbs pointers into Crumbs memory should call `cb_gc_write_barrier(p, size)` afterwards."
+            },
+            {
+              "id": "gc-modes",
+              "title": "Collector modes: auto, thread and manual",
+              "desc": "`--gc-mode` chooses who decides when to collect. `auto` (the default) collects from inside the allocator when the nursery fills, so nothing needs configuring. `thread` is for beginners who want it hands-off: a background collector thread wakes every `--gc-interval` milliseconds (default 100) and collects whatever has accumulated, so allocating code never pauses to collect and you never call anything. The compiler adds a cheap safepoint check to every function entry and loop iteration so the collector can stop your threads promptly; sleeping and waiting for input are safepoints too. `manual` is for advanced users: the collector never runs by itself, and you decide when with `gc_collect()` and `gc_collect_gen(g)`. `gc_collect_gen` exists only in manual mode, so ordinary programs never need to know about generations. Set it in `project.toml` with `gc_mode` and `gc_interval`.",
+              "code": "# project.toml\n[build]\ngc_mode = \"thread\"      # \"auto\" (default), \"thread\" or \"manual\"\ngc_interval = 50          # milliseconds between background collections (thread mode)\n\n// manual mode: you pick the moment and the depth\nwhile running {\n    frame();\n    gc_collect_gen(0);      // cheap: only the nursery\n}\ngc_collect_gen(2);          // full collection at a loading screen",
+              "command": "crumbs run app.cb --gc-mode=thread --gc-interval=50\ncrumbs run app.cb --gc-mode=manual",
+              "note": "In `auto` and `thread` mode `gc_collect_gen` is a compile error that points to `--gc-mode=manual`. In manual mode memory grows until you collect. Thread mode adds a polling check to loops; use `auto` for the tightest numeric kernels."
             },
             {
               "id": "gc-write-barrier",
@@ -390,8 +411,8 @@
             {
               "id": "gc-stats",
               "title": "Collector controls and statistics",
-              "desc": "`gc_collect()` forces a major collection. `gc_collect_gen(g)` collects generations `0..g` (0 minor, 1 mid, 2 major). `gc_bytes()` reports live bytes, `gc_collections()` counts all cycles, and `gc_gen_bytes(g)` / `gc_gen_collections(g)` report one generation. All are no-ops returning 0 with `--no-gc`.",
-              "code": "gc_collect_gen(0);\nprintln(gc_gen_bytes(0));        // 0: the nursery was emptied\nprintln(gc_gen_bytes(1));        // the survivors\nprintln(gc_gen_collections(0));"
+              "desc": "`gc_collect()` forces a major collection in every mode. `gc_collect_gen(g)` collects generations `0..g` (0 minor, 1 mid, 2 major) and is available only with `--gc-mode=manual`. `gc_bytes()` reports live bytes, `gc_collections()` counts all cycles, and `gc_gen_bytes(g)` / `gc_gen_collections(g)` report one generation in every mode. All are no-ops returning 0 with `--no-gc`.",
+              "code": "println(gc_gen_bytes(0));        // nursery size right now\ngc_collect();\nprintln(gc_collections());\n\n// --gc-mode=manual only:\ngc_collect_gen(0);\nprintln(gc_gen_bytes(0));        // 0: the nursery was emptied"
             },
             {
               "id": "regions",
@@ -421,7 +442,7 @@
             {
               "id": "std-modules",
               "title": "What is in std",
-              "desc": "`std.io` input and output; `std.list` and `std.mem` collections and helpers; `std.str`, `std.conv`, `std.math` and `std.rand` text, numbers and randomness; `std.time` clocks and dates; `std.fs` and `std.env` files and the environment; `std.thread` threads and channels. `String`, `str` and `List<T>` need no import. `std.time`, `std.fs`, `std.env`, `std.io` and `std.thread` contain no C helpers: they bind libc and pthread with ordinary `extern fn` declarations, exactly like user code.",
+              "desc": "`std.io` input and output; `std.list` and `std.mem` collections and helpers; `std.str`, `std.conv`, `std.math` and `std.rand` text, numbers and randomness; `std.time` clocks and dates; `std.fs` and `std.env` files and the environment; `std.thread` threads and channels. `std.fmt` holds the `Display` trait. `String`, `str`, `List<T>` and `Display` need no import. `std.time`, `std.fs`, `std.env`, `std.io` and `std.thread` contain no C helpers: they bind libc and pthread with ordinary `extern fn` declarations, exactly like user code.",
               "code": "import std.io;\nimport std.list;\nimport std.str;\nimport std.math;\nimport std.time;\nimport std.fs;\nimport std.thread;"
             }
           ]

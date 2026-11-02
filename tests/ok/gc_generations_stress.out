@@ -1,13 +1,6 @@
-gen0 empty after minor true
-gen0 empty after minor true
-gen0 empty after minor true
-gen0 empty after minor true
-gen0 empty after minor true
-gen0 empty after minor true
 mismatches 0
 lists grew true
-after mid: young empty true
-after major: young empty true
+after a full collection: young empty true
 old holds the data true
 minor true mid true major true
 still intact true

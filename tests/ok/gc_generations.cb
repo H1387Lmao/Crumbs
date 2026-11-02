@@ -1,7 +1,8 @@
-// FLAGS: --cflag=-DCB_GC_VERIFY
+// FLAGS: --gc-mode=manual --cflag=-DCB_GC_VERIFY
 // The three generations: new blocks are born in generation 0, a minor collection moves the survivors to
 // generation 1, a mid collection moves them to generation 2 (old), and a major one sweeps everything.
 // Old data that is changed to point at new data must still be found (the write barrier).
+// gc_collect_gen is available because this runs in manual mode (--gc-mode=manual).
 struct Box { value: i64, other: *Box }
 
 fn make(v: i64) -> *Box {

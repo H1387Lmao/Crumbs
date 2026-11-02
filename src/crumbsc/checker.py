@@ -97,8 +97,9 @@ class FnInfo:
 
 
 class Checker:
-    def __init__(self, mods, diags, c_reserved=(), strict=False, entry_name="main", nostd=False):
+    def __init__(self, mods, diags, c_reserved=(), strict=False, entry_name="main", nostd=False, gc_mode="auto"):
         self.strict = strict
+        self.gc_mode = gc_mode             # auto | thread | manual (or "off" with --no-gc)
         self.nostd = nostd                 # --no-stdruntime: no libc-backed features
         self.entry_name = entry_name       # "" = no entry point (library / object-file mode)
         self.mods = mods
@@ -125,6 +126,7 @@ class Checker:
         self.trait_impls = {}    # (trait full name, type key) -> TraitImpl
         self.bound_seen = set()
         self.prelude_types = {}  # names usable without an import (`List`)
+        self.prelude_traits = {}  # ... and traits (`Display`)
         self.moved = {}          # Local -> span where it was moved (flow-sensitive)
         self.reinit_ok = None
 
@@ -138,6 +140,8 @@ class Checker:
             self.declare(m)
             if m.name == "std.list" and m.is_std and not self.nostd and "List" in m.syms:
                 self.prelude_types["List"] = m.syms["List"]
+            if m.name == "std.fmt" and m.is_std and not self.nostd and "Display" in m.syms:
+                self.prelude_traits["Display"] = m.syms["Display"]
         for m in self.mods:
             self.resolve_bounds(m)
         self.check_trait_impls()
@@ -340,6 +344,8 @@ class Checker:
             self.bound_seen.add(id(tn))
         if len(path) == 1:
             sym = m.syms.get(path[0])
+            if sym is None and path[0] not in m.imports:
+                sym = self.prelude_traits.get(path[0])
         elif len(path) == 2:
             imp = m.imports.get(path[0])
             if imp is None:
@@ -1496,6 +1502,114 @@ class Checker:
     def ex_Str(self, e, exp):
         return STR
 
+    # ------------------------------------------------------- Display / interpolation
+    def display_impl(self, t):
+        """The `to_string` method of `impl Display for T`, or None."""
+        tr = self.prelude_traits.get("Display")
+        key = self.type_key(t) if t.kind in ("struct", "enum") else None
+        if tr is None or key is None or (tr.full, key) not in self.trait_impls:
+            return None
+        return self.methods.get(key, {}).get("to_string")
+
+    def display_call(self, e, t):
+        """`e.to_string()` as a checked call node when the type of `e` implements Display (else None)."""
+        if self.display_impl(t) is None:
+            return None
+        src = getattr(e, "disp_src", e)
+        call = N("Call", e.span, callee=N("Field", e.span, obj=src, name="to_string", name_span=e.span), args=[], targ=None, targs=[])
+        call.disp_src = src
+        ty = self.check(call, None)
+        return call if not ty.poison else None
+
+    def display_help(self, t):
+        if t.kind in ("struct", "enum", "arr", "slice"):
+            return "implement `Display` for it (`impl Display for T { fn to_string(self) -> String { .. } }`), or use `f\"{x:?}\"` for the automatic representation"
+        return None
+
+    DEBUG_KINDS = ("struct", "enum", "arr", "slice", "ptr", "fn")
+
+    def debuggable(self, t, seen=None):
+        """Can the automatic `{:?}` representation show a value of type `t`? Returns the offending type or None."""
+        if t.poison or t.is_numeric or t in (BOOL, STR, STRING, ERR) or t.kind in ("enum", "ptr", "fn"):
+            return None
+        if t.kind in ("arr", "slice"):
+            return self.debuggable(t.inner)
+        if t.kind == "struct":
+            seen = seen or set()
+            if t.sym.full in seen:
+                return None
+            seen.add(t.sym.full)
+            for _, ft, _ in t.sym.fields:
+                bad = self.debuggable(ft, seen)
+                if bad is not None:
+                    return bad
+            return None
+        return t
+
+    def ex_FStr(self, e, exp):
+        from .fmtspec import parse_spec, check_for, SpecError
+        if self.nostd:
+            self.need_std(e.span, "string interpolation")
+        for part in e.parts:
+            if part.expr is None:
+                continue
+            part.pspec = None
+            part.mode = None
+            if not hasattr(part, "src"):
+                part.src = part.expr
+            part.expr = part.src
+            spec = None
+            if part.spec:
+                try:
+                    spec = parse_spec(part.spec)
+                except SpecError as err:
+                    self.d.error(part.spec_span or part.span, err.msg, label="in this format spec", help=err.help)
+                    spec = None
+            t = self.check(part.expr, None)
+            if t.poison:
+                continue
+            if t.kind == "eu":
+                self.d.error(part.expr.span, f"cannot interpolate a value of type `{t}`",
+                             label="has a possible error", help="handle the error first with `try` or `catch`")
+                continue
+            if spec is None:
+                spec = parse_spec("")
+            part.pspec = spec
+            debug = spec.type == "?"
+            if debug:
+                bad = self.debuggable(t)
+                if bad is not None:
+                    self.d.error(part.expr.span, f"cannot show a value of type `{bad}` with `:?`",
+                                 help="the automatic representation covers numbers, text, enums, pointers, arrays, slices and structs of those")
+                    continue
+                part.mode = "debug"
+                kind = "other"
+            else:
+                shown = self.display_call(part.expr, t)
+                if shown is not None:
+                    part.expr, t, part.mode, kind = shown, STRING, "text", "text"
+                elif t.is_int:
+                    part.mode, kind = "int", "int"
+                elif t.is_float:
+                    part.mode, kind = "float", "float"
+                elif t == BOOL:
+                    part.mode, kind = "bool", "bool"
+                elif t in (STR, STRING, ERR):
+                    part.mode, kind = "text", "text"
+                elif t.kind == "enum":
+                    part.mode, kind = "enum", "enum"
+                elif t.kind in ("ptr", "fn"):
+                    part.mode, kind = "ptr", "ptr"
+                else:
+                    self.d.error(part.expr.span, f"cannot interpolate a value of type `{t}`", label="no text representation",
+                                 help=self.display_help(t))
+                    continue
+            if not debug:
+                msg = check_for(spec, kind)
+                if msg is not None:
+                    self.d.error(part.spec_span or part.span, msg[0], label="in this format spec", help=msg[1])
+        return STR
+
     # ================================================================ names
     def ex_Ident(self, e, exp):
         if e.name == "null" and not self.lookup("null"):
@@ -2397,6 +2511,15 @@ class Checker:
             for a in args:
                 self.check(a)
             return POISON
+        if name == "gc_collect_gen" and self.gc_mode != "manual":
+            why = "the collector is off (`--no-gc`)" if self.gc_mode == "off" else f"this build uses `--gc-mode={self.gc_mode}`"
+            self.d.error(e.span, "`gc_collect_gen` needs the manual collector mode",
+                         label="not available in this build", notes=[why],
+                         help="build with `--gc-mode=manual` (cookie: `gc_mode = \"manual\"`) to decide yourself when each generation is collected; "
+                              "`gc_collect()` works in every mode")
+            for a in args:
+                self.check(a)
+            return POISON
 
         def arity(n_min, n_max=None):
             n_max = n_min if n_max is None else n_max
@@ -2409,13 +2532,17 @@ class Checker:
             return True
 
         if name in ("print", "println"):
-            for a in args:
+            for i, a in enumerate(args):
                 t = self.check(a, None)
                 if t.poison:
                     continue
+                shown = self.display_call(a, t)
+                if shown is not None:                       # a user `impl Display`: print what `to_string` returns
+                    args[i] = shown
+                    continue
                 if not (t.is_numeric or t in (BOOL, STR, STRING, ERR) or t.kind in self.PRINTABLE_KINDS):
                     self.d.error(a.span, f"cannot print a value of type `{t}`",
-                                 help="print fields individually" if t.kind in ("struct", "arr", "slice") else None)
+                                 help=self.display_help(t))
             return VOID
         if name == "string_new":
             arity(0)
@@ -2433,8 +2560,11 @@ class Checker:
         if name == "to_str":
             if arity(1):
                 t = self.check(args[0], None)
-                if not t.poison and not (t.is_numeric or t in (BOOL, STR, STRING, ERR) or t.kind == "enum"):
-                    self.d.error(args[0].span, f"cannot convert a value of type `{t}` to `str`")
+                shown = None if t.poison else self.display_call(args[0], t)
+                if shown is not None:
+                    args[0] = shown
+                elif not t.poison and not (t.is_numeric or t in (BOOL, STR, STRING, ERR) or t.kind == "enum"):
+                    self.d.error(args[0].span, f"cannot convert a value of type `{t}` to `str`", help=self.display_help(t))
             return STR
         if name == "panic":
             if arity(1):

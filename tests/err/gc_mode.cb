@@ -1,0 +1,6 @@
+// The generation controls are for programs that opt in to deciding when to collect.
+fn main() {
+    gc_collect();                // fine in every mode
+    gc_collect_gen(0); // ERROR: needs the manual collector mode
+    println(gc_gen_bytes(0), gc_gen_collections(0));      // statistics are always available
+}

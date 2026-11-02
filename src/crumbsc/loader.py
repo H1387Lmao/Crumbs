@@ -57,7 +57,7 @@ class Loader:
         path = os.path.abspath(path)
         self.root = os.path.dirname(path)
         if not self.nostd:          # the prelude: `List` and the `String` / `str` methods need no import
-            for name in ("list", "str"):
+            for name in ("list", "str", "fmt"):
                 self._load(os.path.join(STD_DIR, name + ".cb"), "std." + name, [], None)
         stem = os.path.splitext(os.path.basename(path))[0]
         m = self._load(path, stem, [], display=None)
