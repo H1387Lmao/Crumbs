@@ -1,0 +1,22 @@
+// Traits and bounds across modules: implement a trait that another module declares, and use its generic functions.
+import _traits_lib as lib;
+
+struct Robot { id: i32 }
+
+impl lib.Greeter for Robot {
+    fn name(self) -> str { return "robot"; }
+    fn greet(self) -> String { return string_from("beep ") + to_str(self.id); }       // overrides the default
+}
+
+impl lib.Greeter for f64 { fn name(self) -> str { return "float"; } }
+
+fn welcome<T: lib.Greeter>(x: T) -> String { return x.greet(); }
+
+fn main() {
+    let p = lib.person("Ann", 3);
+    let q = lib.person("Bo", 9);
+    println(welcome(p));
+    println(lib.greet_twice(q));
+    println(lib.busiest(p, q));
+    println(welcome(Robot { id: 7 }), " | ", welcome(2.5));
+}

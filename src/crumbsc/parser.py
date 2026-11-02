@@ -50,6 +50,7 @@ class Parser:
         self.no_struct = False
         self.undo = None
         self.impl_ty = None          # type node of the `impl` block being parsed (for `self` / `Self`)
+        self.tbounds = {}
 
     # ------------------------------------------------------------ helpers
     @property
@@ -132,17 +133,37 @@ class Parser:
         self.fail(f"expected `>`, found {self.describe(self.tok)}", label="expected `>`")
 
     def parse_tparams(self):
+        """`<A, B: Trait + Other>`: returns the names; the bounds are left in `self.tbounds` for the caller."""
         names = []
+        self.tbounds = {}
         if self.accept_op("<"):
             while True:
                 t = self.expect_ident("type parameter name")
                 if t.val in names:
                     self.fail(f"type parameter `{t.val}` is declared more than once", tok=t)
                 names.append(t.val)
+                if self.accept_op(":"):
+                    self.tbounds[t.val] = self.parse_bound_list()
                 if not self.accept_op(","):
                     break
             self.expect_gt()
         return names
+
+    def parse_bound_list(self):
+        """`Trait + module.Other`: a list of trait paths (used for bounds and supertraits)."""
+        bounds = []
+        while True:
+            t = self.expect_ident("trait name")
+            path = [t.val]
+            if self.is_op(".") and self.peek().kind == "ident":
+                self.advance()
+                path.append(self.advance().val)
+            if self.is_op("<"):
+                self.fail("traits are not generic: a bound is just the trait's name", label="remove the type arguments")
+            bounds.append(N("TName", self.sp(t), path=path, args=[]))
+            if not self.accept_op("+"):
+                break
+        return bounds
 
     def parse_type_args(self):
         args = [self.parse_type()]
@@ -248,6 +269,9 @@ class Parser:
     def parse_drop(self, pub):
         start = self.advance()                      # `drop`
         tparams = self.parse_tparams()
+        if self.tbounds:
+            self.fail("a destructor cannot put trait bounds on its type parameters", tok=start,
+                      label="bounds belong on the struct's declaration")
         ty = self.parse_type()
         if ty.kind != "TName" or len(ty.path) != 1:
             self.fail("a destructor is declared as `drop TypeName(self) { ... }`", tok=start,
@@ -265,7 +289,14 @@ class Parser:
     def parse_impl(self):
         start = self.advance()                      # `impl`
         tparams = self.parse_tparams()
+        tbounds = self.tbounds
         ty = self.parse_type()
+        trait = None
+        if self.accept_kw("for"):                   # `impl Trait for Type { ... }`
+            if ty.kind != "TName" or len(ty.path) > 2 or ty.args:
+                self.fail("expected a trait name before `for`", tok=start, label="`impl Trait for Type`")
+            trait = ty
+            ty = self.parse_type()
         if ty.kind != "TName":
             self.fail("methods can only be declared for a named type: `impl Point { ... }`", tok=start,
                       label="expected a struct, enum or built-in type name")
@@ -282,7 +313,46 @@ class Parser:
             fns.append(self.parse_fn(pub, extern=False))
         self.expect_op("}")
         self.impl_ty = saved
-        return N("Impl", self.sp(start), tparams=tparams, tyn=ty, fns=fns)
+        return N("Impl", self.sp(start), tparams=tparams, tbounds=tbounds, tyn=ty, fns=fns, trait=trait)
+
+    def parse_trait(self, pub):
+        start = self.advance()                      # `trait`
+        nm = self.expect_ident("trait name")
+        supers = []
+        if self.accept_op(":"):
+            supers = self.parse_bound_list()
+        self.expect_op("{", "after the trait name")
+        saved, self.impl_ty = self.impl_ty, N("TName", nm.span, path=["Self"], args=[])   # `Self` stays symbolic
+        methods = []
+        while not self.is_op("}"):
+            if self.tok.kind == "eof":
+                self.fail("unclosed `trait` block", tok=start, label="this block is never closed")
+            if self.is_kw("pub"):
+                self.fail("trait methods cannot be marked `pub`: they are as visible as the trait itself")
+            if not self.is_kw("fn"):
+                self.fail(f"only functions can be declared inside `trait`, found {self.describe(self.tok)}",
+                          label="expected `fn`")
+            methods.append(self.parse_trait_fn())
+        self.expect_op("}")
+        self.impl_ty = saved
+        return N("Trait", nm.span, name=nm.val, pub=pub, supers=supers, methods=methods, full_span=self.sp(start))
+
+    def parse_trait_fn(self):
+        """`fn name(self, ...) -> T;` (required) or `fn name(self, ...) -> T { ... }` (a default method).
+        A default body is kept as tokens: each `impl` that uses it parses them again with `Self` bound to its own type."""
+        first = self.p
+        start = self.expect_kw("fn")
+        nm = self.expect_ident("function name")
+        if self.is_op("<"):
+            self.fail("trait methods cannot be generic", tok=nm, label="declare the type parameters on the trait's users instead")
+        params, _ = self.parse_params()
+        ret = self.parse_ret_type() if self.accept_op("->") else None
+        body = toks = None
+        if not self.accept_op(";"):
+            body = self.parse_block()
+            toks = self.toks[first:self.p]
+        return N("TraitFn", nm.span, name=nm.val, params=params, ret=ret, body=body, toks=toks, eof=self.toks[-1],
+                 src=self.src, full_span=self.sp(start))
 
     def parse_item(self):
         start = self.tok
@@ -292,12 +362,14 @@ class Parser:
             return self.parse_directive()
         if t.kind == "ident" and t.val == "drop" and (self.peek().kind == "ident" or self.peek().kind == "op" and self.peek().val == "<"):
             return self.parse_drop(pub)
+        if t.kind == "ident" and t.val == "trait" and self.peek().kind == "ident":
+            return self.parse_trait(pub)
         if t.kind == "ident" and t.val == "impl" and (self.peek().kind == "ident" or self.peek().kind == "op" and self.peek().val == "<"):
             if pub:
                 self.fail("`pub` is not allowed on `impl` blocks; mark the functions inside as `pub`", tok=start)
             return self.parse_impl()
         if t.kind != "kw":
-            self.fail(f"expected an item (`fn`, `struct`, `enum`, `const`, `error`, `import`, `impl`), found {self.describe(t)}",
+            self.fail(f"expected an item (`fn`, `struct`, `enum`, `trait`, `const`, `error`, `import`, `impl`), found {self.describe(t)}",
                       label="not a valid top-level item")
         v = t.val
         if v == "import":
@@ -378,6 +450,7 @@ class Parser:
         start = self.expect_kw("fn")
         nm = self.expect_ident("function name")
         tparams = self.parse_tparams()
+        tbounds = self.tbounds
         if extern and tparams:
             self.fail("extern functions cannot be generic", tok=nm)
         if export and tparams:
@@ -392,13 +465,14 @@ class Parser:
         else:
             body = self.parse_block()
         return N("Fn", nm.span, name=nm.val, params=params, ret=ret, body=body, pub=pub, extern=extern,
-                 tparams=tparams, full_span=self.sp(start), export=export, cname_str=cname, variadic=variadic,
-                 drop_for=None)
+                 tparams=tparams, tbounds=tbounds, full_span=self.sp(start), export=export, cname_str=cname,
+                 variadic=variadic, drop_for=None)
 
     def parse_struct(self, pub, extern=False, cname=None):
         self.advance()
         nm = self.expect_ident("struct name")
         tparams = self.parse_tparams()
+        tbounds = self.tbounds
         if extern and tparams:
             self.fail("extern structs cannot be generic", tok=nm)
         opaque = False
@@ -416,8 +490,8 @@ class Parser:
                 if not self.accept_op(","):
                     break
             self.expect_op("}", "to close struct")
-        return N("Struct", nm.span, name=nm.val, fields=fields, pub=pub, tparams=tparams, extern=extern,
-                 opaque=opaque, cname_str=cname)
+        return N("Struct", nm.span, name=nm.val, fields=fields, pub=pub, tparams=tparams, tbounds=tbounds,
+                 extern=extern, opaque=opaque, cname_str=cname)
 
     def parse_enum(self, pub):
         self.advance()

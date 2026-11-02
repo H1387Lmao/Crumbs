@@ -1,0 +1,57 @@
+// FLAGS: --cflag=-DCB_GC_VERIFY
+// The three generations: new blocks are born in generation 0, a minor collection moves the survivors to
+// generation 1, a mid collection moves them to generation 2 (old), and a major one sweeps everything.
+// Old data that is changed to point at new data must still be found (the write barrier).
+struct Box { value: i64, other: *Box }
+
+fn make(v: i64) -> *Box {
+    let b = alloc(Box, 1);
+    b[0].value = v;
+    return &b[0];
+}
+
+fn main() {
+    gc_collect();                                   // start from a clean heap
+    let keep = make(1);
+    let junk = alloc(i64, 1000);
+    junk[0] = 7;
+    println("born young ", gc_gen_bytes(0) > 0, " ", gc_gen_bytes(1) == 0, " ", gc_gen_bytes(2) >= 0);
+
+    gc_collect_gen(0);                              // minor
+    println("minor: gen0 empty ", gc_gen_bytes(0) == 0, ", survivors in gen1 ", gc_gen_bytes(1) > 0);
+    println("minor count ", gc_gen_collections(0) >= 1);
+
+    gc_collect_gen(1);                              // mid
+    println("mid: gen1 empty ", gc_gen_bytes(1) == 0, ", survivors in gen2 ", gc_gen_bytes(2) > 0);
+    println("mid count ", gc_gen_collections(1) >= 1);
+
+    // `keep` is old now. Point it at a brand-new block, then collect only the young generation.
+    keep.other = make(42);
+    gc_collect_gen(0);
+    gc_collect_gen(0);
+    println("old -> young survived ", keep.other.value);
+
+    // a chain hung off an old block, built a link at a time across several minor collections
+    let mut tail = keep;
+    for i in 0..50 {
+        let next = make(100 + i);
+        tail.other = next;
+        tail = next;
+        if i % 7 == 0 { gc_collect_gen(0); }
+        let g = alloc(i64, 200);
+        g[0] = i;
+    }
+    gc_collect_gen(1);
+    gc_collect_gen(0);
+    let mut count = 0;
+    let mut sum = 0i64;
+    let mut cur = keep;
+    while cur != null { count += 1; sum += cur.value; cur = cur.other; }
+    println("chain ", count, " ", sum);
+
+    gc_collect();
+    println("major: young empty ", gc_gen_bytes(0) == 0 && gc_gen_bytes(1) == 0);
+    println("major count ", gc_gen_collections(2) >= 1);
+    println("total ", gc_collections() >= gc_gen_collections(0) + gc_gen_collections(1) + gc_gen_collections(2));
+    println("bounded ", gc_bytes() < 1024 * 1024);
+}

@@ -576,7 +576,11 @@ class CodeGen:
 
     def b_write_at(self, e):
         a, v = e.args
-        return f"((void)(*{self.nn(self.ex(a), a.ty, e.span)} = {self.ex(v)}))"
+        if self.pointer_free(v.ty):
+            return f"((void)(*{self.nn(self.ex(a), a.ty, e.span)} = {self.ex(v)}))"
+        p = self.tmp("cb_p")
+        return (f"({{ {self.ctype(a.ty)} {p} = {self.nn(self.ex(a), a.ty, e.span)}; "
+                f"*{p} = {self.ex(v)}; cb_wb_range({p}, sizeof *{p}); (void)0; }})")
 
     def b_read_at(self, e):
         a = e.args[0]
@@ -587,6 +591,15 @@ class CodeGen:
 
     def b_gc_bytes(self, e):
         return "cb_gc_bytes()"
+
+    def b_gc_collect_gen(self, e):
+        return f"cb_gc_collect_gen((int64_t)({self.ex(e.args[0])}), {self.loc(e.span)})"
+
+    def b_gc_gen_bytes(self, e):
+        return f"cb_gc_gen_bytes((int64_t)({self.ex(e.args[0])}), {self.loc(e.span)})"
+
+    def b_gc_gen_collections(self, e):
+        return f"cb_gc_gen_collections((int64_t)({self.ex(e.args[0])}), {self.loc(e.span)})"
 
     def b_string_new(self, e):
         return "((cb_String){0, 0, 0})"
@@ -787,9 +800,21 @@ class CodeGen:
             return
         self.emit(f"(void)({self.ex(e)});")
 
+    def wb_target(self, t):
+        """True if a store through the lvalue `t` can land in heap memory (so the write barrier must run)."""
+        k = t.kind
+        if k == "Ident":
+            return False
+        if k == "Field":
+            return True if getattr(t, "mode", None) != "field" else self.wb_target(t.obj)
+        if k == "Index":
+            return True if t.obj.ty.kind != "arr" else self.wb_target(t.obj)
+        return True
+
     def s_Assign(self, s):
         t = s.target
         rhs = self.ex(s.value)
+        wb = self.wb_target(t) and not self.pointer_free(s.opty)       # the generational collector's write barrier
         if s.op == "=":
             if self.ck.has_glue(s.opty):        # destroy the old value, then store the new one
                 ct, g, v = self.ctype(s.opty), self.glue_fn(s.opty), self.tmp()
@@ -805,9 +830,21 @@ class CodeGen:
                     self.emit(f"    {ct} *{p} = &{self.ex(t)};")
                     self.emit(f"    {g}({p});")
                     self.emit(f"    *{p} = {v};")
+                    if wb:
+                        self.emit(f"    cb_wb_range({p}, sizeof *{p});")
+                self.emit("}")
+                return
+            if wb and not self.is_simple(t):
+                p = self.tmp("cb_p")
+                self.emit("{")
+                self.emit(f"    {self.ctype(s.opty)} *{p} = &{self.ex(t)};")
+                self.emit(f"    *{p} = {rhs};")
+                self.emit(f"    cb_wb_range({p}, sizeof *{p});")
                 self.emit("}")
                 return
             self.emit(f"{self.ex(t)} = {rhs};")
+            if wb:
+                self.emit(f"cb_wb_range(&{self.ex(t)}, sizeof {self.ex(t)});")
             return
         if s.opty in (STR, STRING):
             loc = self.loc(s.op_span)
@@ -819,17 +856,23 @@ class CodeGen:
                     return f"cb_string_push({lhs}, {rhs}, {loc})"
                 return f"cb_str_catv((cb_str[]){{{lhs}, {self.sv(s.value)}}}, 2, {loc})"
         else:
+            wb = False
+
             def combine(lhs):
                 return self.binop(s.bop, s.opty, lhs, rhs, s.op_span)
         if self.is_simple(t):
             lhs = self.ex(t)
             self.emit(f"{lhs} = {combine(lhs)};")
+            if wb:
+                self.emit(f"cb_wb_range(&{lhs}, sizeof {lhs});")
             return
         p = self.tmp("cb_p")
         self.emit("{")
         self.ind += 1
         self.emit(f"{self.ctype(s.opty)} *{p} = &{self.ex(t)};")
         self.emit(f"*{p} = {combine('*' + p)};")
+        if wb:
+            self.emit(f"cb_wb_range({p}, sizeof *{p});")
         self.ind -= 1
         self.emit("}")
 

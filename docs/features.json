@@ -196,7 +196,7 @@
     {
       "id": "types",
       "title": "Types",
-      "description": "Static types, user-defined data, generic functions, and numeric conversions.",
+      "description": "Built-in types, methods, generics, traits, and numeric conversions.",
       "subsections": [
         {
           "id": "built-in-types",
@@ -229,6 +229,24 @@
           ]
         },
         {
+          "id": "methods",
+          "title": "Methods",
+          "features": [
+            {
+              "id": "impl",
+              "title": "impl blocks",
+              "desc": "Declare functions on a type: `Point.new(1, 2)`, `p.sum()`. `self` borrows the value, `mut self` mutates it (the variable must be `let mut`), and `Self` names the type inside the block. A field holding a function pointer wins over a method of the same name. `String`, `str` and `List<T>` have their methods with no import.",
+              "code": "struct Point { x: i32, y: i32 }\n\nimpl Point {\n    pub fn new(x: i32, y: i32) -> Point { return Point { x: x, y: y }; }\n    pub fn sum(self) -> i32 { return self.x + self.y; }\n    pub fn shift(mut self, d: i32) { self.x += d; self.y += d; }\n}\n\nlet mut p = Point.new(1, 2);\np.shift(1);\nprintln(p.sum());"
+            },
+            {
+              "id": "generic-impl",
+              "title": "Generic and built-in impls",
+              "desc": "A generic struct's `impl` repeats its type parameters. Methods can also be added to built-in types such as `String` and `str`.",
+              "code": "struct Pair<T> { a: T, b: T }\n\nimpl<T> Pair<T> {\n    pub fn first(self) -> T { return self.a; }\n}\n\nlet mut a = String.new(\"  Hello  \");\na = a.strip();\nprintln(a.upper(), a.starts_with(\"He\"));"
+            }
+          ]
+        },
+        {
           "id": "generics",
           "title": "Generics",
           "features": [
@@ -237,13 +255,39 @@
               "title": "Generic Functions",
               "desc": "Generic functions are monomorphized: each distinct type instantiation produces specialized C code. Type arguments are inferred from call arguments or can be written explicitly.",
               "code": "fn max<T>(a: T, b: T) -> T {\n    if a > b { return a; }\n    return b;\n}\n\nlet inferred = max(3, 9);\nlet explicit = max<i64>(5, 6);",
-              "note": "There are no trait bounds. Operations used in a generic body must be valid for the types chosen at each instantiation."
+              "note": "Bodies are checked once per instantiation, so without a bound any operation the body uses must work for the chosen types. Add a trait bound (see Traits) to state what a type parameter must be able to do, and have the compiler check it at the call."
             },
             {
               "id": "generic-structs",
               "title": "Generic Structs",
               "desc": "Structs can declare type parameters. Crumbs can infer generic struct arguments from initialized fields or an expected type.",
               "code": "struct Pair<A, B> {\n    first: A,\n    second: B\n}\n\nlet pair = Pair { first: 1, second: \"x\" };"
+            }
+          ]
+        },
+        {
+          "id": "traits",
+          "title": "Traits",
+          "features": [
+            {
+              "id": "trait-declaration",
+              "title": "Declaring and implementing a trait",
+              "desc": "A trait lists the methods a type must have. `impl Trait for Type` supplies them. The compiler checks that every required method is present, that nothing extra is added, and that each signature (receiver, parameter types, return type) matches the declaration. Structs, enums and built-in types can all implement traits, and the trait and the implementing type may live in different modules.",
+              "code": "trait Shape {\n    fn area(self) -> f64;\n    fn name(self) -> str;\n}\n\nstruct Rect { w: f64, h: f64 }\n\nimpl Shape for Rect {\n    fn area(self) -> f64 { return self.w * self.h; }\n    fn name(self) -> str { return \"rect\"; }\n}\n\ntrait Double { fn double(self) -> Self; }\nimpl Double for i32 { fn double(self) -> i32 { return *self * 2; } }",
+              "note": "A trait is not a type: write `fn f<T: Shape>(x: T)`, not `fn f(x: Shape)`. Dispatch is static (monomorphized), so there is no runtime cost and no trait objects."
+            },
+            {
+              "id": "trait-bounds",
+              "title": "Trait bounds",
+              "desc": "Put bounds on type parameters with `T: Trait`, or `T: A + B` for several. Bounds work on generic functions, generic structs and generic `impl` blocks, and are checked at every instantiation, whether the type arguments are inferred or written out. A failed bound reports which type, which trait and where the bound was declared. An impl can itself be conditional: `impl<T: Shape> Shape for Labelled<T>` applies only when `T` is a `Shape`.",
+              "code": "fn total_area<T: Shape>(items: []T) -> f64 {\n    let mut t = 0.0;\n    for it in items { t += it.area(); }\n    return t;\n}\n\nfn show<T: Shape + Named>(x: T) { println(x.label(), x.name()); }\n\nstruct Labelled<T: Shape> { item: T, tag: str }\n\nimpl<T: Shape> Shape for Labelled<T> {\n    fn area(self) -> f64 { return self.item.area(); }\n    fn name(self) -> str { return self.tag; }\n}",
+              "note": "error: the trait bound `Dot: Shape` is not satisfied -- required by the bound `T: Shape` on the function `total`."
+            },
+            {
+              "id": "trait-defaults",
+              "title": "Default methods and supertraits",
+              "desc": "A trait method with a body is a default: an `impl` may leave it out and gets the default, or override it. Inside a default, `Self` is the implementing type, so it can call the trait's other methods. `trait Solid: Shape` makes `Shape` a supertrait: every `Solid` type must also implement `Shape`, and the compiler says so when it does not. Supertrait cycles are rejected.",
+              "code": "trait Shape {\n    fn area(self) -> f64;\n    fn name(self) -> str;\n    fn describe(self) -> String {\n        return string_from(self.name()) + \" with area \" + to_str(self.area());\n    }\n}\n\ntrait Solid: Shape {\n    fn height(self) -> f64;\n    fn volume(self) -> f64 { return self.area() * self.height(); }\n}"
             }
           ]
         },
@@ -268,6 +312,12 @@
               "title": "Wrapping Arithmetic",
               "desc": "Normal integer arithmetic is overflow-checked. The wrapping operators `+%`, `-%`, and `*%` wrap instead of panicking, and wrapping compound assignments are available too.",
               "code": "let mut cell: u8 = 255;\ncell +%= 1; // wraps to 0\nlet hash = 17 *% 31;"
+            },
+            {
+              "id": "overflow",
+              "title": "Integer overflow",
+              "desc": "`+ - *` and unary `-` wrap around in two's complement by default. `--overflow-panic` turns overflow into a panic with a source location (the cookie debug profile does this). Division by zero always panics; `MIN / -1` wraps unless `--overflow-panic` is on.",
+              "command": "crumbs run app.cb --overflow-panic"
             }
           ]
         }
@@ -326,10 +376,34 @@
             },
             {
               "id": "garbage-collector",
-              "title": "Garbage Collection",
-              "desc": "The default collector is a conservative, thread-aware tri-colour mark-and-lazy-sweep collector (Linux, glibc or musl; `--no-gc` turns it off). Blocks are white, grey or black; roots are greyed, the grey worklist is drained, and white blocks are swept a few at a time while the program allocates. It manages `alloc()` blocks, `String` buffers, and the string arena. Explicit `free` and destructors remain valid.",
-              "code": "// on by default; crumbs build main.cb --no-gc disables it\n\ngc_collect();\nprintln(gc_bytes());",
-              "note": "Pointers retained only on the C side are not visible to the collector. Keep a Crumbs reference to memory that C must retain."
+              "title": "Generational garbage collector",
+              "desc": "The default collector has three generations. New blocks are born in the nursery (generation 0). A minor collection looks only at the nursery and moves survivors to generation 1; a mid collection covers generations 0 and 1 and moves survivors to generation 2 (old); a major collection traces everything and sweeps the old generation lazily as you allocate. Most blocks die young, so most collections touch only a small part of the heap. It is conservative (stacks, registers and the data segment are scanned for anything that looks like a pointer), thread-aware, and managed blocks include `alloc()` memory, `String` buffers and the string arena. Explicit `free` and destructors stay valid. `--no-gc` switches to plain malloc.",
+              "code": "// on by default; crumbs build main.cb --no-gc disables it\nlet table = alloc(*Node, 128);\ntable[0] = make_node();     // old -> young store: the compiler adds a write barrier\n\ngc_collect();               // a full (major) collection\nprintln(gc_bytes(), \" \", gc_collections());",
+              "note": "Pointers kept only on the C side are not visible to the collector: keep a Crumbs reference to memory that C must retain. C code that stores Crumbs pointers into Crumbs memory should call `cb_gc_write_barrier(p, size)` afterwards."
+            },
+            {
+              "id": "gc-write-barrier",
+              "title": "How generations stay correct",
+              "desc": "A minor collection must still find old blocks that point at young ones. The compiler emits a write barrier after every store of a pointer-holding value through a pointer, slice, field or `write_at`; it marks a 512-byte card dirty, and the next minor or mid collection scans the dirty cards as extra roots. Programs that never store into old memory pay almost nothing. Build with `--cflag=-DCB_GC_VERIFY` to check every collection against a full trace of the heap: a missed barrier aborts with a message. Tuning macros: `CB_GC_NURSERY`, `CB_GC_MID`, `CB_GC_MID_EVERY`, `CB_GC_MAJOR_MIN`, `CB_GC_CARD_BUDGET`.",
+              "command": "crumbs run app.cb --cflag=-DCB_GC_VERIFY --cflag=-DCB_GC_NURSERY=4096"
+            },
+            {
+              "id": "gc-stats",
+              "title": "Collector controls and statistics",
+              "desc": "`gc_collect()` forces a major collection. `gc_collect_gen(g)` collects generations `0..g` (0 minor, 1 mid, 2 major). `gc_bytes()` reports live bytes, `gc_collections()` counts all cycles, and `gc_gen_bytes(g)` / `gc_gen_collections(g)` report one generation. All are no-ops returning 0 with `--no-gc`.",
+              "code": "gc_collect_gen(0);\nprintln(gc_gen_bytes(0));        // 0: the nursery was emptied\nprintln(gc_gen_bytes(1));        // the survivors\nprintln(gc_gen_collections(0));"
+            },
+            {
+              "id": "regions",
+              "title": "Regions (scoped lifetimes)",
+              "desc": "`region r { ... alloc_in(T, n, r) ... }` frees everything in one step on every way out of the block. Region memory is never traced or swept object by object, so it does not wake the collector, but live regions are scanned as roots. The compiler rejects returning or storing region memory where it would outlive the region.",
+              "code": "region scratch {\n    let xs = alloc_in(i64, 1000, scratch);\n    for i in 0..xs.len { xs[i] = i * i; }\n}"
+            },
+            {
+              "id": "freestanding",
+              "title": "Freestanding builds",
+              "desc": "`--no-stdruntime` emits only integer and bounds helpers: no libc, no `print`, `String`, `alloc`, collector, regions or `std.*` (except `std.mem`). Use it with `--entry=` and `export fn` to produce an object file with no libc symbols.",
+              "command": "crumbs build lib.cb --no-stdruntime --entry= -o lib.o"
             }
           ]
         }
@@ -338,10 +412,22 @@
     {
       "id": "standard-library",
       "title": "Standard library",
-      "description": "The standard library is written in Crumbs and is imported with `std.*` module paths.",
+      "description": "The standard library is written in Crumbs and imported with `std.*` module paths. Related modules are grouped on one page each.",
       "subsections": [
         {
-          "id": "io",
+          "id": "std-overview",
+          "title": "Overview",
+          "features": [
+            {
+              "id": "std-modules",
+              "title": "What is in std",
+              "desc": "`std.io` input and output; `std.list` and `std.mem` collections and helpers; `std.str`, `std.conv`, `std.math` and `std.rand` text, numbers and randomness; `std.time` clocks and dates; `std.fs` and `std.env` files and the environment; `std.thread` threads and channels. `String`, `str` and `List<T>` need no import. `std.time`, `std.fs`, `std.env`, `std.io` and `std.thread` contain no C helpers: they bind libc and pthread with ordinary `extern fn` declarations, exactly like user code.",
+              "code": "import std.io;\nimport std.list;\nimport std.str;\nimport std.math;\nimport std.time;\nimport std.fs;\nimport std.thread;"
+            }
+          ]
+        },
+        {
+          "id": "std-io",
           "title": "Input and output",
           "features": [
             {
@@ -353,8 +439,8 @@
           ]
         },
         {
-          "id": "collections-and-utilities",
-          "title": "Collections and utilities",
+          "id": "std-collections",
+          "title": "Collections and memory helpers",
           "features": [
             {
               "id": "std-list",
@@ -363,10 +449,76 @@
               "code": "import std.list;\n\nlet mut numbers: list.List<i32> = list.new();\nnumbers.push(10);\nnumbers.push(20);\nprintln(numbers.get(0));"
             },
             {
-              "id": "other-modules",
-              "title": "Standard Library Modules",
-              "desc": "The standard library also includes `std.math`, `std.conv`, `std.str`, `std.rand`, and `std.mem`. The string module includes common operations such as trimming, splitting, joining, replacing, and case conversion.",
-              "code": "import std.math;\nimport std.conv;\nimport std.str;\nimport std.rand;\nimport std.mem;"
+              "id": "std-list-api",
+              "title": "List API",
+              "desc": "`new`, `with_capacity`, `from_slice`, `push`, `pop` (`T!`, error `Empty`), `at` (a pointer, any `T`), `get`, `set`, `insert`, `remove`, `swap_remove`, `extend`, `view`, `clear`, `release`, `reverse`, `sort_by(l, cmp)` (heap sort, `cmp` like C's `qsort`), `for_each`, `find_by`.",
+              "code": "let mut xs: List<str> = List.new();\nxs.push(\"Hi\");\nxs.push(\"there\");\nprintln(xs.len, \" \", xs.get(1), \" \", str.join(xs.view(), \"+\"));"
+            },
+            {
+              "id": "std-mem",
+              "title": "std.mem",
+              "desc": "Generic helpers: `swap`, `min`, `max`, `sort`. Usable in freestanding builds.",
+              "code": "import std.mem;\n\nlet mut a = 1;\nlet mut b = 2;\nmem.swap(&a, &b);"
+            }
+          ]
+        },
+        {
+          "id": "std-text-math",
+          "title": "Text, numbers and randomness",
+          "features": [
+            {
+              "id": "std-str",
+              "title": "std.str",
+              "desc": "Trimming, `find`/`rfind`, `split`, `join`, `replace`, case conversion and comparison. Every `str` function also works on a `String`.",
+              "code": "import std.str;\n\nprintln(str.trim(\"  hi  \"), str.upper(\"abc\"));"
+            },
+            {
+              "id": "std-conv-math-rand",
+              "title": "std.conv, std.math, std.rand",
+              "desc": "`std.conv` converts between text and numbers, `std.math` has the usual numeric functions (`gcd`, `tan`, ...), and `std.rand` generates random numbers.",
+              "code": "import std.math;\nimport std.conv;\nimport std.rand;\n\nprintln(math.gcd(48, 18));"
+            }
+          ]
+        },
+        {
+          "id": "std-time",
+          "title": "Time and dates",
+          "features": [
+            {
+              "id": "time",
+              "title": "Clocks, durations and calendar dates",
+              "desc": "`monotonic_ns()`, `unix()`, `unix_ms()`, `sleep_ms(n)`; `Duration` (`from_ms`, `as_secs_f64`, `to_string()`), `Stopwatch` (`start`, `elapsed`, `lap`, `reset`), and calendar dates: `from_unix`, `now_utc`, `now_local`, `DateTime.new(y, m, d, h, mi, s)`, `.format()`, `.iso()`, `.weekday_name()`, `.add_days(n)`, `is_leap_year`, `days_in_month`.",
+              "code": "import std.time;\n\nlet sw = time.Stopwatch.start();\nprintln(sw.elapsed().to_string());"
+            }
+          ]
+        },
+        {
+          "id": "std-fs-env",
+          "title": "Files and environment",
+          "features": [
+            {
+              "id": "fs",
+              "title": "std.fs",
+              "desc": "`read_to_string`, `read_lines`, `write`, `append`, `exists`, `is_file`, `is_dir`, `size`, `remove`, `make_dir`. Errors: `NotFound`, `IoError`.",
+              "code": "import std.fs;\n\nlet text = fs.read_to_string(\"notes.txt\") catch |e| { panic(\"missing\"); };"
+            },
+            {
+              "id": "env",
+              "title": "std.env",
+              "desc": "`args()`, `arg(i)`, `arg_count()`, `get(name)` (error `NotSet`) and `has(name)`.",
+              "code": "import std.env;\n\nprintln(env.arg_count());\nlet home = env.get(\"HOME\") catch \"\";"
+            }
+          ]
+        },
+        {
+          "id": "std-thread",
+          "title": "Threads and channels",
+          "features": [
+            {
+              "id": "thread",
+              "title": "std.thread",
+              "desc": "`spawn(f, arg)` / `spawn_fn(f)` return a `Thread` (`.join()`); `Mutex` (`lock`, `try_lock`, `unlock`); `Condvar` (`wait`, `signal`, `broadcast`); `AtomicI64`; the generic `channel<T>()` (`send`, `recv`, `close`; error `Closed`); `sleep_ms`, `yield_now`, `current_id`, `cpu_count`. The collector waits for other threads to reach an allocation or a blocking call before it runs.",
+              "code": "import std.thread;\n\nlet t = thread.spawn_fn(worker);\nt.join();"
             }
           ]
         }
@@ -421,7 +573,7 @@
             {
               "id": "compiler-flags",
               "title": "Build Options",
-              "desc": "Useful options include `--unchecked` to remove overflow and bounds checks, `-O3` for optimization, `--cc clang` to select the C compiler, `--keep-c` to retain generated C, `--entry` to choose an entry function, and `--gc` to enable the collector.",
+              "desc": "Useful options include `--unchecked` to remove overflow and bounds checks, `-O3` for optimization, `--cc clang` to select the C compiler, `--keep-c` to retain generated C, `--entry` to choose an entry function, `--no-gc` to turn the collector off, and `--cflag` to pass a flag to the C compiler.",
               "command": "crumbs build main.cb \\\n    --unchecked -O3 --cc clang --keep-c out.c\n\ncrumbs build library.cb --entry="
             }
           ]
@@ -441,67 +593,6 @@
               "title": "Runtime Safety Checks",
               "desc": "The runtime panics with a source location and exit code 101 for integer overflow, division by zero, array/slice/string bounds, invalid slice ranges, invalid shift amounts, and allocation failure.",
               "code": "let values = [1, 2, 3];\nprintln(values[8]); // bounds panic"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": "newer",
-      "title": "Methods, memory and the standard library",
-      "description": "Added alongside the build tool.",
-      "subsections": [
-        {
-          "id": "methods",
-          "title": "Methods",
-          "features": [
-            {
-              "id": "impl",
-              "title": "impl blocks",
-              "desc": "Declare functions on a type: `Point.new(1, 2)`, `p.sum()`. `self` borrows, `mut self` mutates. String, str and List have their methods with no import.",
-              "code": "let mut a = String.new(\"  Hi \");\na = a.strip();\nlet mut xs: List<i32> = List.new();\nxs.push(1);"
-            }
-          ]
-        },
-        {
-          "id": "memory",
-          "title": "Memory",
-          "features": [
-            {
-              "id": "gc",
-              "title": "Garbage collector on by default",
-              "desc": "Use `--no-gc` for plain malloc. `--no-stdruntime` builds freestanding code with no libc.",
-              "command": "crumbs build app.cb --no-gc"
-            },
-            {
-              "id": "regions",
-              "title": "Regions (lifetimes)",
-              "desc": "`region r { alloc_in(T, n, r) }` frees everything on every exit path. The compiler rejects returning or storing region memory where it would outlive the region.",
-              "code": "region r {\n    let xs = alloc_in(i64, 100, r);\n}"
-            },
-            {
-              "id": "overflow",
-              "title": "Integer overflow",
-              "desc": "`+ - *` wrap by default; `--overflow-panic` turns overflow into a panic.",
-              "command": "crumbs run app.cb --overflow-panic"
-            }
-          ]
-        },
-        {
-          "id": "stdlib",
-          "title": "Standard library",
-          "features": [
-            {
-              "id": "time",
-              "title": "Time",
-              "desc": "Clocks, sleep, Duration, Stopwatch and calendar dates.",
-              "code": "import std.time;\nlet sw = time.Stopwatch.start();\nprintln(sw.elapsed().to_string());"
-            },
-            {
-              "id": "fs",
-              "title": "Filesystem & Enviroment",
-              "desc": "Read and write files, query the file system, read arguments and environment variables.",
-              "code": "import std.fs;\nimport std.env;\nlet text = fs.read_to_string(\"notes.txt\") catch |e| { panic(\"missing\"); };"
             }
           ]
         }

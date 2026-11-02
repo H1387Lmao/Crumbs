@@ -1,0 +1,21 @@
+pub trait Greeter {
+    fn name(self) -> str;
+    fn greet(self) -> String { return string_from("hello, ") + self.name(); }   // default method: checked where it is used
+}
+
+pub trait Counter: Greeter {
+    fn count(self) -> i32;
+}
+
+pub struct Person { pub_name: str, visits: i32 }
+
+pub fn person(n: str, v: i32) -> Person { return Person { pub_name: n, visits: v }; }
+
+impl Greeter for Person { fn name(self) -> str { return self.pub_name; } }
+impl Counter for Person { fn count(self) -> i32 { return self.visits; } }
+
+pub fn greet_twice<T: Greeter>(x: T) -> String { return x.greet() + " / " + x.greet(); }
+pub fn busiest<T: Counter>(a: T, b: T) -> i32 {
+    if a.count() > b.count() { return a.count(); }
+    return b.count();
+}

@@ -1,0 +1,86 @@
+// FLAGS: --cflag=-DCB_GC_VERIFY --cflag=-DCB_GC_NURSERY=4096 --cflag=-DCB_GC_MID=16384 --cflag=-DCB_GC_MID_EVERY=3 --cflag=-DCB_GC_MAJOR_MIN=65536 --cflag=-DCB_GC_CARD_BUDGET=16
+// Three-generation collector under stress: tiny generation limits make minor, mid and major collections happen
+// constantly, and the build verifies every one of them against a full trace (a missing write barrier aborts).
+// Old objects are made to point at brand-new ones through slices, fields, Strings and lists.
+import std.list;
+
+struct Cell { id: i64, next: *Cell, name: String }
+
+fn chain_sum(c: *Cell) -> i64 {
+    let mut total = 0i64;
+    let mut cur = c;
+    while cur != null {
+        total += cur.id;
+        cur = cur.next;
+    }
+    return total;
+}
+
+fn main() {
+    let slots = 128;
+    let table = alloc(*Cell, slots);          // becomes old after the first major collection
+    let shadow = alloc(i64, slots);           // plain numbers: what each chain should add up to
+    let names = alloc(String, slots);
+    let expect_name = alloc(i64, slots);
+    let mut kept = list.new<String>();
+    for i in 0..slots { list.push(&kept, string_from("slot-") + to_str(i)); }
+    gc_collect();
+
+    let mut r = 0i64;
+    while r < 6000 {
+        let i = (r * 7919) % slots;
+        let c = alloc(Cell, 1);               // young
+        c[0].id = r;
+        c[0].next = table[i];                 // young -> old
+        c[0].name = string_from("cell-") + to_str(r);
+        table[i] = &c[0];                     // old -> young: needs the write barrier
+        shadow[i] += r;
+        if r % 5 == 0 {
+            // cut the chain after three cells: stores null into an old cell, drops the tail
+            let mut cur = table[i];
+            let mut k = 0;
+            let mut kept_sum = 0i64;
+            while cur != null && k < 3 {
+                kept_sum += cur.id;
+                if k == 2 { cur.next = null; }
+                cur = cur.next;
+                k += 1;
+            }
+            shadow[i] = kept_sum;
+        }
+        names[i] = string_from("n") + to_str(r);   // a String stored into an old array
+        expect_name[i] = r;
+        let junk = alloc(i64, 40);
+        junk[0] = r;
+        let j = (r * 31) % slots;
+        list.set(&kept, j, string_from("k") + to_str(r));     // a slot of an old list gets a younger String
+        if r % 1000 == 999 {
+            gc_collect_gen(0);
+            println("gen0 empty after minor ", gc_gen_bytes(0) == 0);
+        }
+        r += 1;
+    }
+
+    let mut bad = 0;
+    for i in 0..slots {
+        if chain_sum(table[i]) != shadow[i] { bad += 1; }
+        if names[i] != "n" + to_str(expect_name[i]) { bad += 1; }
+    }
+    println("mismatches ", bad);
+    let mut grown = 0;
+    for i in 0..slots {
+        let p = list.at(&kept, i);
+        if (*p)[0] == 'k' { grown += 1; }
+    }
+    println("lists grew ", grown > 0);
+
+    gc_collect_gen(1);
+    println("after mid: young empty ", gc_gen_bytes(0) == 0 && gc_gen_bytes(1) == 0);
+    gc_collect();
+    println("after major: young empty ", gc_gen_bytes(0) == 0 && gc_gen_bytes(1) == 0);
+    println("old holds the data ", gc_gen_bytes(2) > 0);
+    println("minor ", gc_gen_collections(0) > 0, " mid ", gc_gen_collections(1) > 0, " major ", gc_gen_collections(2) > 0);
+    let mut bad2 = 0;
+    for i in 0..slots { if chain_sum(table[i]) != shadow[i] { bad2 += 1; } }
+    println("still intact ", bad2 == 0);
+}
