@@ -1,0 +1,11 @@
+born young true true true
+minor: gen0 empty true, survivors in gen1 true
+minor count true
+mid: gen1 empty true, survivors in gen2 true
+mid count true
+old -> young survived 42
+chain 51 6226
+major: young empty true
+major count true
+total true
+bounded true

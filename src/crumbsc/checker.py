@@ -7,14 +7,15 @@ import copy
 import re
 from .timing import TIMINGS
 from .diag import suggest
-from .parser import N
+from .parser import N, Parser
 from .types import (INTS, PRIMS, Ty, I8, I16, I32, I64, U8, U16, U32, U64, F32, F64, BOOL, STR, VOID,
                     ERR, POISON, STRING, REGION, ptr, arr, slc, eu, fnty, same)
 
 BUILTINS = {"print", "println", "panic", "assert", "alloc", "free", "exit", "to_str",
             "string_new", "string_from", "string_clear",
             "cstr", "from_cstr", "slice_of", "size_of", "drop", "drop_at", "write_at", "read_at",
-            "gc_collect", "gc_bytes", "gc_collections", "alloc_in"}
+            "gc_collect", "gc_bytes", "gc_collections", "alloc_in",
+            "gc_collect_gen", "gc_gen_bytes", "gc_gen_collections"}
 ARITH = {"+", "-", "*", "/", "%"}
 BITWISE = {"&", "|", "^"}
 SHIFT = {"<<", ">>"}
@@ -120,6 +121,9 @@ class Checker:
         self.glue = {}
         self.glue_busy = set()
         self.methods = {}        # type key -> {method name: Sym}
+        self.traits = []         # trait syms
+        self.trait_impls = {}    # (trait full name, type key) -> TraitImpl
+        self.bound_seen = set()
         self.prelude_types = {}  # names usable without an import (`List`)
         self.moved = {}          # Local -> span where it was moved (flow-sensitive)
         self.reinit_ok = None
@@ -134,6 +138,9 @@ class Checker:
             self.declare(m)
             if m.name == "std.list" and m.is_std and not self.nostd and "List" in m.syms:
                 self.prelude_types["List"] = m.syms["List"]
+        for m in self.mods:
+            self.resolve_bounds(m)
+        self.check_trait_impls()
         for m in self.mods:
             self.resolve_sigs(m)
         self.check_ffi()
@@ -209,6 +216,20 @@ class Checker:
                     seen[v] = sp
                 if self.define(m, s, it.span):
                     self.enums.append(s)
+            elif k == "Trait":
+                s = Sym("trait", it.name, m, it, it.pub)
+                seen = {}
+                for f in it.methods:
+                    if f.name in seen:
+                        self.d.error(f.span, f"the trait `{it.name}` declares the method `{f.name}` more than once",
+                                     notes=[f"the first one is at line {seen[f.name].span.line}"])
+                    seen[f.name] = f
+                if not it.methods:
+                    self.d.error(it.span, f"trait `{it.name}` has no methods", help="declare at least one `fn` inside it")
+                s.trait_methods = seen
+                s.supers = []
+                if self.define(m, s, it.span):
+                    self.traits.append(s)
             elif k == "Const":
                 s = Sym("const", it.name, m, it, it.pub)
                 if it.extern:
@@ -276,7 +297,16 @@ class Checker:
                 return
         table = self.methods.setdefault(key, {})
         tname = path[-1]
-        for fn in it.fns:
+        fns = list(it.fns)
+        trait = None
+        if getattr(it, "trait", None) is not None:
+            trait = self.resolve_trait(it.trait, m)
+            if trait is None:
+                return
+            fns = self.conform(m, it, trait, key, tname, fns)
+            if fns is None:
+                return
+        for fn in fns:
             if fn.name in table:
                 old = table[fn.name]
                 self.d.error(fn.span, f"`{tname}` already has a method named `{fn.name}`",
@@ -285,7 +315,8 @@ class Checker:
             node = copy.copy(fn)
             node.name = f"{tname}.{fn.name}"
             node.tparams = list(it.tparams) + list(fn.tparams)
-            s = Sym("fn", node.name, m, node, fn.pub)
+            node.tbounds = {**(getattr(it, "tbounds", None) or {}), **(getattr(fn, "tbounds", None) or {})}
+            s = Sym("fn", node.name, m, node, fn.pub or trait is not None)
             s.tparams = node.tparams
             s.cname = f"{m.cprefix}__{tname}__m_{fn.name}"
             s.is_method = True
@@ -297,6 +328,264 @@ class Checker:
                 table[fn.name] = s
                 if not s.tparams:
                     self.fns.append(s)
+
+    # ---------------------------------------------------------------- traits
+    def resolve_trait(self, tn, m, quiet=False):
+        """The trait symbol a path like `Shape` / `shapes.Shape` names (reports an error and returns None otherwise)."""
+        path = tn.path
+        sym = None
+        if not quiet:
+            if id(tn) in self.bound_seen:       # the same bound node is shared by an impl and each of its methods
+                quiet = True
+            self.bound_seen.add(id(tn))
+        if len(path) == 1:
+            sym = m.syms.get(path[0])
+        elif len(path) == 2:
+            imp = m.imports.get(path[0])
+            if imp is None:
+                if not quiet:
+                    self.d.error(tn.span, f"cannot find module `{path[0]}`", help=f"add `import {path[0]};` at the top of the file")
+                return None
+            imp.used = True
+            sym = imp.mod.syms.get(path[1])
+            if sym is not None and sym.kind == "trait" and not sym.pub and sym.mod is not m:
+                if not quiet:
+                    self.d.error(tn.span, f"trait `{path[1]}` is private to module `{path[0]}`", help="mark it `pub` in its module")
+                return None
+        if sym is not None and sym.kind == "trait":
+            return sym
+        if quiet:
+            return None
+        name = ".".join(path)
+        if sym is not None:
+            self.d.error(tn.span, f"`{name}` is a {sym.kind}, not a trait", label="expected a trait here")
+            return None
+        scope = m.syms if len(path) == 1 else m.imports[path[0]].mod.syms
+        sg = suggest(path[-1], [n for n, v in scope.items() if v.kind == "trait"])
+        self.d.error(tn.span, f"cannot find trait `{name}` in this scope", label="not found",
+                     help=f"a trait with a similar name exists: `{sg}`" if sg else None)
+        return None
+
+    def canon(self, tn, m, selfc):
+        """A canonical string for a type AST: names are replaced by their full symbol names, `Self` by `selfc`.
+        Two signatures that spell the same types differently (`Point` / `geom.Point`) get the same string."""
+        k = tn.kind
+        if k == "TName":
+            p = tn.path
+            if p == ["Self"] and not tn.args:
+                return selfc
+            if len(p) == 1:
+                sym = None if p[0] in PRIMS else (m.syms.get(p[0]) or self.prelude_types.get(p[0]))
+                base = sym.full if sym is not None else p[0]
+            elif len(p) == 2 and p[0] in m.imports:
+                sym = m.imports[p[0]].mod.syms.get(p[1])
+                base = sym.full if sym is not None else ".".join(p)
+            else:
+                base = ".".join(p)
+            if tn.args:
+                base += "<" + ",".join(self.canon(a, m, selfc) for a in tn.args) + ">"
+            return base
+        if k == "TPtr":
+            return "*" + self.canon(tn.inner, m, selfc)
+        if k == "TSlice":
+            return "[]" + self.canon(tn.inner, m, selfc)
+        if k == "TArray":
+            return f"[{getattr(tn.size, 'value', '?')}]" + self.canon(tn.inner, m, selfc)
+        if k == "TErrUnion":
+            return self.canon(tn.inner, m, selfc) + "!"
+        if k == "TFn":
+            ret = self.canon(tn.ret, m, selfc) if tn.ret is not None else "void"
+            return "fn(" + ",".join(self.canon(x, m, selfc) for x in tn.params) + ")->" + ret
+        return "?"
+
+    def tn_text(self, tn):
+        k = tn.kind
+        if k == "TName":
+            return ".".join(tn.path) + (f"<{', '.join(self.tn_text(a) for a in tn.args)}>" if tn.args else "")
+        if k == "TPtr":
+            return "*" + self.tn_text(tn.inner)
+        if k == "TSlice":
+            return "[]" + self.tn_text(tn.inner)
+        if k == "TArray":
+            return f"[{getattr(tn.size, 'value', '..')}]" + self.tn_text(tn.inner)
+        if k == "TErrUnion":
+            return self.tn_text(tn.inner) + "!"
+        if k == "TFn":
+            return f"fn({', '.join(self.tn_text(x) for x in tn.params)})" + (f" -> {self.tn_text(tn.ret)}" if tn.ret is not None else "")
+        return "?"
+
+    def sig_text(self, fn):
+        ps = ", ".join(("mut self" if getattr(p, "self_mut", False) else "self") if getattr(p, "self_param", False)
+                       else f"{p.name}: {self.tn_text(p.tyn)}" for p in fn.params)
+        return f"fn {fn.name}({ps})" + (f" -> {self.tn_text(fn.ret)}" if fn.ret is not None else "")
+
+    def conform(self, m, it, trait, key, tname, fns):
+        """Check an `impl Trait for Type` block against the trait. Returns the list of functions to register
+        (the impl's own plus the trait's default methods it does not override), or None after an error."""
+        tm = trait.mod
+        ikey = (trait.full, key)
+        shown = f"{tname}<{', '.join(it.tparams)}>" if it.tparams else tname
+        if ikey in self.trait_impls:
+            old = self.trait_impls[ikey]
+            self.d.error(it.span, f"`{shown}` already implements the trait `{trait.name}`",
+                         label="conflicting implementation",
+                         notes=[f"the first `impl` is at line {old.node.span.line}"])
+            return None
+        strays = []
+        selfc = self.canon(it.tyn, m, None)
+        have = {}
+        for f in fns:
+            if f.name in have:
+                self.d.error(f.span, f"the method `{f.name}` is defined more than once in this `impl`")
+                strays.append(f)
+                continue
+            have[f.name] = f
+            tf = trait.trait_methods.get(f.name)
+            if tf is None:
+                avail = sorted(trait.trait_methods)
+                sg = suggest(f.name, avail)
+                self.d.error(f.span, f"`{f.name}` is not a member of the trait `{trait.name}`",
+                             label="not in the trait",
+                             help=f"did you mean `{sg}`?" if sg else f"declare it in `trait {trait.name}`, or move it to a plain `impl {tname} {{ ... }}` block")
+                strays.append(f)
+                continue
+            if not self.same_sig(tf, f, tm, m, selfc):
+                self.d.error(f.span, f"the method `{f.name}` does not match its declaration in the trait `{trait.name}`",
+                             label="different signature",
+                             notes=[f"the trait declares `{self.sig_text(tf)}` at line {tf.span.line}",
+                                    f"this impl has `{self.sig_text(f)}`"],
+                             help="make the receiver, the parameter types and the return type agree with the trait")
+        missing = [n for n, tf in trait.trait_methods.items() if tf.body is None and n not in have]
+        if missing:
+            self.d.error(it.span, f"not all required methods of `{trait.name}` are implemented for `{shown}`: "
+                         + ", ".join(f"`{n}`" for n in missing),
+                         label="missing implementations",
+                         notes=[f"`{n}` is declared at line {trait.trait_methods[n].span.line} of the trait" for n in missing],
+                         help=f"add `fn {missing[0]}(...) {{ ... }}` to this `impl`")
+        out = [f for f in fns if f not in strays]       # the rest is still registered, so one mistake does not cascade
+        for n, tf in trait.trait_methods.items():
+            if tf.body is not None and n not in have:
+                out.append(self.reparse_default(tf, it, trait))
+        info = N("TraitImpl", it.span, tparams=list(it.tparams), bounds=getattr(it, "tbounds", None) or {}, node=it,
+                 mod=m, trait=trait)
+        self.trait_impls[ikey] = info
+        return out
+
+    def same_sig(self, tf, f, tm, m, selfc):
+        if len(tf.params) != len(f.params):
+            return False
+        for a, b in zip(tf.params, f.params):
+            sa, sb = getattr(a, "self_param", False), getattr(b, "self_param", False)
+            if sa != sb or (sa and getattr(a, "self_mut", False) != getattr(b, "self_mut", False)):
+                return False
+            if not sa and self.canon(a.tyn, tm, selfc) != self.canon(b.tyn, m, selfc):
+                return False
+        ra = self.canon(tf.ret, tm, selfc) if tf.ret is not None else "void"
+        rb = self.canon(f.ret, m, selfc) if f.ret is not None else "void"
+        return ra == rb
+
+    def reparse_default(self, tf, it, trait):
+        """A default method of a trait, parsed again with `Self` standing for the type of this `impl`."""
+        p = Parser.__new__(Parser)
+        p.src, p.d, p.toks, p.p = tf.src, self.d, list(tf.toks) + [tf.eof], 0
+        p.no_struct, p.undo, p.impl_ty, p.lex_time, p.tbounds = False, None, it.tyn, 0, {}
+        node = p.parse_fn(True, extern=False)
+        node.default_of = trait.name
+        return node
+
+    def resolve_bounds(self, m):
+        """Resolve the trait names in every `<T: Trait>` bound and in every supertrait list of module `m`."""
+        for s in list(m.syms.values()):
+            if s.kind == "trait":
+                for tn in s.node.supers:
+                    sup = self.resolve_trait(tn, m)
+                    if sup is not None and sup not in s.supers:
+                        if sup is s:
+                            self.d.error(tn.span, f"trait `{s.name}` cannot be its own supertrait")
+                        else:
+                            s.supers.append(sup)
+                continue
+            if s.kind not in ("fn", "struct"):
+                continue
+            tb = getattr(s.node, "tbounds", None)
+            if not tb:
+                continue
+            s.bounds = {}
+            for tp, tns in tb.items():
+                for tn in tns:
+                    tr = self.resolve_trait(tn, m)
+                    if tr is not None and tr not in s.bounds.setdefault(tp, []):
+                        s.bounds[tp].append(tr)
+        for it in m.ast.items:
+            if it.kind == "Impl":
+                for tp, tns in (getattr(it, "tbounds", None) or {}).items():
+                    for tn in tns:
+                        self.resolve_trait(tn, m)          # report unknown traits in `impl<T: Missing>` once
+
+    def check_trait_impls(self):
+        """Every impl of a trait needs impls of that trait's supertraits; supertrait lists must not form a cycle."""
+        for tr in self.traits:
+            seen, stack = set(), list(tr.supers)
+            while stack:
+                x = stack.pop()
+                if x is tr:
+                    self.d.error(tr.node.span, f"the supertraits of `{tr.name}` form a cycle", label="a trait cannot require itself")
+                    tr.supers = []
+                    break
+                if x.full in seen:
+                    continue
+                seen.add(x.full)
+                stack.extend(x.supers)
+        for (tfull, key), info in sorted(self.trait_impls.items(), key=lambda kv: kv[1].span.line):
+            for sup in info.trait.supers:
+                if (sup.full, key) not in self.trait_impls:
+                    tn = info.node.tyn
+                    self.d.error(info.span, f"the trait `{info.trait.name}` requires `{sup.name}`, but `{tn.path[-1]}` does not implement it",
+                                 label=f"`{tn.path[-1]}: {sup.name}` is required first",
+                                 help=f"add `impl {sup.name} for {tn.path[-1]} {{ ... }}`")
+
+    def implements(self, ty, tr):
+        """True if `ty` implements the trait `tr`; otherwise a short reason."""
+        key = self.type_key(ty)
+        info = self.trait_impls.get((tr.full, key)) if key else None
+        if info is None:
+            return f"the type `{ty}` does not implement `{tr.name}`"
+        if info.bounds and ty.kind == "struct" and ty.sym.base is not None:
+            for tp, ta in zip(info.tparams, ty.sym.targs):
+                for need in self.bound_traits(info, tp):
+                    r = self.implements(ta, need)
+                    if r is not True:
+                        return f"`{ty}` implements `{tr.name}` only when `{tp}: {need.name}`, but {r[0].lower() + r[1:]}"
+        return True
+
+    def bound_traits(self, info, tp):
+        """The traits named for the type parameter `tp` in the header of an impl (resolved on demand)."""
+        out = []
+        for tn in info.bounds.get(tp, ()):
+            tr = self.resolve_trait(tn, info.mod, quiet=True)
+            if tr is not None:
+                out.append(tr)
+        return out
+
+    def check_bounds(self, sym, targs, span):
+        """The type arguments chosen for `sym` must satisfy the `T: Trait` bounds written on its type parameters."""
+        bounds = getattr(sym, "bounds", None)
+        if not bounds:
+            return True
+        ok = True
+        for tp, ta in zip(sym.tparams, targs):
+            for tr in bounds.get(tp, ()):
+                why = self.implements(ta, tr)
+                if why is True:
+                    continue
+                ok = False
+                what = {"struct": "struct", "fn": "function"}.get(sym.kind, "item")
+                self.d.error(span, f"the trait bound `{ta}: {tr.name}` is not satisfied", label=f"`{ta}` does not implement `{tr.name}`",
+                             notes=([] if why.startswith("the type") else [why])
+                             + [f"required by the bound `{tp}: {tr.name}` on the {what} `{sym.name}`"],
+                             help=f"implement it: `impl {tr.name} for {ta} {{ ... }}`" if self.type_key(ta) else
+                             f"only structs, enums and built-in types can implement a trait, so `{ta}` cannot satisfy `{tr.name}`")
+        return ok
 
     def declare_drop(self, m, it):
         st = m.syms.get(it.drop_for)
@@ -363,6 +652,10 @@ class Checker:
                     sym = self.prelude_types[n]
                 if sym and sym.kind in ("struct", "enum"):
                     return self.use_type_sym(sym, args, tn, m)
+                if sym is not None and sym.kind == "trait":
+                    self.d.error(tn.span, f"`{n}` is a trait, not a type", label="traits cannot be used as types",
+                                 help=f"use it as a bound instead: `fn f<T: {n}>(x: T)`")
+                    return POISON
                 if n in m.imports:
                     self.d.error(tn.span, f"expected a type, found module `{n}`",
                                  help=f"use `{n}.TypeName`")
@@ -779,6 +1072,8 @@ class Checker:
         saved = (self.m, self.tenv, self.fn, self.scopes, self.d.context)
         self.m = s.mod
         self.tenv = s.tenv
+        if getattr(it, "default_of", None) is not None:
+            self.d.context = f"while checking the default method `{it.name}` of trait `{it.default_of}` for this `impl`"
         if s.base is not None:
             binds = ", ".join(f"{k} = {v}" for k, v in s.tenv.items())
             self.d.context = f"while checking `{s.base.name}` instantiated with {binds}"
@@ -829,6 +1124,8 @@ class Checker:
             return got.ty
         if span is not None and self.too_deep("".join(key[1]), span):
             return POISON
+        if not self.check_bounds(sym, targs, span or sym.node.span):
+            return POISON
         self.n_inst += 1
         inst = Sym("struct", sym.name, sym.mod, sym.node, sym.pub)
         inst.name = f"{sym.name}<{', '.join(str(t) for t in targs)}>"
@@ -871,6 +1168,8 @@ class Checker:
         if got is not None:
             return got
         if self.too_deep("".join(key[1]), span):
+            return None
+        if not self.check_bounds(sym, targs, span):
             return None
         self.n_inst += 1
         inst = Sym("fn", sym.name, sym.mod, self.clone(sym.node), sym.pub)
@@ -1228,7 +1527,7 @@ class Checker:
                 return sym.ty
             if sym.kind == "fn":
                 return self.fn_value(e, sym)
-            what = {"fn": "function", "struct": "struct", "enum": "enum"}[sym.kind]
+            what = {"fn": "function", "struct": "struct", "enum": "enum", "trait": "trait"}[sym.kind]
             h = None
             if sym.kind == "struct":
                 h = f"construct it with `{e.name} {{ field: value }}`"
@@ -2082,7 +2381,8 @@ class Checker:
     PRINTABLE_KINDS = ("enum", "ptr", "fn")
 
     NOSTD_BANNED = {"print", "println", "alloc", "free", "exit", "to_str", "string_new", "string_from",
-                    "string_clear", "cstr", "gc_collect", "gc_bytes", "gc_collections", "alloc_in"}
+                    "string_clear", "cstr", "gc_collect", "gc_bytes", "gc_collections", "alloc_in",
+                    "gc_collect_gen", "gc_gen_bytes", "gc_gen_collections"}
 
     def need_std(self, span, what):
         self.d.error(span, f"{what} needs the standard runtime, which `--no-stdruntime` removes",
@@ -2196,6 +2496,10 @@ class Checker:
         if name == "gc_bytes":
             arity(0)
             return I64
+        if name in ("gc_collect_gen", "gc_gen_bytes", "gc_gen_collections"):
+            if arity(1):
+                self.expect(args[0], I64)
+            return VOID if name == "gc_collect_gen" else I64
         if name == "cstr":
             if arity(1):
                 t = self.check(args[0], None)

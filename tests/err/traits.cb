@@ -1,0 +1,63 @@
+trait Shape {
+    fn area(self) -> f64;
+    fn name(self) -> str;
+    fn name(self) -> str; // ERROR: declares the method `name` more than once
+}
+trait Empty { } // ERROR: has no methods
+
+struct Sq { s: f64 }
+struct Tri { b: f64 }
+struct Circ { r: f64 }
+struct Dot { x: i32 }
+struct Dot2 { x: i32 }
+
+impl Shape for Sq { // ERROR: not all required methods of `Shape` are implemented for `Sq`: `name`
+    fn area(self) -> f64 { return self.s * self.s; }
+}
+
+impl Shape for Tri {
+    fn area(self) -> i32 { return 1; } // ERROR: does not match its declaration in the trait `Shape`
+    fn name(self) -> str { return "tri"; }
+}
+
+impl Shape for Circ {
+    fn area(self) -> f64 { return self.r; }
+    fn name(self) -> str { return "circ"; }
+}
+impl Shape for Dot2 {
+    fn area(self) -> f64 { return 0.0; }
+    fn name(self) -> str { return "dot"; }
+    fn perimeter(self) -> f64 { return 0.0; } // ERROR: `perimeter` is not a member of the trait `Shape`
+}
+
+impl Shape for Circ { // ERROR: `Circ` already implements the trait `Shape`
+    fn area(self) -> f64 { return 0.0; }
+    fn name(self) -> str { return "again"; }
+}
+
+impl Missing for Dot { fn f(self) {} } // ERROR: cannot find trait `Missing`
+impl Dot for Sq { fn f(self) {} } // ERROR: `Dot` is a struct, not a trait
+
+trait Solid: Shape { fn height(self) -> f64; }
+impl Solid for Tri { fn height(self) -> f64 { return 1.0; } }
+impl Solid for Dot { fn height(self) -> f64 { return 1.0; } } // ERROR: the trait `Solid` requires `Shape`, but `Dot` does not implement it
+
+trait Loop1: Loop2 { fn a(self); } // ERROR: form a cycle
+trait Loop2: Loop1 { fn b(self); }
+
+struct Holder<T: Shape> { item: T }
+
+fn total<T: Shape>(x: T) -> f64 { return x.area(); }
+fn needs_nothing<T: Nope>(x: T) {} // ERROR: cannot find trait `Nope`
+fn bad_type(x: Shape) {} // ERROR: `Shape` is a trait, not a type
+
+fn main() {
+    println(total(Tri { b: 1.0 }));
+    println(total(Dot { x: 1 })); // ERROR: the trait bound `Dot: Shape` is not satisfied
+    println(total<Dot>(Dot { x: 2 })); // ERROR: the trait bound `Dot: Shape` is not satisfied
+    println(total(5)); // ERROR: the trait bound `i32: Shape` is not satisfied
+    let h = Holder { item: Dot { x: 3 } }; // ERROR: the trait bound `Dot: Shape` is not satisfied
+    let ok = Holder { item: Circ { r: 1.0 } };
+    println(ok.item.name());
+    println(Shape); // ERROR: expected a value, found trait `Shape`
+}

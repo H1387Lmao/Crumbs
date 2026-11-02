@@ -27,6 +27,7 @@
 typedef struct { const uint8_t *ptr; int64_t len; } cb_str;
 
 #ifdef CB_NOSTD
+#define cb_wb_range(p, n) ((void)0)       /* no collector, so no write barrier */
 /* no libc: a panic just traps (there is nothing to print with) */
 CB_COLD static void cb_panic(const char *loc, const char *msg) { (void)loc; (void)msg; __builtin_trap(); }
 CB_COLD static void cb_panic_str(const char *loc, cb_str m) { (void)loc; (void)m; __builtin_trap(); }
@@ -178,6 +179,9 @@ static inline bool cb_str_eq(cb_str a, cb_str b) {
 }
 
 #ifndef CB_NOSTD
+/* the string arena (see below): per thread, so string temporaries need no lock. It lives up here because the collector
+   must treat each thread's current chunk as a root (thread-local data is not part of the data segment). */
+static __thread struct { uint8_t *top, *end; } cb_arena;
 /* ---- memory: plain malloc, or a conservative mark-and-sweep collector (--gc) ----------------
    cb_mem_alloc(n, atomic)  zeroed memory; `atomic` = contains no pointers, so the collector never scans it
    cb_mem_realloc / cb_mem_free  explicit release is always allowed (and optional under --gc)       */
@@ -249,6 +253,11 @@ static void cb_mem_free(void *p) { free(p); }
 static void cb_gc_collect(void) {}
 static int64_t cb_gc_bytes(void) { return 0; }
 static int64_t cb_gc_collections(void) { return 0; }
+static void cb_gc_collect_gen(int64_t g, const char *loc) { (void)g; (void)loc; }
+static int64_t cb_gc_gen_bytes(int64_t g, const char *loc) { (void)g; (void)loc; return 0; }
+static int64_t cb_gc_gen_collections(int64_t g, const char *loc) { (void)g; (void)loc; return 0; }
+#define cb_wb_range(p, n) ((void)0)
+void cb_gc_write_barrier(const void *p, size_t n) { (void)p; (void)n; }
 #define CB_GC_INIT() ((void)0)
 /* without the collector there is nothing for threads to coordinate with */
 void *cb_gc_thread_prepare(void *arg) { (void)arg; return 0; }
@@ -257,20 +266,43 @@ void cb_gc_thread_end(void) {}
 void cb_gc_blocking_begin(void) {}
 void cb_gc_blocking_end(void) {}
 #else
-/* ---- the collector: tri-colour mark and lazy sweep, thread-aware ---------------------------------
-   Every block has a 32-byte header in a doubly linked list. The header carries a colour:
+/* ---- the collector: three generations, tri-colour marking, thread-aware ----------------------------
+   Every block has a 32-byte header in a doubly linked list, one list per generation:
+       generation 0  the nursery: everything allocated since the last collection
+       generation 1  the middle: survivors of one minor collection
+       generation 2  the old generation: survivors of a mid or major collection
+   The header also carries a colour while a collection runs:
        white  not reached (yet)       grey  reached, contents not scanned yet       black  reached and scanned
-   `white` and `black` are two of three colour values that swap roles every cycle (an epoch flip), so a new
-   cycle never needs a pass to repaint the heap, and blocks allocated since the last cycle are born black.
 
-   A cycle  1. finishes the previous cycle's sweep;  2. flips the epoch (everything is white);
-            3. greys the roots: machine stacks and saved registers of every thread, data/bss, live regions
-               and the thread records;  4. drains the grey worklist, scanning each block and turning it
-               black (this ends with no grey block and no black->white pointer; -DCB_GC_VERIFY checks that);
-            5. starts a lazy sweep: a cursor walks the block list a few blocks per allocation and frees
-               the white ones. Blocks allocated during the sweep are black, so the sweep never frees them.
-   Marking is stop-the-world, so no write barrier is needed. Interior pointers keep a block alive.
-   Memory handed to C and kept only there is NOT seen by the collector: keep a Crumbs reference to it.
+   Three kinds of collection (the allocator picks one when generation 0 has grown by CB_GC_NURSERY bytes):
+       minor  collects generation 0.        Survivors move to generation 1.
+       mid    collects generations 0 and 1. Survivors move to generation 2.      (every CB_GC_MID_EVERY minors, when
+                                                                                  generation 1 is large, or when many
+                                                                                  cards are dirty)
+       major  collects everything. Survivors of 0 and 1 move to generation 2; generation 2 is swept lazily.
+   gc_collect() runs a major collection and finishes the sweep.
+
+   A collection marks only the generations it collects: their blocks are painted white and put in a sorted index,
+   and a pointer is followed only if it lands inside an indexed block. A pointer into an older generation is
+   ignored (that block is assumed alive), so the cost of a minor collection depends on the amount of young data
+   and not on the size of the heap. The roots are the machine stacks and saved registers of every thread, the
+   data/bss segment, the live regions and the thread records, plus the OLD-TO-YOUNG POINTERS.
+
+   Old-to-young pointers are found with a write barrier. The compiler emits cb_wb_range(&slot, size) after every
+   store of a value that can hold a pointer into memory that is not a plain local variable (assignments through
+   pointers, slices and fields, write_at). The barrier sets a bit in a card table (one bit per 512 bytes of
+   address space). A minor or mid collection scans the dirty cards as roots, except the parts of a card that
+   lie inside the blocks being collected (those are scanned only if the block is reached). A mid or major
+   collection leaves nothing young behind, so it clears the table; a minor one keeps the cards that lie in
+   generation 1 or 2. Compile with -DCB_GC_VERIFY to check every collection against a full trace from the roots
+   (it aborts if a block that is reachable was left white, which is what a missing barrier looks like).
+   Stores made by C code into Crumbs memory are not seen: call cb_gc_write_barrier(p, size) after them.
+
+   Marking is stop-the-world, so no barrier is needed for the marking itself. Interior pointers keep a block
+   alive. Memory handed to C and kept only there is NOT seen by the collector: keep a Crumbs reference to it.
+   Young generations are swept eagerly at the end of a collection (they are small); after a major collection
+   generation 2 is swept lazily: a cursor frees a few white blocks per allocation, and the next major
+   collection finishes whatever is left.
 
    Threads (std.thread): once the first thread is created a heap lock is switched on. A collection waits
    (at most 100 ms) until every other thread is parked -- inside an allocation waiting for the lock, or in a
@@ -278,21 +310,72 @@ void cb_gc_blocking_end(void) {}
    thread is still busy computing, the collection is skipped and tried again after more allocation.        */
 #include <pthread.h>
 #include <sched.h>
+#include <signal.h>
 #include <time.h>
-typedef struct cb_hdr { size_t n; struct cb_hdr *prev, *next; uintptr_t flags; } cb_hdr;   /* flags: bit 1 atomic, bits 2-3 colour */
+typedef struct cb_hdr { size_t n; struct cb_hdr *prev, *next; uintptr_t flags; } cb_hdr;   /* flags: bit 1 atomic, bits 2-3 colour, bits 4-5 generation, bit 6 verify mark */
 #define CB_HDR_ATOMIC 2u
+#define CB_HDR_VMARK 0x40u
+#define CB_WHITE 0u
 #define CB_GREY 1u
-extern char __data_start[] __attribute__((weak));
-extern char _end[] __attribute__((weak));
-static cb_hdr *cb_gc_all, *cb_gc_cursor;
-static unsigned cb_gc_white = 0, cb_gc_black = 2;
-static size_t cb_gc_live, cb_gc_since, cb_gc_next = (size_t)8 << 20, cb_gc_runs, cb_gc_marked;
-static void *cb_gc_stack_bottom;
-static cb_hdr **cb_gc_idx; static size_t cb_gc_nidx;
-static cb_hdr **cb_gc_work; static size_t cb_gc_nwork, cb_gc_capwork;
-#define CB_GC_INIT() (cb_gc_stack_bottom = __builtin_frame_address(0))
+#define CB_BLACK 2u
 #define CB_COLOR(h) ((unsigned)(((h)->flags >> 2) & 3u))
 #define CB_SETCOLOR(h, c) ((h)->flags = ((h)->flags & ~(uintptr_t)12) | ((uintptr_t)(c) << 2))
+#define CB_GEN(h) ((unsigned)(((h)->flags >> 4) & 3u))
+#define CB_SETGEN(h, g) ((h)->flags = ((h)->flags & ~(uintptr_t)0x30) | ((uintptr_t)(g) << 4))
+
+#ifndef CB_GC_NURSERY
+#define CB_GC_NURSERY ((size_t)1 << 20)      /* bytes allocated since the last collection that trigger a minor one */
+#endif
+#ifndef CB_GC_MID
+#define CB_GC_MID ((size_t)4 << 20)          /* bytes in generation 1 that make the next collection a mid one */
+#endif
+#ifndef CB_GC_MID_EVERY
+#define CB_GC_MID_EVERY 8                    /* ... or this many minor collections in a row */
+#endif
+#ifndef CB_GC_MAJOR_MIN
+#define CB_GC_MAJOR_MIN ((size_t)16 << 20)   /* generation 2 must grow by at least this much (and by as much as it held) before a major one */
+#endif
+#ifndef CB_GC_CARD_BUDGET
+#define CB_GC_CARD_BUDGET 8192               /* dirty cards in old memory that make the next collection a mid one */
+#endif
+
+extern char __data_start[] __attribute__((weak));
+extern char _end[] __attribute__((weak));
+static cb_hdr *cb_gc_head[3], *cb_gc_cursor;     /* a list per generation; the lazy-sweep cursor walks generation 2 */
+static size_t cb_gc_gbytes[3], cb_gc_live, cb_gc_marked, cb_gc_runs[3];
+static size_t cb_gc_trigger = CB_GC_NURSERY, cb_gc_g2_grow, cb_gc_g2_limit = CB_GC_MAJOR_MIN, cb_gc_ndirty;
+static unsigned cb_gc_minors_since_mid;
+static int cb_gc_force_major;
+static void *cb_gc_stack_bottom;
+static cb_hdr **cb_gc_idx; static size_t cb_gc_nidx;      /* sorted index of the blocks being collected */
+static cb_hdr **cb_gc_work; static size_t cb_gc_nwork, cb_gc_capwork;
+#define CB_GC_INIT() (cb_gc_stack_bottom = __builtin_frame_address(0))
+
+/* ---- the card table: one bit per 512 bytes of address space, in leaves of 2^21 cards (1 GiB) ---- */
+#define CB_CARD_SHIFT 9
+#define CB_CARD_LEAF_BITS 21
+#define CB_CARD_TOP ((uintptr_t)1 << 18)
+static uint8_t *cb_card_leaf[CB_CARD_TOP];
+static uint8_t *cb_card_new_leaf(uintptr_t top) {
+    uint8_t *l = (uint8_t *)calloc(1, (size_t)1 << (CB_CARD_LEAF_BITS - 3)), *old = 0;
+    if (!l) return 0;
+    if (!__atomic_compare_exchange_n(&cb_card_leaf[top], &old, l, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) { free(l); return old; }
+    return l;
+}
+static inline void cb_wb_card(uintptr_t card) {
+    uintptr_t top = card >> CB_CARD_LEAF_BITS;
+    if (CB_UNLIKELY(top >= CB_CARD_TOP)) { cb_gc_force_major = 1; return; }       /* not an address we can track */
+    uint8_t *leaf = cb_card_leaf[top];
+    if (CB_UNLIKELY(!leaf)) { leaf = cb_card_new_leaf(top); if (!leaf) { cb_gc_force_major = 1; return; } }
+    size_t i = (size_t)(card & (((uintptr_t)1 << CB_CARD_LEAF_BITS) - 1));
+    uint8_t bit = (uint8_t)(1u << (i & 7));
+    if (!(leaf[i >> 3] & bit)) { __atomic_fetch_or(&leaf[i >> 3], bit, __ATOMIC_RELAXED); __atomic_fetch_add(&cb_gc_ndirty, 1, __ATOMIC_RELAXED); }
+}
+static inline void cb_wb_range(const void *p, size_t n) {         /* the write barrier: `n` bytes at `p` were just stored */
+    uintptr_t a = (uintptr_t)p >> CB_CARD_SHIFT, z = ((uintptr_t)p + (n ? n : 1) - 1) >> CB_CARD_SHIFT;
+    for (;;) { cb_wb_card(a); if (a >= z) break; a++; }
+}
+void cb_gc_write_barrier(const void *p, size_t n) { cb_wb_range(p, n); }   /* for C code that stores into Crumbs memory */
 
 /* ---- threads ---- */
 enum { CB_T_RUNNING = 0, CB_T_SAFE = 1, CB_T_NEW = 2 };
@@ -300,6 +383,7 @@ typedef struct cb_gc_thread {
     struct cb_gc_thread *next;
     void *arg;                    /* start argument, kept alive until the thread has its own copy */
     void *sp, *bottom;            /* saved stack pointer (while SAFE) and the stack base */
+    void *arena;                  /* this thread's string arena (thread-local, so the collector cannot find it by itself) */
     int state;
     jmp_buf regs;                 /* saved callee-saved registers */
 } cb_gc_thread;
@@ -326,7 +410,7 @@ void *cb_gc_thread_prepare(void *arg) {           /* called by the spawner, befo
     if (!cb_gc_mt) {
         cb_gc_thread *m = (cb_gc_thread *)calloc(1, sizeof *m);
         m->bottom = cb_gc_stack_bottom ? cb_gc_stack_bottom : __builtin_frame_address(0);
-        m->state = CB_T_RUNNING;
+        m->state = CB_T_RUNNING; m->arena = &cb_arena;
         cb_gc_threads = m; cb_gc_self = m;
         cb_gc_mt = 1;
     }
@@ -342,6 +426,7 @@ void cb_gc_thread_begin(void *rec) {              /* first thing a new thread do
     pthread_attr_t at; void *addr = 0; size_t size = 0;
     if (pthread_getattr_np(pthread_self(), &at) == 0) { pthread_attr_getstack(&at, &addr, &size); pthread_attr_destroy(&at); }
     cb_gc_self = t;
+    t->arena = &cb_arena;
     t->bottom = addr ? (char *)addr + size : __builtin_frame_address(0);
     cb_gc_lock_slow();                            /* waits out a running collection, then RUNNING */
     pthread_mutex_unlock(&cb_gc_mu);
@@ -370,11 +455,25 @@ void cb_gc_blocking_end(void) {                   /* back from C: wait for a run
     pthread_mutex_unlock(&cb_gc_mu);
 }
 
+/* ---- lists ---- */
+static void cb_gc_link(cb_hdr *h, unsigned g) {
+    CB_SETGEN(h, g);
+    h->prev = 0; h->next = cb_gc_head[g];
+    if (h->next) h->next->prev = h;
+    cb_gc_head[g] = h;
+}
+static void cb_gc_unlink(cb_hdr *h) {
+    if (h == cb_gc_cursor) cb_gc_cursor = h->next;
+    if (h->prev) h->prev->next = h->next; else cb_gc_head[CB_GEN(h)] = h->next;
+    if (h->next) h->next->prev = h->prev;
+}
+
 /* ---- marking ---- */
 static int cb_gc_cmp(const void *a, const void *b) {
     uintptr_t x = (uintptr_t)*(cb_hdr *const *)a, y = (uintptr_t)*(cb_hdr *const *)b;
     return x < y ? -1 : x > y;
 }
+static inline uintptr_t cb_gc_ext_end(const cb_hdr *h) { return (uintptr_t)(h + 1) + (h->n ? h->n : 1); }
 static cb_hdr *cb_gc_find(uintptr_t w) {
     size_t lo = 0, hi = cb_gc_nidx;
     while (lo < hi) {                       /* last block whose data start is <= w */
@@ -383,13 +482,13 @@ static cb_hdr *cb_gc_find(uintptr_t w) {
     }
     if (!lo) return 0;
     cb_hdr *h = cb_gc_idx[lo - 1];
-    return w < (uintptr_t)(h + 1) + (h->n ? h->n : 1) ? h : 0;
+    return w < cb_gc_ext_end(h) ? h : 0;
 }
 static void cb_gc_shade(uintptr_t w) {      /* white -> grey (or straight to black if it holds no pointers) */
     cb_hdr *h = cb_gc_find(w);
-    if (!h || CB_COLOR(h) != cb_gc_white) return;
+    if (!h || CB_COLOR(h) != CB_WHITE) return;
     cb_gc_marked += h->n;
-    if (h->flags & CB_HDR_ATOMIC) { CB_SETCOLOR(h, cb_gc_black); return; }
+    if (h->flags & CB_HDR_ATOMIC) { CB_SETCOLOR(h, CB_BLACK); return; }
     CB_SETCOLOR(h, CB_GREY);
     if (cb_gc_nwork == cb_gc_capwork) {
         cb_gc_capwork = cb_gc_capwork ? cb_gc_capwork * 2 : 1024;
@@ -402,42 +501,189 @@ __attribute__((no_sanitize("address"))) static void cb_gc_scan(const void *lo, c
     uintptr_t a = ((uintptr_t)lo + sizeof(void *) - 1) & ~(uintptr_t)(sizeof(void *) - 1);
     for (; a + sizeof(void *) <= (uintptr_t)hi; a += sizeof(void *)) cb_gc_shade(*(const uintptr_t *)a);
 }
-static void cb_gc_scan_range(const void *a, const void *b) { if (a < b) cb_gc_scan(a, b); else cb_gc_scan(b, a); }
+#ifdef CB_GC_VERIFY
+static uintptr_t *cb_v_roots; static size_t cb_v_nroots, cb_v_caproots;       /* every word the root scan looked at */
+__attribute__((no_sanitize("address"))) static void cb_gc_scan_root(const void *lo, const void *hi) {
+    uintptr_t a = ((uintptr_t)lo + sizeof(void *) - 1) & ~(uintptr_t)(sizeof(void *) - 1);
+    for (; a + sizeof(void *) <= (uintptr_t)hi; a += sizeof(void *)) {
+        uintptr_t w = *(const uintptr_t *)a;
+        if (cb_v_nroots == cb_v_caproots) {
+            cb_v_caproots = cb_v_caproots ? cb_v_caproots * 2 : 4096;
+            cb_v_roots = (uintptr_t *)realloc(cb_v_roots, cb_v_caproots * sizeof *cb_v_roots);
+            if (!cb_v_roots) abort();
+        }
+        cb_v_roots[cb_v_nroots++] = w;
+        cb_gc_shade(w);
+    }
+}
+#else
+#define cb_gc_scan_root cb_gc_scan
+#endif
+static void cb_gc_scan_range(const void *a, const void *b) { if (a < b) cb_gc_scan_root(a, b); else cb_gc_scan_root(b, a); }
 static void cb_region_roots(void) {
     for (cb_Region *r = cb_regions; r; r = r->next)
         for (cb_RegionChunk *c = r->chunks; c; c = c->next)
-            cb_gc_scan((const void *)(c + 1), (const uint8_t *)(c + 1) + 16 + c->used);
+            cb_gc_scan_root((const void *)(c + 1), (const uint8_t *)(c + 1) + 16 + c->used);
+}
+
+/* ---- dirty cards ---- */
+static sigjmp_buf cb_gc_fault_jmp;
+static volatile sig_atomic_t cb_gc_in_card;
+static struct sigaction cb_gc_old_segv, cb_gc_old_bus;
+static void cb_gc_fault(int sig, siginfo_t *si, void *uc) {
+    (void)si; (void)uc;
+    if (cb_gc_in_card) { cb_gc_in_card = 0; siglongjmp(cb_gc_fault_jmp, 1); }
+    sigaction(sig, sig == SIGSEGV ? &cb_gc_old_segv : &cb_gc_old_bus, 0);   /* not ours: let it fault again, into the old handler */
+}
+/* Scan one dirty card, skipping the parts inside the blocks being collected. Returns 1 if the whole card lies
+   inside one of those blocks (its contents were written while the block was young, so the dirt is obsolete). */
+static int cb_gc_scan_card(uintptr_t cs) {
+    uintptr_t ce = cs + ((uintptr_t)1 << CB_CARD_SHIFT);
+    size_t lo = 0, hi = cb_gc_nidx;
+    while (lo < hi) {                               /* first indexed block that ends after the card starts */
+        size_t mid = (lo + hi) / 2;
+        if (cb_gc_ext_end(cb_gc_idx[mid]) <= cs) lo = mid + 1; else hi = mid;
+    }
+    uintptr_t a = cs;
+    for (size_t i = lo; i < cb_gc_nidx && a < ce; i++) {
+        cb_hdr *h = cb_gc_idx[i];
+        uintptr_t bs = (uintptr_t)h, be = cb_gc_ext_end(h);
+        if (bs >= ce) break;
+        if (bs <= cs && be >= ce) return 1;
+        if (bs > a) cb_gc_scan((const void *)a, (const void *)bs);
+        if (be > a) a = be;
+    }
+    if (a < ce) cb_gc_scan((const void *)a, (const void *)ce);
+    return 0;
+}
+static void cb_gc_scan_cards(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = cb_gc_fault; sa.sa_flags = SA_SIGINFO | SA_NODEFER; sigemptyset(&sa.sa_mask);
+    int armed = 0;
+    for (uintptr_t top = 0; top < CB_CARD_TOP; top++) {
+        uint8_t *leaf = cb_card_leaf[top];
+        if (!leaf) continue;
+        const size_t words = ((size_t)1 << (CB_CARD_LEAF_BITS - 3)) / sizeof(uint64_t);
+        for (size_t w = 0; w < words; w++) {
+            uint64_t bits;
+            memcpy(&bits, leaf + w * sizeof bits, sizeof bits);
+            if (!bits) continue;
+            if (!armed) { sigaction(SIGSEGV, &sa, &cb_gc_old_segv); sigaction(SIGBUS, &sa, &cb_gc_old_bus); armed = 1; }
+            for (unsigned b = 0; b < 64; b++) {
+                if (!(bits >> b & 1)) continue;
+                uintptr_t card = (top << CB_CARD_LEAF_BITS) | (w * 64 + b);
+                int obsolete = 0;
+                if (sigsetjmp(cb_gc_fault_jmp, 0) == 0) {          /* a stale card may sit on memory that was unmapped since */
+                    cb_gc_in_card = 1;
+                    obsolete = cb_gc_scan_card(card << CB_CARD_SHIFT);
+                    cb_gc_in_card = 0;
+                } else obsolete = 1;
+                if (obsolete) {
+                    leaf[(w * 64 + b) >> 3] &= (uint8_t)~(1u << (b & 7));
+                    if (cb_gc_ndirty) cb_gc_ndirty--;
+                }
+            }
+        }
+    }
+    if (armed) { sigaction(SIGSEGV, &cb_gc_old_segv, 0); sigaction(SIGBUS, &cb_gc_old_bus, 0); }
+}
+static void cb_gc_clear_cards(void) {
+    for (uintptr_t top = 0; top < CB_CARD_TOP; top++) {
+        uint8_t *leaf = cb_card_leaf[top];
+        if (!leaf) continue;
+        const size_t words = ((size_t)1 << (CB_CARD_LEAF_BITS - 3)) / sizeof(uint64_t);
+        for (size_t w = 0; w < words; w++) {
+            uint64_t bits;
+            memcpy(&bits, leaf + w * sizeof bits, sizeof bits);
+            if (bits) memset(leaf + w * sizeof bits, 0, sizeof bits);
+        }
+    }
+    cb_gc_ndirty = 0;
 }
 
 /* ---- sweeping ---- */
-static void cb_gc_unlink(cb_hdr *h) {
-    if (h == cb_gc_cursor) cb_gc_cursor = h->next;
-    if (h->prev) h->prev->next = h->next; else cb_gc_all = h->next;
-    if (h->next) h->next->prev = h->prev;
-}
-static void cb_gc_sweep_step(size_t budget) {
+static void cb_gc_sweep_step(size_t budget) {            /* lazy sweep of generation 2 */
     while (cb_gc_cursor && budget--) {
         cb_hdr *h = cb_gc_cursor;
         cb_gc_cursor = h->next;
-        if (CB_COLOR(h) == cb_gc_white) {
-            if (h->prev) h->prev->next = h->next; else cb_gc_all = h->next;
-            if (h->next) h->next->prev = h->prev;
-            cb_gc_live -= h->n;
+        if (CB_COLOR(h) == CB_WHITE) {
+            cb_gc_unlink(h);
+            cb_gc_live -= h->n; cb_gc_gbytes[2] -= h->n;
             free(h);
         }
     }
 }
-
-#ifdef CB_GC_VERIFY      /* the tri-colour invariant: nothing grey is left, no black block points at a white one */
-static void cb_gc_verify(void) {
-    for (cb_hdr *h = cb_gc_all; h; h = h->next) {
-        if (CB_COLOR(h) == CB_GREY) { fputs("gc verify: grey block left after marking\n", stderr); abort(); }
-        if (CB_COLOR(h) != cb_gc_black || (h->flags & CB_HDR_ATOMIC)) continue;
-        for (uintptr_t a = (uintptr_t)(h + 1); a + sizeof(void *) <= (uintptr_t)(h + 1) + h->n; a += sizeof(void *)) {
-            cb_hdr *t = cb_gc_find(*(const uintptr_t *)a);
-            if (t && CB_COLOR(t) == cb_gc_white) { fputs("gc verify: black block points at a white block\n", stderr); abort(); }
+static size_t cb_gc_sweep_young(int level) {             /* free the white blocks of the collected generations, promote the rest */
+    size_t promoted = 0;
+    for (int g = 0; g <= level && g < 2; g++) {
+        unsigned dest = level >= 1 ? 2u : 1u;
+        cb_hdr *h = cb_gc_head[g];
+        cb_gc_head[g] = 0; cb_gc_gbytes[g] = 0;
+        while (h) {
+            cb_hdr *nx = h->next;
+            if (CB_COLOR(h) == CB_WHITE) { cb_gc_live -= h->n; free(h); }
+            else { cb_gc_link(h, dest); cb_gc_gbytes[dest] += h->n; promoted += h->n; }
+            h = nx;
         }
     }
+    return promoted;
+}
+
+#ifdef CB_GC_VERIFY
+/* Generational check: trace the whole heap from the same root words, ignoring generations. A block of a collected
+   generation that this trace reaches but the collection left white was lost: some old-to-young pointer was not
+   recorded by a write barrier. Also: no grey block may be left. */
+static cb_hdr **cb_v_idx; static size_t cb_v_n;
+static cb_hdr *cb_v_find(uintptr_t w) {
+    size_t lo = 0, hi = cb_v_n;
+    while (lo < hi) { size_t mid = (lo + hi) / 2; if ((uintptr_t)(cb_v_idx[mid] + 1) <= w) lo = mid + 1; else hi = mid; }
+    if (!lo) return 0;
+    cb_hdr *h = cb_v_idx[lo - 1];
+    return w < cb_gc_ext_end(h) ? h : 0;
+}
+__attribute__((no_sanitize("address"))) static void cb_gc_verify(int level) {
+    cb_v_n = 0;
+    for (int g = 0; g < 3; g++) for (cb_hdr *h = cb_gc_head[g]; h; h = h->next) cb_v_n++;
+    cb_v_idx = (cb_hdr **)malloc((cb_v_n ? cb_v_n : 1) * sizeof *cb_v_idx);
+    cb_hdr **stack = (cb_hdr **)malloc((cb_v_n ? cb_v_n : 1) * sizeof *stack);
+    if (!cb_v_idx || !stack) abort();
+    size_t k = 0, sp = 0;
+    for (int g = 0; g < 3; g++) for (cb_hdr *h = cb_gc_head[g]; h; h = h->next) { cb_v_idx[k++] = h; h->flags &= ~(uintptr_t)CB_HDR_VMARK; }
+    qsort(cb_v_idx, cb_v_n, sizeof *cb_v_idx, cb_gc_cmp);
+    for (size_t i = 0; i < cb_v_n; i++) if (CB_GEN(cb_v_idx[i]) <= (unsigned)level && CB_COLOR(cb_v_idx[i]) == CB_GREY) {
+        fputs("gc verify: grey block left after marking\n", stderr); abort();
+    }
+    size_t i = 0, nroots = cb_v_nroots;
+    for (;;) {
+        uintptr_t w;
+        if (i < nroots) w = cb_v_roots[i++];
+        else if (sp) {
+            cb_hdr *h = stack[--sp];
+            for (uintptr_t a = (uintptr_t)(h + 1); a + sizeof(void *) <= (uintptr_t)(h + 1) + h->n; a += sizeof(void *)) {
+                cb_hdr *t = cb_v_find(*(const uintptr_t *)a);
+                if (!t || (t->flags & CB_HDR_VMARK)) continue;
+                t->flags |= CB_HDR_VMARK;
+                if (CB_GEN(t) <= (unsigned)level && CB_COLOR(t) == CB_WHITE) {
+                    fprintf(stderr, "gc verify: a %u-byte block of generation %u is reachable but was not marked (missing write barrier?)\n", (unsigned)t->n, CB_GEN(t));
+                    abort();
+                }
+                if (!(t->flags & CB_HDR_ATOMIC)) stack[sp++] = t;
+            }
+            continue;
+        } else break;
+        cb_hdr *t = cb_v_find(w);
+        if (!t || (t->flags & CB_HDR_VMARK)) continue;
+        t->flags |= CB_HDR_VMARK;
+        if (CB_GEN(t) <= (unsigned)level && CB_COLOR(t) == CB_WHITE) {
+            fprintf(stderr, "gc verify: a %u-byte block of generation %u is reachable from a root but was not marked\n", (unsigned)t->n, CB_GEN(t));
+            abort();
+        }
+        if (!(t->flags & CB_HDR_ATOMIC)) stack[sp++] = t;
+    }
+    for (size_t j = 0; j < cb_v_n; j++) cb_v_idx[j]->flags &= ~(uintptr_t)CB_HDR_VMARK;
+    free(stack); free(cb_v_idx); cb_v_idx = 0; cb_v_n = 0;
+    cb_v_nroots = 0;
 }
 #endif
 
@@ -456,43 +702,68 @@ static int cb_gc_stop_world(void) {
         sched_yield();
     }
 }
-__attribute__((noinline, no_sanitize("address"))) static void cb_gc_collect_locked(void) {
-    if (!cb_gc_stop_world()) { cb_gc_since = 0; return; }           /* a thread is busy: try again later */
-    cb_gc_sweep_step((size_t)-1);                                   /* 1. finish the previous sweep */
-    size_t n = 0;
-    for (cb_hdr *h = cb_gc_all; h; h = h->next) n++;
-    cb_gc_idx = (cb_hdr **)malloc((n ? n : 1) * sizeof *cb_gc_idx);
-    if (!cb_gc_idx) return;
-    cb_gc_nidx = 0;
-    for (cb_hdr *h = cb_gc_all; h; h = h->next) cb_gc_idx[cb_gc_nidx++] = h;
-    qsort(cb_gc_idx, cb_gc_nidx, sizeof *cb_gc_idx, cb_gc_cmp);
-    unsigned w = cb_gc_white; cb_gc_white = cb_gc_black; cb_gc_black = w;   /* 2. epoch flip: all blocks are white */
-    cb_gc_marked = 0;
+__attribute__((noinline, no_sanitize("address"))) static void cb_gc_roots(void) {
     jmp_buf regs;                            /* spill callee-saved registers onto the stack */
     setjmp(regs);
-    void *sp = (void *)&regs;                /* 3. roots */
+    void *sp = (void *)&regs;
     if (cb_gc_self) {
         cb_gc_scan_range(sp, cb_gc_self->bottom);
         for (cb_gc_thread *t = cb_gc_threads; t; t = t->next) {
-            cb_gc_scan(t, t + 1);            /* the record itself: saved registers and start argument */
+            cb_gc_scan_root(t, t + 1);       /* the record itself: saved registers and start argument */
+            if (t->arena) cb_gc_scan_root(t->arena, (const uint8_t *)t->arena + sizeof cb_arena);   /* its string arena's chunk */
             if (t != cb_gc_self && t->state == CB_T_SAFE) cb_gc_scan_range(t->sp, t->bottom);
         }
-    } else if (cb_gc_stack_bottom) cb_gc_scan_range(sp, cb_gc_stack_bottom);
-    if (__data_start && _end) cb_gc_scan(__data_start, _end);
+    } else {
+        if (cb_gc_stack_bottom) cb_gc_scan_range(sp, cb_gc_stack_bottom);
+        cb_gc_scan_root(&cb_arena, &cb_arena + 1);
+    }
+    if (__data_start && _end) cb_gc_scan_root(__data_start, _end);
     cb_region_roots();                       /* pointers stored inside live regions keep their targets alive */
-    while (cb_gc_nwork) {                    /* 4. grey -> black until no grey is left */
+}
+/* level 0 = minor, 1 = mid, 2 = major */
+__attribute__((noinline, no_sanitize("address"))) static void cb_gc_collect_locked(int level) {
+    if (cb_gc_force_major) level = 2;
+    if (!cb_gc_stop_world()) { cb_gc_trigger = cb_gc_gbytes[0] + CB_GC_NURSERY; return; }   /* a thread is busy: try again later */
+    if (level == 2) cb_gc_sweep_step((size_t)-1);                    /* finish the previous major's sweep before repainting */
+    size_t n = 0;
+    for (int g = 0; g <= level; g++) for (cb_hdr *h = cb_gc_head[g]; h; h = h->next) n++;
+    cb_gc_idx = (cb_hdr **)malloc((n ? n : 1) * sizeof *cb_gc_idx);
+    if (!cb_gc_idx) return;
+    cb_gc_nidx = 0;
+    for (int g = 0; g <= level; g++)
+        for (cb_hdr *h = cb_gc_head[g]; h; h = h->next) { CB_SETCOLOR(h, CB_WHITE); cb_gc_idx[cb_gc_nidx++] = h; }
+    qsort(cb_gc_idx, cb_gc_nidx, sizeof *cb_gc_idx, cb_gc_cmp);
+    cb_gc_marked = 0;
+    cb_gc_roots();                           /* roots */
+    if (level < 2) cb_gc_scan_cards();       /* old-to-young pointers recorded by the write barrier */
+    while (cb_gc_nwork) {                    /* grey -> black until no grey is left */
         cb_hdr *h = cb_gc_work[--cb_gc_nwork];
         cb_gc_scan(h + 1, (uint8_t *)(h + 1) + h->n);
-        CB_SETCOLOR(h, cb_gc_black);
+        CB_SETCOLOR(h, CB_BLACK);
     }
 #ifdef CB_GC_VERIFY
-    cb_gc_verify();
+    cb_gc_verify(level);
 #endif
     free(cb_gc_idx); cb_gc_idx = 0; cb_gc_nidx = 0;
-    cb_gc_cursor = cb_gc_all;                /* 5. lazy sweep starts */
-    cb_gc_since = 0;
-    cb_gc_runs++;
-    cb_gc_next = cb_gc_marked > ((size_t)4 << 20) ? cb_gc_marked : ((size_t)4 << 20);   /* collect again after this much more */
+    size_t promoted = cb_gc_sweep_young(level);
+    if (level >= 1) cb_gc_clear_cards();     /* nothing young is left: every recorded old-to-young pointer is gone */
+    if (level == 2) {
+        cb_gc_cursor = cb_gc_head[2];        /* lazy sweep of the old generation starts */
+        cb_gc_g2_grow = 0;
+        cb_gc_g2_limit = cb_gc_marked > CB_GC_MAJOR_MIN ? cb_gc_marked : CB_GC_MAJOR_MIN;
+        cb_gc_force_major = 0;
+        cb_gc_minors_since_mid = 0;
+    } else if (level == 1) {
+        cb_gc_g2_grow += promoted;
+        cb_gc_minors_since_mid = 0;
+    } else cb_gc_minors_since_mid++;
+    cb_gc_runs[level]++;
+    cb_gc_trigger = CB_GC_NURSERY;
+}
+static int cb_gc_pick_level(void) {
+    if (cb_gc_force_major || cb_gc_g2_grow >= cb_gc_g2_limit) return 2;
+    if (cb_gc_gbytes[1] >= CB_GC_MID || cb_gc_minors_since_mid >= CB_GC_MID_EVERY || cb_gc_ndirty >= CB_GC_CARD_BUDGET) return 1;
+    return 0;
 }
 static void *cb_mem_alloc(size_t n, int atomic) {
     if (!cb_gc_stack_bottom) {              /* library mode: no main() ran CB_GC_INIT; approximate from here */
@@ -500,17 +771,14 @@ static void *cb_mem_alloc(size_t n, int atomic) {
         cb_gc_stack_bottom = &__libc_stack_end ? __libc_stack_end : __builtin_frame_address(0);
     }
     cb_gc_lock();
-    if (cb_gc_since >= cb_gc_next) cb_gc_collect_locked();
+    if (cb_gc_gbytes[0] >= cb_gc_trigger) cb_gc_collect_locked(cb_gc_pick_level());
     else if (cb_gc_cursor) cb_gc_sweep_step(64);
     cb_hdr *h = (cb_hdr *)calloc(1, sizeof(cb_hdr) + (n ? n : 1));
-    if (!h) { cb_gc_collect_locked(); cb_gc_sweep_step((size_t)-1); h = (cb_hdr *)calloc(1, sizeof(cb_hdr) + (n ? n : 1)); }
+    if (!h) { cb_gc_collect_locked(2); cb_gc_sweep_step((size_t)-1); h = (cb_hdr *)calloc(1, sizeof(cb_hdr) + (n ? n : 1)); }
     if (!h) { cb_gc_unlock(); return 0; }
     h->n = n; h->flags = atomic ? CB_HDR_ATOMIC : 0;
-    CB_SETCOLOR(h, cb_gc_black);            /* born black: the running sweep must not free it */
-    h->next = cb_gc_all;
-    if (cb_gc_all) cb_gc_all->prev = h;
-    cb_gc_all = h;
-    cb_gc_live += n; cb_gc_since += n;
+    cb_gc_link(h, 0);
+    cb_gc_live += n; cb_gc_gbytes[0] += n;
     cb_gc_unlock();
     return h + 1;
 }
@@ -519,7 +787,7 @@ static void cb_mem_free(void *p) {
     cb_hdr *h = (cb_hdr *)p - 1;
     cb_gc_lock();
     cb_gc_unlink(h);
-    cb_gc_live -= h->n;
+    cb_gc_live -= h->n; cb_gc_gbytes[CB_GEN(h)] -= h->n;
     cb_gc_unlock();
     free(h);
 }
@@ -534,12 +802,27 @@ static void *cb_mem_realloc(void *p, size_t old, size_t n) {
 }
 static void cb_gc_collect(void) {            /* a full collection: mark, then sweep to the end */
     cb_gc_lock();
-    cb_gc_collect_locked();
+    cb_gc_collect_locked(2);
     cb_gc_sweep_step((size_t)-1);
     cb_gc_unlock();
 }
+static void cb_gc_collect_gen(int64_t g, const char *loc) {      /* collect generations 0..g */
+    if (g < 0 || g > 2) cb_panic(loc, "gc_collect_gen: the generation must be 0, 1 or 2");
+    cb_gc_lock();
+    cb_gc_collect_locked((int)g);
+    if (g == 2) cb_gc_sweep_step((size_t)-1);
+    cb_gc_unlock();
+}
 static int64_t cb_gc_bytes(void) { return (int64_t)cb_gc_live; }
-static int64_t cb_gc_collections(void) { return (int64_t)cb_gc_runs; }
+static int64_t cb_gc_collections(void) { return (int64_t)(cb_gc_runs[0] + cb_gc_runs[1] + cb_gc_runs[2]); }
+static int64_t cb_gc_gen_bytes(int64_t g, const char *loc) {
+    if (g < 0 || g > 2) cb_panic(loc, "gc_gen_bytes: the generation must be 0, 1 or 2");
+    return (int64_t)cb_gc_gbytes[g];
+}
+static int64_t cb_gc_gen_collections(int64_t g, const char *loc) {
+    if (g < 0 || g > 2) cb_panic(loc, "gc_gen_collections: the generation must be 0, 1 or 2");
+    return (int64_t)cb_gc_runs[g];
+}
 #endif
 
 static inline void *cb_alloc(int64_t n, int64_t size, int atomic, const char *l) {
@@ -593,7 +876,6 @@ static void cb_print_f32(float v) {
     fputs(buf, stdout);
 }
 /* ---- strings: bump arena + concatenation -------------------------------- */
-static __thread struct { uint8_t *top, *end; } cb_arena;       /* per thread: string temporaries need no lock */
 
 static uint8_t *cb_arena_alloc(size_t n, const char *loc) {
     if (CB_UNLIKELY((size_t)(cb_arena.end - cb_arena.top) < n)) {

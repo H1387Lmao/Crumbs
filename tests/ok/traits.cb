@@ -1,0 +1,84 @@
+// Traits: required and default methods, supertraits, impls for structs, generic structs and built-in types,
+// and `T: Trait` bounds on generic functions, structs and impls (checked for every instantiation).
+trait Shape {
+    fn area(self) -> f64;
+    fn name(self) -> str;
+    fn describe(self) -> String {                       // a default method; Self is the implementing type
+        return string_from(self.name()) + " with area " + to_str(self.area());
+    }
+}
+
+trait Solid: Shape {                                    // every Solid must also be a Shape
+    fn height(self) -> f64;
+    fn volume(self) -> f64 { return self.area() * self.height(); }
+}
+
+trait Named { fn label(self) -> str; }
+
+trait Double { fn double(self) -> Self; }
+
+struct Circle { r: f64 }
+struct Rect { w: f64, h: f64 }
+struct Cylinder { r: f64, h: f64 }
+
+impl Shape for Circle {
+    fn area(self) -> f64 { return 3.0 * self.r * self.r; }
+    fn name(self) -> str { return "circle"; }
+}
+impl Shape for Rect {
+    fn area(self) -> f64 { return self.w * self.h; }
+    fn name(self) -> str { return "rect"; }
+    fn describe(self) -> String { return string_from("a ") + to_str(self.w) + "x" + to_str(self.h) + " rect"; }   // overrides the default
+}
+impl Shape for Cylinder {
+    fn area(self) -> f64 { return 3.0 * self.r * self.r; }
+    fn name(self) -> str { return "cylinder"; }
+}
+impl Solid for Cylinder { fn height(self) -> f64 { return self.h; } }
+impl Named for Rect { fn label(self) -> str { return "R"; } }
+impl Named for Circle { fn label(self) -> str { return "C"; } }
+
+impl Double for i32 { fn double(self) -> i32 { return *self * 2; } }
+impl Double for f64 { fn double(self) -> f64 { return *self * 2.0; } }
+
+struct Labelled<T: Shape> { item: T, tag: str }
+
+impl<T: Shape> Labelled<T> {
+    pub fn show(self) -> String { return string_from(self.tag) + ": " + self.item.describe(); }
+}
+impl<T: Shape> Shape for Labelled<T> {                  // implemented only when T is a Shape
+    fn area(self) -> f64 { return self.item.area(); }
+    fn name(self) -> str { return self.tag; }
+}
+
+fn total_area<T: Shape>(items: []T) -> f64 {
+    let mut t = 0.0;
+    for it in items { t += it.area(); }
+    return t;
+}
+
+fn both<T: Shape + Named>(x: T) -> String { return string_from(x.label()) + "=" + x.name(); }
+
+fn volume_of<S: Solid>(s: S) -> f64 { return s.volume(); }
+
+fn quad<T: Double>(x: T) -> T { return x.double().double(); }
+
+fn announce<T: Shape>(x: T) -> String { return x.describe(); }
+
+fn main() {
+    let c = Circle { r: 2.0 };
+    let r = Rect { w: 3.0, h: 4.0 };
+    println(c.describe());
+    println(r.describe());
+    let rects = [Rect { w: 1.0, h: 2.0 }, Rect { w: 3.0, h: 4.0 }];
+    println(total_area(rects[0..]));
+    println(both(r), " ", both(c));
+    let cyl = Cylinder { r: 1.0, h: 5.0 };
+    println(volume_of(cyl), " ", cyl.describe());
+    println(quad(5), " ", quad(1.5));
+    let l = Labelled { item: Circle { r: 1.0 }, tag: "small" };
+    println(l.show());
+    println(announce(l));                                 // Labelled<Circle> is a Shape because Circle is
+    let boxes = [Labelled { item: Rect { w: 2.0, h: 2.0 }, tag: "sq" }];
+    println(total_area(boxes[0..]));
+}

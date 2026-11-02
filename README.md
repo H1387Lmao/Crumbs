@@ -112,9 +112,42 @@ let z = max<i64>(5, 6);               // or explicit
 let p = Pair { first: 1, second: "x" };            // struct args inferred from fields
 let l: list.List<i32> = list.new();               // or from the expected type
 ```
-Bodies are checked per instantiation (errors carry a note saying which types were used), so there are no
-trait bounds: `a > b` simply must work for the chosen `T`. Write `0 as T` for numeric zero. `std.list` (growable
-`List<T>`) and `std.mem` (`swap`, `min`, `max`, `sort`) are generic.
+Bodies are checked per instantiation (errors carry a note saying which types were used). Without a bound, `a > b` simply must work
+for the chosen `T`; to state what a type parameter must support, give it a trait bound (see **Traits**). Write `0 as T` for numeric zero.
+`std.list` (growable `List<T>`) and `std.mem` (`swap`, `min`, `max`, `sort`) are generic.
+
+**Traits.** A trait lists methods a type must have; `impl Trait for Type` supplies them. The compiler checks that every required method
+is present, that none is extra, and that each signature matches the declaration. Bounds (`T: A + B`) go on generic functions, structs and
+`impl` blocks and are checked at every instantiation, inferred or explicit. A method with a body is a default that an `impl` may keep or
+override (`Self` is the implementing type); `trait Solid: Shape` requires every `Solid` type to be a `Shape` too. Dispatch is static
+(monomorphized): there are no trait objects, and a trait is a bound, not a type.
+
+```
+trait Shape {
+    fn area(self) -> f64;
+    fn name(self) -> str;
+    fn describe(self) -> String {                    // default method
+        return string_from(self.name()) + " with area " + to_str(self.area());
+    }
+}
+trait Solid: Shape { fn height(self) -> f64; }       // supertrait
+
+struct Rect { w: f64, h: f64 }
+impl Shape for Rect {
+    fn area(self) -> f64 { return self.w * self.h; }
+    fn name(self) -> str { return "rect"; }
+}
+
+fn total_area<T: Shape>(items: []T) -> f64 {         // bound, checked for every T
+    let mut t = 0.0;
+    for it in items { t += it.area(); }
+    return t;
+}
+struct Labelled<T: Shape> { item: T, tag: str }
+impl<T: Shape> Shape for Labelled<T> { ... }         // implemented only when T is a Shape
+```
+`total_area(dots)` with a type that has no `impl Shape` is an error: `the trait bound `Dot: Shape` is not satisfied`, with a note naming the
+bound that required it. Traits and their impls can live in different modules (`impl lib.Greeter for Robot`).
 
 **Types:** `i8..i64 u8..u64 f32 f64 bool str String void`, `*T`, `[N]T`, `[]T`, structs, enums, `T!`.
 `str` is an immutable byte-string view `{ptr,len}`; char literals (`'a'`) are `u8`.
@@ -263,22 +296,31 @@ of those, arrays of those). Bridge helpers: `cstr(s)` (NUL-terminated copy of a 
 converts to it implicitly; get a typed pointer back with `as`). `examples/ffi/` wraps a small C library the way you would wrap
 SDL or raylib: raw declarations, a struct whose `drop` closes the handle, and a callback trampoline.
 
-**`std.list`: a growable array for every element type.** `list.List<T>` works for numbers, `str`, `String`, structs, arrays,
-function pointers and nested lists. It owns its elements and is released automatically (running element destructors and freeing
-`String`s). API: `new`, `with_capacity`, `from_slice`, `push`, `pop` (`T!`, `Empty`), `at` (pointer, any `T`), `get`, `set`, `insert`, `remove`,
-`swap_remove`, `extend`, `view`, `clear`, `release`, `reverse`, `sort_by(l, cmp)` (heap sort, `cmp` like C's `qsort`), `for_each`, `find_by`.
+**Garbage collector (on by default; `--no-gc` for plain malloc).** A conservative, **three-generation** collector (Linux; glibc or musl)
+manages `alloc()`, `String` buffers and the string arena. New blocks start in generation 0 (the nursery). When the nursery has grown by
+1 MiB the allocator runs one of three collections:
 
-**Garbage collector (on by default; `--no-gc` for plain malloc).** A conservative **tri-colour** collector (Linux; glibc or musl) manages `alloc()`,
-`String` buffers and the string arena. Every block is white (not reached), grey (reached, contents not scanned) or black (reached and
-scanned). A cycle flips which two colour values mean white and black (so nothing has to be repainted), greys the roots (the stacks
-and registers of every thread, the data segment, live regions), drains the grey worklist until nothing is grey, then sweeps *lazily*:
-a cursor frees the white blocks a few at a time as you allocate, and blocks allocated during the sweep are born black. Interior
-pointers keep a block alive, and blocks known to hold no pointers (numbers, bytes) are never scanned. Marking is stop-the-world, so no
-write barrier is needed; it is not an incremental or concurrent collector. Compile with `--cflag=-DCB_GC_VERIFY` to check the invariant
-after every mark phase (no grey block left, no black block pointing at a white one). Collection is triggered by allocation volume;
-`gc_collect()` forces a full one, `gc_bytes()` reports the bytes in use and `gc_collections()` counts the cycles (no-ops / 0 with `--no-gc`).
-`free()` and destructors stay legal and release memory immediately. Caveats: memory given to C and kept only on the C side is not seen
-(keep a Crumbs reference to it); under AddressSanitizer use `ASAN_OPTIONS=detect_stack_use_after_return=0`.
+| collection | collects | survivors go to | when |
+|---|---|---|---|
+| minor | generation 0 | generation 1 | every nursery fill |
+| mid | generations 0 and 1 | generation 2 (old) | every 8 minors, or generation 1 holds 4 MiB, or many cards are dirty |
+| major | everything | generation 2 | the old generation grew by as much as it held (at least 16 MiB), or `gc_collect()` |
+
+Within a collection blocks are white (not reached), grey (reached, contents not scanned) or black (reached and scanned); only the blocks
+being collected are painted and indexed, so a minor collection costs time proportional to the young data, not the heap. Roots are the
+stacks and registers of every thread, the data segment, live regions, each thread's string arena, and the **old-to-young pointers**.
+Those are found with a **write barrier**: the compiler emits `cb_wb_range` after each store of a pointer-holding value through a pointer,
+slice, field or `write_at`, which dirties a 512-byte card; minor and mid collections scan the dirty cards as roots. Marking is
+stop-the-world; young generations are swept immediately and the old generation lazily (a few blocks per allocation). Interior pointers keep
+a block alive, and blocks known to hold no pointers (numbers, bytes) are never scanned.
+
+Controls: `gc_collect()` forces a major collection, `gc_collect_gen(g)` collects generations `0..g`, `gc_bytes()` reports bytes in use,
+`gc_collections()` counts all cycles, and `gc_gen_bytes(g)` / `gc_gen_collections(g)` report one generation (all no-ops / 0 with `--no-gc`).
+Compile with `--cflag=-DCB_GC_VERIFY` to check every collection against a full trace of the heap (it aborts on a missed barrier or a
+grey block left over); the thresholds can be tuned with `-DCB_GC_NURSERY=`, `CB_GC_MID`, `CB_GC_MID_EVERY`, `CB_GC_MAJOR_MIN` and
+`CB_GC_CARD_BUDGET`. `free()` and destructors stay legal and release memory immediately. Caveats: memory given to C and kept only on the C
+side is not seen (keep a Crumbs reference to it); C code that stores Crumbs pointers into Crumbs memory should call
+`cb_gc_write_barrier(p, size)` afterwards; under AddressSanitizer use `ASAN_OPTIONS=detect_stack_use_after_return=0`.
 With threads (`std.thread`) the heap is locked and a collection waits (up to 100 ms) for the other threads to reach an allocation or a
 blocking call; a thread that is busy computing only postpones the collection.
 
@@ -317,18 +359,25 @@ object file with no libc symbols (`nm -u` shows none), or call C yourself throug
 
 **Modules:** `import a.b;` loads `a/b.cb` (relative to the entry file's directory, or `std/` for `std.*`);
 the name is the last segment (or `as alias`). Only `pub` items are visible to importers; cycles are
-rejected. All modules are emitted into one C translation unit, so cross-module calls inline.
-Standard library (`std/`, written in Crumbs): `math`, `conv`, `str` (trim, find/rfind, split, join, replace, case conversion, compare, ...), `rand`, `list`, `mem`, `io`, and
+rejected. All modules are emitted into one C translation unit, so cross-module calls inline. Traits, like every other `pub` item, can be declared in one module and implemented in another.
 
-- **`std.time`**: `monotonic_ns()`, `unix()`, `unix_ms()`, `sleep_ms(n)`; `Duration` (`from_ms`, `as_secs_f64`, `to_string()` -> `"1.500s"`, ...), `Stopwatch` (`start`, `elapsed`, `lap`, `reset`),
-  and calendar dates: `from_unix(secs)`, `now_utc()`, `now_local()`, `DateTime.new(y, m, d, h, mi, s)`, `.format()`, `.iso()`, `.weekday_name()`, `.add_days(n)`, `is_leap_year`, `days_in_month`.
-- **`std.fs`**: `read_to_string`, `read_lines`, `write`, `append`, `exists`, `is_file`, `is_dir`, `size`, `remove`, `make_dir` (errors `NotFound`, `IoError`).
-- **`std.env`**: `args()`, `arg(i)`, `arg_count()`, `get(name)` (`NotSet`), `has(name)`.
-- **`std.thread`**: `spawn(f, arg)` / `spawn_fn(f)` -> `Thread` (`.join()`), `Mutex.new()` (`lock`, `try_lock`, `unlock`), `Condvar.new()` (`wait`, `signal`, `broadcast`),
-  `AtomicI64`, generic `channel<T>()` (`send`, `recv`, `close`; error `Closed`), `sleep_ms`, `yield_now`, `current_id`, `cpu_count`.
+## Standard library
 
-`std.time`, `std.fs`, `std.env`, `std.io` and `std.thread` contain no C helpers: they bind libc and pthread with plain `extern fn` / `extern struct` / `extern const`
-declarations, exactly like user code does. (The only runtime hooks they call are the collector's thread notifications in `std.thread`.)
+Written in Crumbs and imported with `import std.name;` (`String`, `str` and `List<T>` need no import). Related modules are grouped:
+
+| area | modules | what they give you |
+|---|---|---|
+| input / output | `std.io` | `getc` (`io.Eof`), `putc`, `get_line`, `flush` |
+| collections | `std.list`, `std.mem` | growable `List<T>` for every element type (`new`, `with_capacity`, `from_slice`, `push`, `pop`, `at`, `get`, `set`, `insert`, `remove`, `swap_remove`, `extend`, `view`, `clear`, `release`, `reverse`, `sort_by`, `for_each`, `find_by`); `swap`, `min`, `max`, `sort` |
+| text, numbers | `std.str`, `std.conv`, `std.math`, `std.rand` | trim, find/rfind, split, join, replace, case conversion, compare; text/number conversion; math; random numbers |
+| time | `std.time` | `monotonic_ns`, `unix`, `unix_ms`, `sleep_ms`; `Duration` (`from_ms`, `as_secs_f64`, `to_string()`), `Stopwatch` (`start`, `elapsed`, `lap`, `reset`); calendar dates: `from_unix`, `now_utc`, `now_local`, `DateTime.new`, `.format()`, `.iso()`, `.weekday_name()`, `.add_days(n)`, `is_leap_year`, `days_in_month` |
+| files, environment | `std.fs`, `std.env` | `read_to_string`, `read_lines`, `write`, `append`, `exists`, `is_file`, `is_dir`, `size`, `remove`, `make_dir` (errors `NotFound`, `IoError`); `args`, `arg`, `arg_count`, `get` (`NotSet`), `has` |
+| threads | `std.thread` | `spawn(f, arg)` / `spawn_fn(f)` -> `Thread` (`.join()`), `Mutex`, `Condvar`, `AtomicI64`, generic `channel<T>()` (`send`, `recv`, `close`; `Closed`), `sleep_ms`, `yield_now`, `current_id`, `cpu_count` |
+
+`std.list` owns its elements and releases them (running destructors and freeing `String`s) automatically; `list.List<T>` works for numbers,
+`str`, `String`, structs, arrays, function pointers and nested lists. `std.time`, `std.fs`, `std.env`, `std.io` and `std.thread` contain no C
+helpers: they bind libc and pthread with plain `extern fn` / `extern struct` / `extern const` declarations, exactly like user code does.
+(The only runtime hooks they call are the collector's thread notifications in `std.thread`.)
 
 ## Compiler layout
 
@@ -337,9 +386,9 @@ declarations, exactly like user code does. (The only runtime hooks they call are
 | `crumbsc/lexer.py` | tokens, nested comments, escapes, number forms/suffixes, error recovery |
 | `crumbsc/parser.py` | recursive descent + panic-mode recovery (reports many syntax errors per run) |
 | `crumbsc/loader.py` | import resolution, cycle detection, dependency order |
-| `crumbsc/checker.py` | name resolution, types, mutability, const-eval, control-flow analysis |
+| `crumbsc/checker.py` | name resolution, types, mutability, const-eval, control-flow analysis, trait conformance and bound checking |
 | `crumbsc/codegen.py` | C emission |
-| `crumbsc/runtime.c` | the C runtime (arithmetic, strings, collector, regions, time/fs/env helpers), embedded into every output by `runtime.py` |
+| `crumbsc/runtime.c` | the C runtime (arithmetic, strings, the generational collector and write barrier, regions), embedded into every output by `runtime.py` |
 | `crumbsc/timing.py` | phase timing behind `-v` |
 | `cookie.py` | the build tool (projects, profiles, option forwarding) |
 | `crumbsc/diag.py` | rustc-style diagnostics with "did you mean" suggestions |
@@ -369,5 +418,5 @@ error messages still point at the right line; a line altered by macros gets a no
 Not supported: `#include` (use `import`, or `include "x.h";` for C headers). Macros are per file, and a call must fit on one line.
 
 ## Known limits (it is a toy)
-No generic enums, trait bounds or closures; no `if` expressions; the collector is conservative and stop-the-world. Slices are mutable views even of
+No generic enums, trait objects, generic traits or closures; no `if` expressions; the collector is conservative and stop-the-world (generational, so most pauses are short). Slices are mutable views even of
 immutable arrays. The generated C needs GCC/Clang (statement expressions, overflow builtins).
