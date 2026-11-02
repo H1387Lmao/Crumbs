@@ -658,7 +658,7 @@ def _platform_defines():
     sysname = platform.system().lower()
     machine = platform.machine().lower()
     d = {"__CRUMBS__": "1"}
-    d["CB_OS_LINUX" if sysname == "linux" else "CB_OS_MACOS" if sysname == "darwin" else "CB_OS_WINDOWS" if sysname == "windows" else "CB_OS_OTHER"] = "1"
+    d["CB_OS_LINUX" if sysname == "linux" else "CB_OS_MACOS" if sysname == "darwin" else "CB_OS_WINDOWS" if sysname == "windows" else "CB_OS_LINUX" if sysname=="android" else "CB_OS_OTHER"] = "1"
     if machine in ("x86_64", "amd64"):
         d["CB_ARCH_X86_64"] = "1"
     elif machine in ("aarch64", "arm64"):

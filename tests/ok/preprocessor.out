@@ -9,5 +9,4 @@ hello world "q"
 mode 2 with feature
 arithmetic ok
 ifdef else
-unix
 1

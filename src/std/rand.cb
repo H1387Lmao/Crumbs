@@ -1,27 +1,50 @@
-// std.rand: a small xorshift64* generator.
-pub struct Rng { state: u64 }
+import std.time;
 
-pub fn new(seed: u64) -> Rng {
-    let mut s = seed;
-    if s == 0 { s = 88172645463325252; }
-    return Rng { state: s };
+pub struct Rng {
+    state: u64
 }
 
-pub fn next(r: *Rng) -> u64 {
-    let mut x = r.state;
-    x = x ^ (x >> 12);
-    x = x ^ (x << 25);
-    x = x ^ (x >> 27);
-    r.state = x;
-    return x * 2685821657736338717;
-}
+impl Rng {
+    pub fn new() -> Rng {
+        let mut seed = time.unix() as u64;
+        if (seed == 0) {
+            seed = 6372197439939733838;
+        }
+        return Rng {
+            state: seed
+        };
+    }
 
-// uniform-ish integer in [0, n)
-pub fn below(r: *Rng, n: u64) -> u64 {
-    return next(r) % n;
-}
+    pub fn from_seed(seed: u64) -> Rng {
+        return Rng {
+            state: seed
+        };
+    }
 
-// float in [0, 1)
-pub fn float(r: *Rng) -> f64 {
-    return (next(r) >> 11) as f64 / 9007199254740992.0;
+    pub fn below(mut self: *Rng, n: u64) -> u64 {
+        return self.next() % n;
+    }
+
+    pub fn between(mut self: *Rng, min: u64, max: u64) -> u64 {
+        if (min > max) {
+            panic("min must be smaller than max");
+        }
+        return self.below(max - min + 1) + min;
+    }
+
+    pub fn float(mut self: *Rng) -> f64 {
+        return (self.next() >> 11) as f64 / 9007199254740992.0;
+    }
+
+    pub fn next(mut self: *Rng) -> u64 {
+        let mut x = self.state;
+        x = x ^ (x >> 12);
+        x = x ^ (x << 25);
+        x = x ^ (x >> 27);
+        
+        let scrambled = x * 2685821657736338717;
+        self.state = scrambled;
+        
+        return scrambled;
+    }
 }

@@ -18,6 +18,7 @@ fn main() {
     junk[0] = 7;
     println("born young ", gc_gen_bytes(0) > 0, " ", gc_gen_bytes(1) == 0, " ", gc_gen_bytes(2) >= 0);
 
+    keep.value = 1;
     gc_collect_gen(0);                              // minor
     println("minor: gen0 empty ", gc_gen_bytes(0) == 0, ", survivors in gen1 ", gc_gen_bytes(1) > 0);
     println("minor count ", gc_gen_collections(0) >= 1);

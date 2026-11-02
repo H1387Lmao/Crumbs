@@ -46,9 +46,7 @@ fn main() {
 #else
     println("ifdef else");
 #endif
-#if CB_OS_LINUX || CB_OS_MACOS
-    println("unix");
-#endif
+
     let SELF_VAL = 1;
     println(SELF_VAL);
 }
