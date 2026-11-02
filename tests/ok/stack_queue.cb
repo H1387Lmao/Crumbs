@@ -1,0 +1,22 @@
+// std.stack and std.queue: LIFO and FIFO containers; pop gives an optional.
+import std.stack;
+import std.queue;
+struct Guard { id: i32 }
+drop Guard(self) { println("drop guard ", self.id); }
+fn main() {
+    let mut s: stack.Stack<i32> = stack.Stack.new();
+    s.push(1); s.push(2); s.push(3);
+    println(s.len(), " ", s.pop() ?? -1, " ", s.peek() != null);
+    println(s.pop() ?? -1, s.pop() ?? -1, s.pop() ?? -1, s.is_empty());
+    let mut names = stack.new<String>();
+    stack.push(&names, string_from("a")); stack.push(&names, string_from("b"));
+    let top = stack.pop(&names);
+    println("{top:?}");
+    let mut q: queue.Queue<i32> = queue.Queue.new();
+    for i in 0..10 { q.push(i); if i % 3 == 0 { q.pop(); } }
+    println(q.len(), " ", q.pop() ?? -1, " ", q.peek() != null);
+    let mut g = queue.new<Guard>();
+    g.push(Guard { id: 1 }); g.push(Guard { id: 2 });
+    let _one = g.pop();
+    println("popped");
+}

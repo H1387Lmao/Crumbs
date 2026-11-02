@@ -1,0 +1,13 @@
+20 30 40 50 60 65 70 80 
+8 true false 20 80 4
+30 50 20 null
+40 60 65 70 80 
+5 5
+true true
+a b c 
+drop 2
+built
+drop 1
+removed
+drop 1
+drop 2

@@ -1,0 +1,44 @@
+// std.stack: a last-in, first-out stack for every element type.
+//
+//     import std.stack;
+//     let mut s: stack.Stack<i32> = stack.Stack.new();
+//     s.push(1);
+//     s.push(2);
+//     println(s.pop() ?? -1);            // 2   (pop gives `T?`: empty when there is nothing left)
+//     if s.peek() != null { println(*s.peek()); }     // peek gives a pointer to the top, or null
+//
+// The stack owns its elements: it is destroyed automatically at the end of its scope.
+
+pub struct Stack<T> { items: List<T> }
+
+pub fn new<T>() -> Stack<T> {
+    return Stack { items: List.new() };
+}
+
+pub fn push<T>(s: *Stack<T>, v: T) { s.items.push(v); }
+
+// removes and returns the top element, or null when the stack is empty
+pub fn pop<T>(s: *Stack<T>) -> T? {
+    if s.items.len == 0 { return null; }
+    return s.items.remove(s.items.len - 1);
+}
+
+// a pointer to the top element (null when empty); the element stays on the stack
+pub fn peek<T>(s: *Stack<T>) -> *T {
+    if s.items.len == 0 { return null; }
+    return s.items.at(s.items.len - 1);
+}
+
+pub fn len<T>(s: *Stack<T>) -> i64 { return s.items.len; }
+pub fn is_empty<T>(s: *Stack<T>) -> bool { return s.items.len == 0; }
+pub fn clear<T>(s: *Stack<T>) { s.items.clear(); }
+
+impl<T> Stack<T> {
+    pub fn new() -> Stack<T> { return new<T>(); }
+    pub fn push(mut self, v: T) { push(self, v); }
+    pub fn pop(mut self) -> T? { return pop(self); }
+    pub fn peek(self) -> *T { return peek(self); }
+    pub fn len(self) -> i64 { return self.items.len; }
+    pub fn is_empty(self) -> bool { return self.items.len == 0; }
+    pub fn clear(mut self) { clear(self); }
+}

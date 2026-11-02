@@ -1,0 +1,30 @@
+// std.map: a hash map with String keys (growth, deletion, drop of values, iteration).
+import std.map;
+struct Guard { id: i32 }
+drop Guard(self) { println("drop guard ", self.id); }
+fn show(k: str, v: *i32) { println("  ", k, " = ", *v); }
+fn main() {
+    let mut ages: map.HashMap<i32> = map.HashMap.new();
+    ages.set("ann", 31);
+    ages.set("bob", 27);
+    ages.set("ann", 32);
+    println(*ages.get("ann"), " ", ages.get_or("zed", -1), " ", ages.len(), " ", ages.has("bob"));
+    println("{:?}", ages.remove("bob"));
+    println("{:?} {}", ages.remove("bob"), ages.len());
+    for i in 0..200 { ages.set(format("k{}", i), i); }
+    println(ages.len(), " ", ages.get_or("k150", 0), " ", ages.get("nope") == null);
+    for i in 0..200 { if i % 2 == 0 { ages.remove(format("k{}", i)); } }
+    println(ages.len(), " ", ages.get_or("k151", 0), " ", ages.get_or("k150", -5));
+    let ks = ages.keys();
+    println(ks.len);
+    let mut small: map.HashMap<i32> = map.HashMap.new();
+    small.set("x", 1); small.set("y", 2);
+    small.for_each(show);
+    let mut gs = map.new<Guard>();
+    gs.set("a", Guard { id: 1 });
+    gs.set("b", Guard { id: 2 });
+    gs.set("a", Guard { id: 3 });
+    println("replaced");
+    let _gone = gs.remove("b");
+    println("removed");
+}

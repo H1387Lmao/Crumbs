@@ -1,0 +1,30 @@
+// std.tree: an ordered set (a binary search tree) over numbers, Strings and user types with `Ord`.
+import std.tree;
+struct P { x: i32, name: str }
+impl tree.Ord for P { fn cmp(self, o: *Self) -> i32 { return self.x - o.x; } }
+struct Guard { id: i32 }
+drop Guard(self) { println("drop ", self.id); }
+impl tree.Ord for Guard { fn cmp(self, o: *Self) -> i32 { return self.id - o.id; } }
+fn show(v: *i32) { print(*v, " "); }
+fn showp(p: *P) { print(p.name, " "); }
+fn main() {
+    let mut t: tree.Tree<i32> = tree.Tree.new();
+    for v in [50, 30, 70, 20, 40, 60, 80, 30, 65] { t.insert(v); }
+    t.for_each(show); println("");
+    
+    println(t.len(), " ", t.has(40), " ", t.has(41), " ", *t.min(), " ", *t.max(), " ", t.height());
+        println("{:?} {:?} {:?} {:?}", t.remove(30), t.remove(50), t.remove(20), t.remove(99));
+    t.for_each(show); println("");
+    println(t.len(), " ", t.to_list().len);
+    let mut s: tree.Tree<String> = tree.Tree.new();
+    s.insert(string_from("pear")); s.insert(string_from("apple")); s.insert(string_from("fig"));
+        println(s.has(string_from("fig")), " ", *s.min() == "apple");
+    let mut ps = tree.new<P>();
+    ps.insert(P { x: 3, name: "c" }); ps.insert(P { x: 1, name: "a" }); ps.insert(P { x: 2, name: "b" });
+    ps.for_each(showp); println("");
+    let mut gs = tree.new<Guard>();
+    gs.insert(Guard { id: 2 }); gs.insert(Guard { id: 1 }); gs.insert(Guard { id: 2 });
+    println("built");
+    let _got = gs.remove(Guard { id: 1 });
+    println("removed");
+}

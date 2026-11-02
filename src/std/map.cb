@@ -1,0 +1,187 @@
+// std.map: a hash map from `String` keys to values of any type (open addressing, linear probing).
+//
+//     import std.map;
+//     let mut ages: map.HashMap<i32> = map.HashMap.new();
+//     ages.set("ann", 31);                     // keys are `str`; the map keeps its own copy
+//     ages.set("bob", 27);
+//     println(*ages.get("ann"));              // get gives a pointer to the value, or null
+//     println(ages.get_or("zed", -1));         // a copy of the value, or the default
+//     if ages.has("bob") { ages.remove("bob"); }
+//
+// The map owns its keys and values: it is destroyed automatically at the end of its scope, running each
+// value's destructor. Values with destructors are moved in (`set`) and out (`remove`) or borrowed (`get`);
+// `get_or` needs a copyable value type. The iteration order of `for_each` and `keys` is unspecified.
+
+pub struct HashMap<V> {
+    kk: []String,
+    vv: []V,
+    st: []u8,                     // 0 empty, 1 full, 2 deleted
+    cap: i64,                     // a power of two (or 0 before the first insert)
+    count: i64,
+    used: i64,                    // full + deleted slots: what the load factor counts
+}
+
+drop<V> HashMap<V>(self) { release(self); }
+
+pub fn new<V>() -> HashMap<V> {
+    return HashMap {
+        kk: slice_of(null as *String, 0), vv: slice_of(null as *V, 0), st: slice_of(null as *u8, 0),
+        cap: 0, count: 0, used: 0,
+    };
+}
+
+// FNV-1a
+fn hash(key: str) -> u64 {
+    let mut h: u64 = 14695981039346656037;
+    for i in 0..key.len {
+        h = h ^ (key[i] as u64);
+        h = h * 1099511628211;
+    }
+    return h;
+}
+
+// the slot holding `key`, or -1
+fn find<V>(m: *HashMap<V>, key: str) -> i64 {
+    if m.cap == 0 { return -1; }
+    let mask = (m.cap - 1) as u64;
+    let mut i = hash(key) & mask;
+    while true {
+        let st = m.st[i as i64];
+        if st == 0 { return -1; }
+        if st == 1 && m.kk[i as i64] == key { return i as i64; }
+        i = (i + 1) & mask;
+    }
+}
+
+fn rehash<V>(m: *HashMap<V>, cap: i64) {
+    let keys = alloc(String, cap);
+    let vals = alloc(V, cap);
+    let state = alloc(u8, cap);
+    let mask = (cap - 1) as u64;
+    for j in 0..m.cap {
+        if m.st[j] != 1 { continue; }
+        let mut i = hash(m.kk[j]) & mask;
+        while state[i as i64] != 0 { i = (i + 1) & mask; }
+        write_at(&keys[i as i64], read_at(&m.kk[j]));
+        write_at(&vals[i as i64], read_at(&m.vv[j]));
+        state[i as i64] = 1;
+    }
+    free(m.kk);
+    free(m.vv);
+    free(m.st);
+    m.kk = keys;
+    m.vv = vals;
+    m.st = state;
+    m.cap = cap;
+    m.used = m.count;
+}
+
+// stores `v` under `key`; an existing value for the key is replaced (and destroyed)
+pub fn set<V>(m: *HashMap<V>, key: str, v: V) {
+    let at = find(m, key);
+    if at >= 0 {
+        m.vv[at] = v;
+        return;
+    }
+    if m.cap == 0 {
+        rehash(m, 8);
+    } else if (m.used + 1) * 4 > m.cap * 3 {
+        rehash(m, m.count * 2 >= m.cap ? m.cap * 2 : m.cap);      // grow, or just clear out the deleted slots
+    }
+    let mask = (m.cap - 1) as u64;
+    let mut i = hash(key) & mask;
+    while m.st[i as i64] == 1 { i = (i + 1) & mask; }
+    if m.st[i as i64] == 0 { m.used += 1; }
+    write_at(&m.kk[i as i64], string_from(key));
+    write_at(&m.vv[i as i64], v);
+    m.st[i as i64] = 1;
+    m.count += 1;
+}
+
+// a pointer to the value stored under `key`, or null
+pub fn get<V>(m: *HashMap<V>, key: str) -> *V {
+    let at = find(m, key);
+    if at < 0 { return null; }
+    return &m.vv[at];
+}
+
+// a copy of the value under `key`, or `default` (copyable value types)
+pub fn get_or<V>(m: *HashMap<V>, key: str, default: V) -> V {
+    let at = find(m, key);
+    if at < 0 { return default; }
+    return m.vv[at];
+}
+
+pub fn has<V>(m: *HashMap<V>, key: str) -> bool { return find(m, key) >= 0; }
+
+// removes `key` and returns its value, or null when it was not there
+pub fn remove<V>(m: *HashMap<V>, key: str) -> V? {
+    let at = find(m, key);
+    if at < 0 { return null; }
+    drop_at(&m.kk[at]);
+    let v = read_at(&m.vv[at]);
+    m.st[at] = 2;
+    m.count -= 1;
+    return v;
+}
+
+pub fn len<V>(m: *HashMap<V>) -> i64 { return m.count; }
+pub fn is_empty<V>(m: *HashMap<V>) -> bool { return m.count == 0; }
+
+// calls `f(key, &value)` for every entry
+pub fn for_each<V>(m: *HashMap<V>, f: fn(str, *V)) {
+    for i in 0..m.cap {
+        if m.st[i] == 1 { f(m.kk[i], &m.vv[i]); }
+    }
+}
+
+// copies of all the keys
+pub fn keys<V>(m: *HashMap<V>) -> List<String> {
+    let mut out: List<String> = List.with_capacity(m.count);
+    for i in 0..m.cap {
+        if m.st[i] == 1 { out.push(string_from(m.kk[i])); }
+    }
+    return out;
+}
+
+// destroys every entry but keeps the storage
+pub fn clear<V>(m: *HashMap<V>) {
+    for i in 0..m.cap {
+        if m.st[i] == 1 {
+            drop_at(&m.kk[i]);
+            drop_at(&m.vv[i]);
+        }
+        m.st[i] = 0;
+    }
+    m.count = 0;
+    m.used = 0;
+}
+
+// destroys every entry and frees the storage (optional: maps are released at the end of their scope)
+pub fn release<V>(m: *HashMap<V>) {
+    clear(m);
+    if m.cap > 0 {
+        free(m.kk);
+        free(m.vv);
+        free(m.st);
+    }
+    m.kk = slice_of(null as *String, 0);
+    m.vv = slice_of(null as *V, 0);
+    m.st = slice_of(null as *u8, 0);
+    m.cap = 0;
+}
+
+impl<V> HashMap<V> {
+    pub fn new() -> HashMap<V> { return new<V>(); }
+    pub fn set(mut self, key: str, v: V) { set(self, key, v); }
+    pub fn get(self, key: str) -> *V { return get(self, key); }
+    pub fn get_or(self, key: str, default: V) -> V { return get_or(self, key, default); }
+    pub fn has(self, key: str) -> bool { return has(self, key); }
+    pub fn remove(mut self, key: str) -> V? { return remove(self, key); }
+    pub fn len(self) -> i64 { return self.count; }
+    pub fn is_empty(self) -> bool { return self.count == 0; }
+    pub fn for_each(self, f: fn(str, *V)) { for_each(self, f); }
+    pub fn keys(self) -> List<String> { return keys(self); }
+    pub fn clear(mut self) { clear(self); }
+    pub fn release(mut self) { release(self); }
+}

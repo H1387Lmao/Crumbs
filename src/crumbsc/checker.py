@@ -2142,23 +2142,6 @@ class Checker:
             return BOOL
         if op == "??":
             return self.ex_Coalesce(e, exp)
-        if op in ("==", "!=") and (self.is_null(l) or self.is_null(r)) and not (self.is_null(l) and self.is_null(r)):
-            other = r if self.is_null(l) else l
-            ot = self.check(other, None)
-            if ot.kind == "opt":
-                e.opt_null = True
-                e.opt_side = "l" if other is l else "r"            # which operand holds the optional
-                e.opty = BOOL
-                nul = l if other is r else r
-                nul.is_null = True
-                nul.ty = ot
-                nul.conv = None
-                other.conv = None
-                return BOOL
-            if ot.poison:
-                return BOOL
-            # not an optional: fall through to the ordinary pointer comparison
-            e.l.conv = e.r.conv = None
         arith_like = op in ARITH or op in BITWISE
         if op in SHIFT:
             lt = self.check(l, exp if exp is not None and exp.is_int else None)
@@ -2173,13 +2156,21 @@ class Checker:
         hint = exp if (arith_like and exp is not None and exp.is_numeric) else None
         if self.untyped(l) and not self.untyped(r):
             rt = self.check(r, None)
-            lt = self.check(l, rt if (rt.is_numeric or rt.kind in ("ptr", "fn")) else None)
+            lt = self.check(l, rt if (rt.is_numeric or rt.kind in ("ptr", "fn", "opt")) else None)
         else:
             lt = self.check(l, hint)
-            rt = self.check(r, lt if (lt.is_numeric or lt.kind in ("ptr", "fn")) else None)
+            rt = self.check(r, lt if (lt.is_numeric or lt.kind in ("ptr", "fn", "opt")) else None)
         e.opty = lt
         if lt.poison or rt.poison:
             return BOOL if op in CMP else POISON
+        if op in ("==", "!=") and lt.kind == "opt" and rt.kind == "opt" and (self.is_null(l) or self.is_null(r)):
+            if self.is_null(l) and self.is_null(r):
+                return BOOL
+            e.opt_null = True                                        # `x == null` / `x != null` on an optional
+            e.opt_side = "r" if self.is_null(l) else "l"
+            for side in (l, r):
+                side.conv = None
+            return BOOL
         if lt in (STR, STRING) and rt in (STR, STRING) and op in ("+", "==", "!="):
             if op == "+":
                 if self.nostd:
