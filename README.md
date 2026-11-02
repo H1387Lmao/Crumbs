@@ -164,21 +164,27 @@ let u = t;                           // moves t (a String has one owner); `t` ca
 free(s);                             // optional: free early (this moves `s`)
 ```
 `str + str` also works and yields a `str` backed by a bump arena (never freed, appends are amortised O(1));
-**String interpolation.** `f"text {expr} more"` embeds any expression; `{expr:spec}` formats it, `{{` / `}}` are literal braces, and the
-result is a `str`. The spec is `[[fill]align][sign][#][0][width][,|_][.precision][type]`:
+**Format strings (Rust style).** The first argument of `println`, `print`, `format`, `panic` and `assert`'s message is a template:
+`{}` takes the next argument, `{0}` a numbered one, `{name}` a named argument (`name = value`) or else the variable of that name
+(`{p.x}` reaches fields), and `{{` / `}}` are literal braces. `{x:spec}` formats. `format(...)` returns an owned `String`;
+the others print or panic with the text. Expressions go in the argument list, not inside the braces. A template without braces
+still prints extra values one after another (`println("n = ", n)`).
+The spec is `[[fill]align][sign][#][0][width][,|_][.precision][type]`:
 
 ```
 let n = 255;  let pi = 3.14159;  let name = "world";
-println(f"hello {name}! {1 + 2}");                      // hello world! 3
-println(f"{n:x} {n:#b} {n:08.3f} {n:+} {1234567:,}");   // ff 0b11111111 0255.000 +255 1,234,567
-println(f"[{name:>8}] [{name:*^9}] [{name:.3}] {pi:.2}"); // [   world] [**world**] [wor] 3.14
+println("hello {name}! {}", 1 + 2);                       // hello world! 3
+println("{n:x} {n:#b} {n:08.3f} {n:+} {:,}", 1234567);    // ff 0b11111111 0255.000 +255 1,234,567
+println("[{name:>8}] [{name:*^9}] [{name:.3}] {pi:.2}");  // [   world] [**world**] [wor] 3.14
+println("{} + {} = {total}", 1, 2, total = 3);             // 1 + 2 = 3
+let label: String = format("{}-{:03}", name, 7);           // world-007
 ```
 
 align `<` `>` `^`; sign `+` or space; `#` adds `0x`/`0b`/`0o`; `0` zero-pads numbers; `,` `_` group digits; `.N` is decimals for floats
-and a character limit for text; types `d x X b o c` (integers), `f F e E g G` (floats), `?` (automatic representation). A bad spec is a
-compile error pointing at it.
+and a character limit for text; types `d x X b o c` (integers), `f F e E g G` (floats), `?` (automatic representation). A bad template
+or spec is a compile error that says what is wrong; an argument that the template never uses is an error too.
 
-**Showing your own types (`Display`).** Implement the prelude trait `Display` (no import) and `println(x)`, `to_str(x)` and `f"{x}"` use
+**Showing your own types (`Display`).** Implement the prelude trait `Display` (no import) and `println(x)`, `to_str(x)` and `"{x}"` use
 your text; the spec's width/alignment apply to it. `{x:?}` prints an automatic representation (`Point { x: 3, y: -4 }`) for any struct,
 enum, array or slice of printable things. A struct with neither is a compile error that says what to add. `T: Display` is a valid bound;
 numeric types and `bool` implement it, and `Duration` / `DateTime` already do.
@@ -186,11 +192,24 @@ numeric types and `bool` implement it, and `Duration` / `DateTime` already do.
 ```
 struct Point { x: i32, y: i32 }
 impl Display for Point {
-    fn to_string(self) -> String { return string_from(f"({self.x}, {self.y})"); }
+    fn to_string(self) -> String { return format("({}, {})", self.x, self.y); }
 }
 println(Point { x: 3, y: -4 });          // (3, -4)
-println(f"{p:>10} {p:?}");               // "    (3, -4) Point { x: 3, y: -4 }"
+println("{p:>10} {p:?}");                // "    (3, -4) Point { x: 3, y: -4 }"
 ```
+
+**Named and default arguments.** Give a parameter a default with `= literal` (numbers, strings, `true`/`false`, `null`); defaulted
+parameters come last. Callers may skip them, and may pass any argument by name after the positional ones:
+
+```
+fn connect(host: str, port: i32 = 80, secure: bool = false) -> str { ... }
+connect("example.org");                          // port 80
+connect("example.org", secure = true);           // skip port
+connect(secure = true, host = "a", port = 443);  // any order
+obj.resize(w = 10, h = 20);                      // methods too
+```
+
+Names work for every function declared with `fn` (not function pointers or C variadics).
 
 `to_str(x)` converts numbers/bool/enums to `str`. `==` / `!=` compare any mix of `str` and `String`.
 A `String` is moved, not copied (see Destructors); `let v: str = s;` and passing `s` where a `str` is expected only *borrow* it,
@@ -200,6 +219,8 @@ so a `str` view must not outlive its `String` (returning a view of a local `Stri
 **Pointers.** `*T` may be null: `let p: *Node = null;` (`null` takes its type from context, or write `null as *T`).
 Dereferencing null panics with a location. Casts: `p as u64` / `n as *T` (any integer width) and `p as *U`
 reinterpret pointers; `0 as *T` is also a null pointer.
+Fields and methods are reached straight through a pointer (`level.player.x`, `level.get_block(x, y)`); `p->x` / `p->f()` is the C
+spelling of `(*p).x` / `(*p).f()` and means exactly that.
 
 **I/O (`std.io`).** `io.getc() -> u8!` (fails with `io.Eof`), `io.putc(c: u8)`,
 `io.get_line() -> String!` (a line ends at `\n`, `\r`, `\r\n` or Ctrl+D; `io.Eof` only if nothing was read),
@@ -460,4 +481,4 @@ Not supported: `#include` (use `import`, or `include "x.h";` for C headers). Mac
 
 ## Known limits (it is a toy)
 No generic enums, trait objects, generic traits or closures; no `if` expressions; the collector is conservative and stop-the-world (generational, so most pauses are short). Slices are mutable views even of
-immutable arrays. Interpolated strings must fit on one line, and `Display` is static (no `dyn Display`). The generated C needs GCC/Clang (statement expressions, overflow builtins).
+immutable arrays. Format strings take values from the argument list or named variables, not arbitrary expressions in braces; `{:width$}` dynamic widths do not exist; `Display` is static (no `dyn Display`). The generated C needs GCC/Clang (statement expressions, overflow builtins).

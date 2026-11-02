@@ -1,7 +1,7 @@
 fn main() {
     let n = 1;
-    println(f"{n"); // ERROR: unclosed `{` in an interpolated string
-    println(f"{}"); // ERROR: empty `{}`
-    println(f"a } b"); // ERROR: single `}`
-    println(f"{n:?} {1 2}"); // ERROR: unexpected token in an interpolated expression
+    println("{n"); // ERROR: unclosed `{` in the format string
+    println("a } b"); // ERROR: single `}` in the format string
+    println("{n + 1}"); // ERROR: is not a valid placeholder
+    println("{a b}"); // ERROR: is not a valid placeholder
 }

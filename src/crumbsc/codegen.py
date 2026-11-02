@@ -724,6 +724,9 @@ class CodeGen:
     def b_string_from(self, e):
         return f"cb_string_from({self.ex(e.args[0])}, {self.loc(e.span)})"
 
+    def b_format(self, e):
+        return f"cb_string_from({self.ex(e.args[0])}, {self.loc(e.span)})"
+
     def b_string_clear(self, e):
         return f"((void)({self.nn(self.ex(e.args[0]), e.args[0].ty, e.span)}->len = 0))"
 

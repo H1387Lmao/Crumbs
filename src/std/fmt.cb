@@ -1,14 +1,14 @@
 // std.fmt: how values turn into text.
 //
-// `Display` is the trait behind `println(x)`, `to_str(x)` and `f"{x}"` for your own types: implement it and
+// `Display` is the trait behind `println(x)`, `to_str(x)` and `"{x}"` for your own types: implement it and
 // the value prints the way you wrote. It is part of the prelude, so no import is needed.
 //
 //     struct Point { x: i32, y: i32 }
 //     impl Display for Point {
-//         fn to_string(self) -> String { return string_from(f"({self.x}, {self.y})"); }
+//         fn to_string(self) -> String { return format("({}, {})", self.x, self.y); }
 //     }
 //     println(Point { x: 1, y: 2 });        // (1, 2)
-//     println(f"at {p:>10}");               // the format applies to the text `to_string` returns
+//     println("at {p:>10}");                // the format applies to the text `to_string` returns
 //
 // Types without an impl can still be shown with `{value:?}`, the automatic representation:
 // `Point { x: 1, y: 2 }`.

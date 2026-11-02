@@ -1,4 +1,5 @@
-// String interpolation: f"text {expression:format} text".
+// Format strings, the way Rust does them: println("text {} {name} {0} {:>8.2}", a, b, name = c).
+// `{}` takes the next argument, `{0}` a numbered one, `{name}` a named argument or else the variable of that name.
 // The format after the colon is [[fill]align][sign][#][0][width][,|_][.precision][type].
 import std.time;
 
@@ -10,7 +11,7 @@ struct Pair<T> { a: T, b: T }
 
 // your own representation: implement Display
 impl Display for Point {
-    fn to_string(self) -> String { return string_from(f"({self.x}, {self.y})"); }
+    fn to_string(self) -> String { return format("({}, {})", self.x, self.y); }
 }
 impl Display for Color {
     fn to_string(self) -> String {
@@ -19,55 +20,59 @@ impl Display for Color {
     }
 }
 
-fn show<T: Display>(v: T) -> String { return string_from(f"<{v}>"); }
+fn show<T: Display>(v: T) -> String { return format("<{v}>"); }
 
 fn main() {
     let name = "world";
     let n = 255;
     let pi = 3.14159265;
-    println(f"hello {name}! {n} {1 + 2 * 3} {{braces}}");
+    println("hello {name}! {} {{braces}}", 1 + 2 * 3);
+    println("{} + {} = {}", 1, 2, 1 + 2);
+    println("{0} {1} {0} {who} {}", n, name, who = "named");
 
     // integers
-    println(f"{n:x} {n:X} {n:#x} {n:#b} {n:o} {n:#o} {n:08b} {65:c}");
-    println(f"[{n:>6}] [{n:<6}] [{n:^6}] [{n:*^7}] [{n:+}] [{-n:06}] [{n:+06}] [{n: }]");
-    println(f"{1234567:,} {-1234567:,} {0xdeadbeefu32:#_x} {1000000000000i64:_}");
+    println("{n:x} {n:X} {n:#x} {n:#b} {n:o} {n:#o} {n:08b} {:c}", 65);
+    println("[{n:>6}] [{n:<6}] [{n:^6}] [{n:*^7}] [{n:+}] [{m:06}] [{n:+06}] [{n: }]", m = -n);
+    println("{:,} {:,} {:#_x} {:_}", 1234567, -1234567, 0xdeadbeefu32, 1000000000000i64);
 
     // floats
-    println(f"{pi} {pi:.2} {pi:10.3f} {pi:<10.1f}| {pi:e} {pi:.3e} {1500000.0:g} {0.5:08.2f}");
-    println(f"{1234567.891:,.2f} {-0.5:+.1f} {n:.1f} {2.0}");
+    println("{pi} {pi:.2} {pi:10.3} {pi:<10.1}| {pi:e} {pi:.3e} {:g} {:08.2}", 1500000.0, 0.5);
+    println("{:,.2} {:+.1} {n:.1f} {}", 1234567.891, -0.5, 2.0);
 
     // text and bool
-    println(f"[{name:>8}] [{name:<8}] [{name:^9}] [{name:.3}] [{name:?}] [{true}] [{false:>7}]");
-    println(f"{"héllo":>7}|{"héllo":.2}|");
+    println("[{name:>8}] [{name:<8}] [{name:^9}] [{name:.3}] [{name:?}] [{}] [{:>7}]", true, false);
+    println("{:>7}|{:.2}|", "héllo", "héllo");
 
     // enums
-    println(f"{Mode.Slow:d} {Mode.Fast} {Mode.Slow:>6}");
+    println("{:d} {} {:>6}", Mode.Slow, Mode.Fast, Mode.Slow);
 
     // your own types
     let p = Point { x: 3, y: -4 };
     println(p);
-    println(f"p = {p}, padded [{p:>10}] [{p:*<10}]");
-    println(f"{Color.Green} / {Color.Green:?}");
-    println(show(p), show(Color.Red), show(42));
+    println("p = {p}, padded [{p:>10}] [{p:*<10}]");
+    println("{} / {:?}", Color.Green, Color.Green);
+    println("{}{}{}", show(p), show(Color.Red), show(42));
     let text = to_str(p);
     println(text, " has ", to_str(p).len, " bytes");
+    println("fields {p.x} and {p.y}");
 
     // the automatic representation
     let s = Shape { corner: p, label: "a \"quoted\"\tlabel", sides: [1, 2], color: Color.Green, solid: true, weight: 0.5 };
-    println(f"{s:?}");
-    println(f"{p:?} {[1, 2, 3]:?} {name:?} {n:?} {pi:?}");
-    println(f"{Pair { a: 1, b: 2 }:?}");
-    println(f"[{p:>30?}]");
+    println("{s:?}");
+    println("{p:?} {:?} {name:?} {n:?} {pi:?}", [1, 2, 3]);
+    println("{:?}", Pair { a: 1, b: 2 });
+    println("[{p:>30?}]");
 
-    // expressions of any shape
+    // expressions go in the argument list
     let words = ["a", "b"];
-    println(f"{words[1]} {words.len} {n * 2 - 1:>5} {name} {to_str(n + 1)}");
-    println(f"{f"nested {n:x}"} and {f"{name:?}":>10}");
-    println(f"{time.Duration.from_ms(1500)} {time.Duration.from_secs(125)}");
+    println("{} {} {:>5} {name} {}", words[1], words.len, n * 2 - 1, to_str(n + 1));
+    println("{} and {:>10}", format("nested {n:x}"), format("{name:?}"));
+    println("{} {}", time.Duration.from_ms(1500), time.Duration.from_secs(125));
 
-    // a built string
+    // building strings
     let mut out = string_new();
-    for i in 0..3 { out += f"{i:02},"; }
+    for i in 0..3 { out += format("{i:02},"); }
     println(out);
-    println(f"");
+    println(format("done {}", out.len));
+    println("{{}}");
 }

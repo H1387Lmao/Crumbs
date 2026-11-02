@@ -40,18 +40,6 @@ class Token:
         return f"Token({self.kind}, {self.val!r})"
 
 
-class FPart:
-    """One piece of an interpolated string: literal bytes, or an expression (already lexed) with its format spec."""
-    __slots__ = ("lit", "toks", "spec", "spec_span", "span")
-
-    def __init__(self, lit=None, toks=None, spec="", spec_span=None, span=None):
-        self.lit = lit            # bytes, for a literal piece
-        self.toks = toks          # tokens of the expression
-        self.spec = spec
-        self.spec_span = spec_span
-        self.span = span
-
-
 def lex(src, diags):
     toks, i, line, line_start = _lex(src, diags, 0, len(src.text), 1, 0)
     toks.append(Token("eof", None, Span(src, line, i - line_start + 1, 1)))
@@ -64,118 +52,6 @@ def _lex(src, diags, i, n, line, line_start):
 
     def span(start, end, ln=None, ls=None):
         return Span(src, ln or line, start - (line_start if ls is None else ls) + 1, end - start)
-
-    def lex_fstring(start, q):
-        """`f"text {expr:spec} text"`: one token whose value is a list of FPart. `q` is the index of the opening quote."""
-        nonlocal toks
-        i = q + 1
-        parts, buf = [], bytearray()
-        closed = False
-
-        def flush():
-            if buf:
-                parts.append(FPart(lit=bytes(buf)))
-                buf.clear()
-
-        while i < n:
-            ch = text[i]
-            if ch == '"':
-                i += 1
-                closed = True
-                break
-            if ch == "\n":
-                break
-            if ch == "\\":
-                esc_at = i
-                i += 1
-                if i >= n or text[i] == "\n":
-                    break
-                e = text[i]
-                if e in ESCAPES:
-                    buf.append(ESCAPES[e])
-                    i += 1
-                elif e == "x" and re.match(r"[0-9a-fA-F]{2}", text[i + 1:i + 3]):
-                    buf.append(int(text[i + 1:i + 3], 16))
-                    i += 3
-                elif e in "{}":
-                    buf += e.encode()
-                    i += 1
-                else:
-                    diags.error(span(esc_at, i + 1), f"unknown escape sequence `\\{e}`",
-                                help="valid escapes: \\n \\t \\r \\0 \\\\ \\\" \\' \\xHH")
-                    i += 1
-                continue
-            if ch == "{":
-                if text.startswith("{{", i):
-                    buf.append(123)
-                    i += 2
-                    continue
-                flush()
-                open_at = i
-                i += 1
-                depth, expr_end, spec_at = 0, None, None
-                while i < n:
-                    c2 = text[i]
-                    if c2 == "\n":
-                        break
-                    if c2 in "([{":
-                        depth += 1
-                    elif c2 in ")]":
-                        depth -= 1
-                    elif c2 == "}":
-                        if depth == 0:
-                            break
-                        depth -= 1
-                    elif c2 == '"' or c2 == "'":                      # a string / char literal inside the expression
-                        j = i + 1
-                        while j < n and text[j] != c2 and text[j] != "\n":
-                            j += 2 if text[j] == "\\" else 1
-                        if j < n and text[j] == c2:
-                            i = j + 1
-                            continue
-                        i = j
-                        break
-                    elif c2 == ":" and depth == 0 and spec_at is None:
-                        spec_at = i
-                        expr_end = i
-                        j = i + 1
-                        while j < n and text[j] not in '}\n"':
-                            j += 1
-                        i = j
-                        break
-                    i += 1
-                if i >= n or text[i] != "}":
-                    diags.error(span(open_at, open_at + 1), "unclosed `{` in an interpolated string",
-                                label="this `{` is never closed", help="close it with `}`, or write `{{` for a literal brace")
-                    j = text.find('"', open_at)                         # resume at the closing quote of this literal
-                    nl = text.find("\n", open_at)
-                    i = j if j != -1 and (nl == -1 or j < nl) else (nl if nl != -1 else n)
-                    continue
-                if expr_end is None:
-                    expr_end = i
-                sub, _, _, _ = _lex(src, diags, open_at + 1, expr_end, line, line_start)
-                spec = text[spec_at + 1:i] if spec_at is not None else ""
-                parts.append(FPart(toks=sub, spec=spec, span=span(open_at, i + 1),
-                                   spec_span=span(spec_at + 1, max(i, spec_at + 2)) if spec_at is not None else None))
-                i += 1
-                continue
-            if ch == "}":
-                if text.startswith("}}", i):
-                    buf.append(125)
-                    i += 2
-                    continue
-                diags.error(span(i, i + 1), "single `}` in an interpolated string", help="write `}}` for a literal brace")
-                i += 1
-                continue
-            buf += ch.encode("utf-8")
-            i += 1
-        flush()
-        sp = Span(src, line, start - line_start + 1, max(1, i - start))
-        if not closed:
-            diags.error(Span(src, line, start - line_start + 1, 1), "unterminated string literal",
-                        label="string starts here", help="add a closing `\"` (strings cannot span lines)")
-        toks.append(Token("fstr", parts, sp))
-        return i
 
     while i < n:
         c = text[i]
@@ -217,9 +93,6 @@ def _lex(src, diags, i, n, line, line_start):
         if c.isalpha() and c.isascii() or c == "_":
             m = IDENT_RE.match(text, i)
             w = m.group()
-            if w == "f" and m.end() < n and text[m.end()] == '"':         # f"..." interpolated string
-                i = lex_fstring(i, m.end())
-                continue
             kind = "kw" if w in KEYWORDS else "ident"
             toks.append(Token(kind, w, span(i, m.end())))
             i = m.end()

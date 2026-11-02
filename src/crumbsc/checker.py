@@ -11,7 +11,7 @@ from .parser import N, Parser
 from .types import (INTS, PRIMS, Ty, I8, I16, I32, I64, U8, U16, U32, U64, F32, F64, BOOL, STR, VOID,
                     ERR, POISON, STRING, REGION, ptr, arr, slc, eu, fnty, same)
 
-BUILTINS = {"print", "println", "panic", "assert", "alloc", "free", "exit", "to_str",
+BUILTINS = {"print", "println", "format", "panic", "assert", "alloc", "free", "exit", "to_str",
             "string_new", "string_from", "string_clear",
             "cstr", "from_cstr", "slice_of", "size_of", "drop", "drop_at", "write_at", "read_at",
             "gc_collect", "gc_bytes", "gc_collections", "alloc_in",
@@ -1546,6 +1546,100 @@ class Checker:
             return None
         return t
 
+    FMT_BUILTINS = ("print", "println", "format", "panic", "assert")
+
+    def fmt_args(self, e, name):
+        """Rust-style format strings: the template literal (first argument; second for `assert`) is turned into an FStr
+        node. `{}` takes the next positional argument, `{0}` a numbered one, `{name}` a named argument (`name = value`)
+        or else the variable of that name; `{x:spec}` formats. print/println/panic/assert keep working with plain text
+        and extra values, as before, when the literal has no braces."""
+        from .fmtspec import parse_template, SpecError
+        args = e.args
+        tidx = 1 if name == "assert" else 0
+        if len(args) <= tidx:
+            return True
+        t = args[tidx]
+        if t.kind == "FStr":
+            return True                                           # a re-check
+        if t.kind != "Str":
+            if name == "format":
+                self.d.error(t.span, "the first argument of `format` must be a string literal", label="expected a literal",
+                             help="the literal is the template: `format(\"{} of {}\", a, b)`")
+                return False
+            return True
+        if name != "format" and b"{" not in t.value and b"}" not in t.value:
+            return True
+        try:
+            items = parse_template(t.value)
+        except SpecError as err:
+            self.d.error(t.span, err.msg, label="in this format string", help=err.help)
+            return False
+        extras = args[tidx + 1:]
+        pos, named, ok, seen_named = [], {}, True, False
+        for a in extras:
+            if a.kind == "NamedArg":
+                seen_named = True
+                if a.name in named:
+                    self.d.error(a.name_span, f"the argument `{a.name}` is given twice")
+                    ok = False
+                named[a.name] = a
+            elif seen_named:
+                self.d.error(a.span, "a positional argument cannot follow a named argument", help="put the `name = value` arguments last")
+                ok = False
+            else:
+                pos.append(a)
+        if not ok:
+            return False
+        uses = {}                                                 # id(expression) -> times used
+        parts, nxt = [], 0
+        for it in items:
+            if it[0] == "lit":
+                parts.append(N("FPart", t.span, lit=it[1], expr=None, spec="", spec_span=None))
+                continue
+            _, ref, spec = it
+            if ref is None:
+                ref, nxt = nxt, nxt + 1
+            if isinstance(ref, int):
+                if ref >= len(pos):
+                    self.d.error(t.span, f"the format string uses argument {ref} but only {len(pos)} {'was' if len(pos) == 1 else 'were'} given",
+                                 label="in this format string",
+                                 help="add the value after the string, or name it: `{total}` with `total = ...`" if not pos else None)
+                    return False
+                ex = pos[ref]
+            elif ref in named:
+                ex = named[ref].expr
+            else:                                                 # the variable (or field path) of that name
+                segs = ref.split(".")
+                ex = N("Ident", t.span, name=segs[0])
+                for sname in segs[1:]:
+                    ex = N("Field", t.span, obj=ex, name=sname, name_span=t.span)
+                uses[id(ex)] = 1
+            uses[id(ex)] = uses.get(id(ex), 0) + 1
+            part = N("FPart", t.span, lit=None, expr=ex, spec=spec, spec_span=t.span)
+            parts.append(part)
+        for a in pos:
+            if id(a) not in uses:
+                self.d.error(a.span, "this argument is never used by the format string", label="unused argument",
+                             help="add a `{}` for it")
+                ok = False
+            elif uses[id(a)] > 1 and a.kind not in ("Ident", "Int", "Float", "Str", "Bool", "Field"):
+                self.d.error(a.span, "an argument used more than once must be a simple value",
+                             help="bind it to a variable first, then use `{name}`")
+                ok = False
+        for a in named.values():
+            if id(a.expr) not in uses:
+                self.d.error(a.name_span, f"the argument `{a.name}` is never used by the format string", label="unused argument",
+                             help=f"add `{{{a.name}}}` to the string")
+                ok = False
+            elif uses[id(a.expr)] > 1 and a.expr.kind not in ("Ident", "Int", "Float", "Str", "Bool", "Field"):
+                self.d.error(a.expr.span, "an argument used more than once must be a simple value",
+                             help="bind it to a variable first, then use `{name}`")
+                ok = False
+        if not ok:
+            return False
+        args[tidx:] = [N("FStr", t.span, parts=parts)]
+        return True
+
     def ex_FStr(self, e, exp):
         from .fmtspec import parse_spec, check_for, SpecError
         if self.nostd:
@@ -2301,6 +2395,96 @@ class Checker:
             return True
         return self.lookup(root.name) is not None
 
+    LITERAL_DEFAULTS = ("Int", "Float", "Bool", "Str")
+
+    def default_ok(self, d):
+        if d.kind in self.LITERAL_DEFAULTS or (d.kind == "Ident" and d.name == "null"):
+            return True
+        return d.kind == "Unary" and d.op == "-" and d.expr.kind in ("Int", "Float")
+
+    def normalize_args(self, e, sym):
+        """Match the written arguments to the parameters: positional first, then `name = value`, then defaults.
+        Leaves `e.args` as a plain positional list (the receiver, if any, first). False after an error."""
+        params = getattr(sym.node, "params", None)
+        if params is None:
+            return True
+        has_named = any(a.kind == "NamedArg" for a in e.args)
+        n_pos = sum(1 for a in e.args if a.kind != "NamedArg")
+        if not has_named and (n_pos >= len(params) or not any(getattr(p, "default", None) is not None for p in params)):
+            return True                                         # the common case: nothing to do
+        off = 1 if getattr(e, "method_recv", False) else 0
+        fname = f"function `{sym.name}`"
+        slots = [None] * len(params)
+        ok, seen_named, extra = True, False, []
+        for a in e.args:
+            if a.kind == "NamedArg":
+                seen_named = True
+                names = [p.name for p in params]
+                if a.name not in names or names.index(a.name) < off or getattr(params[names.index(a.name)], "self_param", False):
+                    sg = suggest(a.name, [p.name for p in params[off:]])
+                    self.d.error(a.name_span, f"{fname} has no parameter named `{a.name}`",
+                                 label="no such parameter", help=f"did you mean `{sg}`?" if sg else
+                                 "parameters: " + ", ".join(p.name for p in params[off:]) if params[off:] else None)
+                    self.check(a.expr)
+                    ok = False
+                    continue
+                i = names.index(a.name)
+                if slots[i] is not None:
+                    self.d.error(a.name_span, f"the argument `{a.name}` is given twice", label="already supplied")
+                    self.check(a.expr)
+                    ok = False
+                    continue
+                slots[i] = a.expr
+            else:
+                if seen_named:
+                    self.d.error(a.span, "a positional argument cannot follow a named argument",
+                                 help="put the `name = value` arguments last")
+                    self.check(a)
+                    ok = False
+                    continue
+                pos = sum(1 for x in e.args[:e.args.index(a)] if x.kind != "NamedArg")
+                if pos < len(params):
+                    slots[pos] = a
+                else:
+                    extra.append(a)
+        if not ok:
+            for v in slots + extra:
+                if v is not None and not hasattr(v, "ty"):
+                    self.check(v)
+            return False
+        missing = []
+        for i, p in enumerate(params):
+            if slots[i] is None:
+                d = getattr(p, "default", None)
+                if d is None:
+                    missing.append(p.name)
+                    continue
+                if not self.default_ok(d):
+                    if not getattr(d, "_reported", False):
+                        d._reported = True
+                        self.d.error(d.span, "a default value must be a literal", label="not a literal",
+                                     help="use a number, string, `true` / `false` or `null`")
+                    return False
+                slots[i] = self.clone(d)
+        if missing:
+            plural = "s" if len(missing) > 1 else ""
+            self.d.error(e.span, f"{fname} is missing the argument{plural} {', '.join(f'`{m}`' for m in missing)}",
+                         label="missing argument" + plural,
+                         notes=["signature: fn " + sym.name + "(" + ", ".join(
+                             p.name + ("=.." if getattr(p, "default", None) is not None else "") for p in params[off:]) + ")"])
+            for v in slots + extra:
+                if v is not None:
+                    self.check(v)
+            return False
+        e.args = slots + extra
+        return True
+
+    def ex_NamedArg(self, e, exp):
+        self.d.error(e.span, "named arguments only work when calling a function that is declared with `fn`",
+                     label="not allowed here", help="pass the value positionally")
+        self.check(e.expr)
+        return POISON
+
     def check_args(self, e, params, name, sig=None, variadic=False):
         n = len(params)
         bad = len(e.args) < n or (len(e.args) > n and not variadic)
@@ -2383,6 +2567,8 @@ class Checker:
                 self.check(a)
             return POISON
         sym = ent[1]
+        if not self.normalize_args(e, sym):
+            return POISON
         if sym.tparams:
             sym = self.instantiate_call(e, sym, exp)
             if sym is None:
@@ -2495,7 +2681,7 @@ class Checker:
     PRINTABLE_KINDS = ("enum", "ptr", "fn")
 
     NOSTD_BANNED = {"print", "println", "alloc", "free", "exit", "to_str", "string_new", "string_from",
-                    "string_clear", "cstr", "gc_collect", "gc_bytes", "gc_collections", "alloc_in",
+                    "string_clear", "cstr", "format", "gc_collect", "gc_bytes", "gc_collections", "alloc_in",
                     "gc_collect_gen", "gc_gen_bytes", "gc_gen_collections"}
 
     def need_std(self, span, what):
@@ -2520,6 +2706,19 @@ class Checker:
             for a in args:
                 self.check(a)
             return POISON
+
+        if name in self.FMT_BUILTINS:
+            if not self.fmt_args(e, name):
+                for a in e.args:
+                    self.check(a.expr if a.kind == "NamedArg" else a)
+                return POISON
+            args = e.args
+        if name == "format":
+            if not args:
+                self.d.error(e.span, "`format` takes a format string: `format(\"{} items\", n)`")
+                return POISON
+            self.check(args[0], None)
+            return STRING
 
         def arity(n_min, n_max=None):
             n_max = n_min if n_max is None else n_max

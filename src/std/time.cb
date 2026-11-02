@@ -294,7 +294,7 @@ impl DateTime {
     pub fn since(self, o: DateTime) -> i64 { return self.unix - o.unix; }
 }
 
-// `println(now)` and `f"{now}"` show the local time, like format()
+// `println(now)` and `"{now}"` show the local time, like format()
 impl Display for DateTime {
     fn to_string(self) -> String { return self.format(); }
 }

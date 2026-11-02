@@ -440,7 +440,16 @@ class Parser:
                 continue
             self.expect_op(":", "after parameter name")
             ty = self.parse_type()
-            params.append(N("Param", nm.span.join(self.prev.span), name=nm.val, tyn=ty, name_span=nm.span, mut=is_mut))
+            default = None
+            if self.accept_op("="):                                  # `port: i32 = 80`
+                saved = self.no_struct
+                self.no_struct = False
+                default = self.parse_expr()
+                self.no_struct = saved
+            elif params and getattr(params[-1], "default", None) is not None:
+                self.fail(f"parameter `{nm.val}` has no default, but the one before it does",
+                          tok=nm, help="parameters with defaults must come last")
+            params.append(N("Param", nm.span.join(self.prev.span), name=nm.val, tyn=ty, name_span=nm.span, mut=is_mut, default=default))
             if not self.accept_op(","):
                 break
         self.expect_op(")", "after parameters")
@@ -832,7 +841,13 @@ class Parser:
         self.no_struct = False
         args = []
         while not self.is_op(")"):
-            args.append(self.parse_expr())
+            if self.tok.kind == "ident" and self.is_op("=", 1):      # `name = value`
+                nm = self.advance()
+                self.advance()
+                val = self.parse_expr()
+                args.append(N("NamedArg", nm.span.join(val.span), name=nm.val, name_span=nm.span, expr=val))
+            else:
+                args.append(self.parse_expr())
             if not self.accept_op(","):
                 break
         self.no_struct = saved
@@ -879,6 +894,10 @@ class Parser:
                 self.advance()
                 nm = self.expect_ident("field name")
                 e = N("Field", self.sp(start), obj=e, name=nm.val, name_span=nm.span)
+            elif t.val == "->":                       # `p->x` is `(*p).x`, `p->f(..)` is `(*p).f(..)`
+                self.advance()
+                nm = self.expect_ident("field or method name")
+                e = N("Field", self.sp(start), obj=N("Unary", self.sp(start), op="*", expr=e), name=nm.val, name_span=nm.span)
             elif t.val in ("++", "--"):
                 self.advance()
                 e = N("IncDec", self.sp(start), op=t.val, prefix=False, expr=e)
@@ -958,30 +977,6 @@ class Parser:
         self.expect_op("]", "after index")
         return N("Index", self.sp(start), obj=base, idx=idx)
 
-    def parse_fstr(self, t):
-        """`f"a {expr:spec} b"` -> FStr(parts); a part is FPart(lit=bytes) or FPart(expr=, spec=)."""
-        parts = []
-        for fp in t.val:
-            if fp.lit is not None:
-                parts.append(N("FPart", t.span, lit=fp.lit, expr=None, spec="", spec_span=None))
-                continue
-            toks = list(fp.toks) + [Token("eof", None, fp.span)]
-            if len(toks) == 1:
-                self.d.error(fp.span, "empty `{}` in an interpolated string", label="expected an expression here",
-                             help="write `{name}` or `{a + b}`; use `{{` and `}}` for literal braces")
-                continue
-            saved = (self.toks, self.p, self.no_struct)
-            self.toks, self.p, self.no_struct = toks, 0, False
-            try:
-                ex = self.parse_expr()
-                if self.tok.kind != "eof":
-                    self.d.error(self.tok.span, "unexpected token in an interpolated expression",
-                                 help="only one expression fits between the braces; a format goes after `:`, as in `{x:>8.2f}`")
-            finally:
-                self.toks, self.p, self.no_struct = saved
-            parts.append(N("FPart", fp.span, lit=None, expr=ex, spec=fp.spec, spec_span=fp.spec_span))
-        return N("FStr", t.span, parts=parts)
-
     def parse_primary(self):
         t = self.tok
         k = t.kind
@@ -997,9 +992,6 @@ class Parser:
         if k == "str":
             self.advance()
             return N("Str", t.span, value=t.val)
-        if k == "fstr":
-            self.advance()
-            return self.parse_fstr(t)
         if k == "kw" and t.val in ("true", "false"):
             self.advance()
             return N("Bool", t.span, value=(t.val == "true"))

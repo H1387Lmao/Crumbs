@@ -142,6 +142,12 @@
               "code": "fn area(width: f64, height: f64) -> f64 {\n    return width * height;\n}\n\nfn main() -> void {\n    println(area(4.0, 3.0));\n}"
             },
             {
+              "id": "named-default-args",
+              "title": "Named and default arguments",
+              "desc": "Give a parameter a default with `= literal` (a number, string, `true`/`false` or `null`). Parameters with defaults come last, and a caller may leave them out. After the positional arguments, any argument can be passed by name, in any order, which is handy to skip a default in the middle. This works for every function and method declared with `fn`; function pointers and C variadics take positional arguments only. A missing argument, an unknown or duplicated name and a non-literal default are compile errors.",
+              "code": "fn connect(host: str, port: i32 = 80, secure: bool = false) -> str {\n    let mut scheme = \"http\";\n    if secure { scheme = \"https\"; }\n    return format(\"{scheme}://{host}:{port}\");\n}\n\nconnect(\"example.org\");                          // port 80\nconnect(\"example.org\", secure = true);           // skip port\nconnect(secure = true, host = \"a\", port = 443);  // any order\nobj.resize(w = 10, h = 20);                      // methods too"
+            },
+            {
               "id": "variables",
               "title": "Variables and Mutability",
               "desc": "Variables are immutable by default. Add `mut` when a binding needs to be reassigned or changed. Local types can often be inferred from the initializer.",
@@ -223,7 +229,7 @@
             {
               "id": "pointers",
               "title": "Pointers and Dereferencing",
-              "desc": "A `*T` is a pointer to `T` and may be null. Take an address with `&`, dereference with `*`, and use `as` for explicit pointer or integer casts. Dereferencing null panics with a source location.",
+              "desc": "A `*T` is a pointer to `T` and may be null. Take an address with `&`, dereference with `*`, and use `as` for explicit pointer or integer casts. Dereferencing null panics with a source location. Fields and methods are reached straight through a pointer: `level.player.x`, `level.get_block(x, y)`. `p->x` and `p->f()` are the C spelling of `(*p).x` and `(*p).f()`.",
               "code": "struct Node { value: i32 }\n\nlet mut node = Node { value: 7 };\nlet ptr: *Node = &node;\nprintln((*ptr).value);\n\nlet empty: *Node = null;"
             }
           ]
@@ -292,8 +298,8 @@
             {
               "id": "display-trait",
               "title": "Showing your own types: Display",
-              "desc": "`println`, `to_str` and `f\"{x}\"` know how to show numbers, text, bools and enum names. To show a struct, or to change how an enum looks, implement the prelude trait `Display` (no import needed): its one method `to_string(self) -> String` is what `println(x)` prints and what `{x}` inserts, and the format spec (width, fill, alignment) then applies to that text. Types without an impl can still be shown with `{x:?}`, the automatic representation: `Point { x: 3, y: -4 }`, with arrays as `[1, 2]` and text quoted. `T: Display` works as a bound, and the numeric types and `bool` implement it. Showing a struct without either is a compile error that says which to add. `Duration` and `DateTime` from `std.time` are Display.",
-              "code": "struct Point { x: i32, y: i32 }\n\nimpl Display for Point {\n    fn to_string(self) -> String {\n        return string_from(f\"({self.x}, {self.y})\");\n    }\n}\n\nlet p = Point { x: 3, y: -4 };\nprintln(p);                      // (3, -4)\nprintln(f\"at {p:>10}\");          // at     (3, -4)\nprintln(f\"{p:?}\");               // Point { x: 3, y: -4 }\n\nfn banner<T: Display>(v: T) -> String { return string_from(f\"== {v} ==\"); }"
+              "desc": "`println`, `to_str` and `\"{x}\"` know how to show numbers, text, bools and enum names. To show a struct, or to change how an enum looks, implement the prelude trait `Display` (no import needed): its one method `to_string(self) -> String` is what `println(x)` prints and what `{x}` inserts, and the format spec (width, fill, alignment) then applies to that text. Types without an impl can still be shown with `{x:?}`, the automatic representation: `Point { x: 3, y: -4 }`, with arrays as `[1, 2]` and text quoted. `T: Display` works as a bound, and the numeric types and `bool` implement it. Showing a struct without either is a compile error that says which to add. `Duration` and `DateTime` from `std.time` are Display.",
+              "code": "struct Point { x: i32, y: i32 }\n\nimpl Display for Point {\n    fn to_string(self) -> String {\n        return format(\"({}, {})\", self.x, self.y);\n    }\n}\n\nlet p = Point { x: 3, y: -4 };\nprintln(p);                      // (3, -4)\nprintln(\"at {p:>10}\");           // at     (3, -4)\nprintln(\"{p:?}\");                // Point { x: 3, y: -4 }\n\nfn banner<T: Display>(v: T) -> String { return format(\"== {v} ==\"); }"
             }
           ]
         },
@@ -363,11 +369,11 @@
               "code": "let mut text = string_new();\ntext += \"hello\";\ntext += ' ';\nlet message = text + \"world\";\nprintln(message);\n\nlet view: str = text; // borrows text"
             },
             {
-              "id": "string-interpolation",
-              "title": "String interpolation",
-              "desc": "`f\"...\"` embeds expressions in a string: `{expr}` shows the value, `{expr:spec}` formats it, `{{` and `}}` are literal braces. Any expression fits between the braces, including calls and nested `f\"\"` strings. The result is a `str`, so it works with `println`, `+=` on a `String`, or `string_from(...)`. The spec is `[[fill]align][sign][#][0][width][,|_][.precision][type]`: align is `<` `>` `^`; sign is `+` or a space; `#` adds `0x` `0b` `0o`; `0` pads numbers with zeros; `,` or `_` group digits; precision is digits after the point for floats and a maximum length for text; the type is `d x X b o c` for integers, `f F e E g G` for floats and `?` for the automatic representation. Mistakes in a spec are compile errors that point at the spec.",
-              "code": "let name = \"world\";\nlet n = 255;\nlet pi = 3.14159;\nprintln(f\"hello {name}! {1 + 2}\");          // hello world! 3\nprintln(f\"{n:x} {n:#b} {n:08.3f} {n:+}\");   // ff 0b11111111 0255.000 +255\nprintln(f\"[{name:>8}] [{name:*^9}] [{name:.3}]\");\nprintln(f\"{pi:.2} {pi:10.3f}| {1234567:,}\");\nprintln(f\"{{literal}} {name:?}\");              // {literal} \"world\"",
-              "note": "Text is counted in characters, so `{\"héllo\":>7}` pads correctly. Negative numbers in `x`, `b` and `o` show a minus sign and the magnitude. Interpolation needs the standard runtime (not `--no-stdruntime`)."
+              "id": "format-strings",
+              "title": "Format strings",
+              "desc": "`println`, `print`, `format`, `panic` and the message of `assert` take a template as their first argument, written the way Rust does it. `{}` takes the next argument, `{0}` a numbered one, `{name}` a named argument (`name = value`) or else the variable of that name (`{p.x}` reaches fields); `{{` and `}}` are literal braces. `{x:spec}` formats the value. `format(...)` returns an owned `String`; the others print or panic with the text. Expressions go in the argument list, not inside the braces. The spec is `[[fill]align][sign][#][0][width][,|_][.precision][type]`: align is `<` `>` `^`; sign is `+` or a space; `#` adds `0x` `0b` `0o`; `0` pads numbers with zeros; `,` or `_` group digits; precision is digits after the point for floats and a maximum length for text; the type is `d x X b o c` for integers, `f F e E g G` for floats and `?` for the automatic representation. Mistakes in a template or spec, unused arguments and missing arguments are compile errors.",
+              "code": "let name = \"world\";\nlet n = 255;\nlet pi = 3.14159;\nprintln(\"hello {name}! {}\", 1 + 2);              // hello world! 3\nprintln(\"{n:x} {n:#b} {n:08.3f} {n:+}\");          // ff 0b11111111 0255.000 +255\nprintln(\"[{name:>8}] [{name:*^9}] [{name:.3}]\");\nprintln(\"{pi:.2} {:10.3}| {:,}\", pi, 1234567);\nprintln(\"{} + {} = {total}\", 1, 2, total = 3);  // named arguments\nprintln(\"{{literal}} {name:?}\");                  // {literal} \"world\"\nlet label: String = format(\"{}-{:03}\", name, 7);  // world-007",
+              "note": "A template without braces still prints extra values one after another (`println(\"n = \", n)`). Text is counted in characters, so `{:>7}` pads \"héllo\" correctly. Negative numbers in `x`, `b` and `o` show a minus sign and the magnitude. Format strings need the standard runtime (not `--no-stdruntime`)."
             },
             {
               "id": "destructors",
