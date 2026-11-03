@@ -1,0 +1,2 @@
+async fn id<T>(x: T) -> T { return x; } // ERROR: async functions cannot be generic
+fn main() { }

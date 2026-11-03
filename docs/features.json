@@ -618,6 +618,12 @@
               "title": "std.thread",
               "desc": "`spawn(f, arg)` / `spawn_fn(f)` return a `Thread` (`.join()`); `Mutex` (`lock`, `try_lock`, `unlock`); `Condvar` (`wait`, `signal`, `broadcast`); `AtomicI64`; the generic `channel<T>()` (`send`, `recv`, `close`; error `Closed`); `sleep_ms`, `yield_now`, `current_id`, `cpu_count`. The collector waits for other threads to reach an allocation or a blocking call before it runs.",
               "code": "import std.thread;\n\nlet t = thread.spawn_fn(worker);\nt.join();"
+            },
+            {
+              "id": "async-await",
+              "title": "async and await",
+              "desc": "`async fn f(a: A) -> R { ... }` declares a function that runs on its own thread each time it is called. The call returns a task straight away (`*Task<R>`; `*TryTask<T>` for `T!`, `*Job` for no result, `*TryJob` for `void!`) and `await task` waits for the result, exactly like `task.wait()`. For `T!` functions `await` gives back an error union, so `try await f()`, `await f() catch ...` and `.catch(|e| ...)` all work. Await every task exactly once. Async functions cannot be generic or take `self`; pass shared data on the heap, not stack pointers. `import std.async;` is added for you.",
+              "code": "async fn square(n: i32) -> i32 { return n * n; }\nasync fn fetch(url: str) -> http.Response! { return try http.get(url); }\n\nlet a = square(6);          // both run at the same time\nlet b = square(7);\nprintln(\"{}\", await a + await b);   // 85\nlet page = (await fetch(\"http://example.org/\")).catch(|e| { panic(\"{e}\"); });"
             }
           ]
         }

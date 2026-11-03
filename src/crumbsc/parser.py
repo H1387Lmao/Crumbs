@@ -1,7 +1,7 @@
 """Recursive-descent parser with panic-mode error recovery."""
 import time
 from .timing import TIMINGS
-from .diag import Span
+from .diag import Span, Source
 from .lexer import lex, Token
 from .types import PRIMS
 
@@ -49,6 +49,7 @@ class Parser:
         self.p = 0
         self.no_struct = False
         self.undo = None
+        self.uses_async = False
         self.impl_ty = None          # type node of the `impl` block being parsed (for `self` / `Self`)
         self.tbounds = {}
 
@@ -233,12 +234,17 @@ class Parser:
             start = self.p
             try:
                 it = self.parse_item()
-                if it:
+                if isinstance(it, list):
+                    items.extend(it)
+                elif it:
                     items.append(it)
             except ParseAbort:
                 self.sync_item()
                 if self.p == start:
                     self.advance()
+        if self.uses_async and not any(i.kind == "Import" and i.path == ["std", "async"] for i in items):
+            sp = Span(self.src, 1, 1, 1)
+            items.insert(0, N("Import", sp, path=["std", "async"], alias=None, name_span=sp))
         return N("Module", Span(self.src, 1, 1, 1), items=items)
 
     def is_directive(self):
@@ -368,6 +374,9 @@ class Parser:
             if pub:
                 self.fail("`pub` is not allowed on `impl` blocks; mark the functions inside as `pub`", tok=start)
             return self.parse_impl()
+        if t.kind == "ident" and t.val == "async" and self.is_kw("fn", 1):
+            self.advance()
+            return self.parse_async_fn(pub)
         if t.kind != "kw":
             self.fail(f"expected an item (`fn`, `struct`, `enum`, `trait`, `const`, `error`, `import`, `impl`), found {self.describe(t)}",
                       label="not a valid top-level item")
@@ -404,6 +413,78 @@ class Parser:
         if v == "error":
             return self.parse_error_decl(pub)
         self.fail(f"expected an item, found {self.describe(t)}")
+
+    def type_text(self, tn):
+        """Source text of a parsed type (used to generate the helpers of an `async fn`)."""
+        k = tn.kind
+        if k == "TName":
+            return ".".join(tn.path) + (f"<{', '.join(self.type_text(a) for a in tn.args)}>" if tn.args else "")
+        if k == "TPtr":
+            return "*" + self.type_text(tn.inner)
+        if k == "TSlice":
+            return "[]" + self.type_text(tn.inner)
+        if k == "TArray":
+            n = getattr(tn.size, "value", None)
+            if n is None:
+                self.fail("an async function's parameter types must use plain array lengths", tok=self.prev)
+            return f"[{n}]" + self.type_text(tn.inner)
+        if k == "TErrUnion":
+            return self.type_text(tn.inner) + "!"
+        if k == "TOpt":
+            return self.type_text(tn.inner) + "?"
+        if k == "TFn":
+            ret = f" -> {self.type_text(tn.ret)}" if tn.ret is not None else ""
+            return f"fn({', '.join(self.type_text(x) for x in tn.params)}){ret}"
+        self.fail("this type cannot be used in an async function", tok=self.prev)
+
+    def parse_async_fn(self, pub):
+        """`async fn f(a: A) -> R { body }` becomes the ordinary function `f__body`, plus a generated argument struct,
+        a thread entry point and `f(a: A)` itself, which starts the body on a new thread and returns a task."""
+        fn = self.parse_fn(pub, extern=False)
+        name = fn.name
+        if fn.tparams:
+            self.fail("async functions cannot be generic", tok=self.prev)
+        if any(getattr(p, "self_param", False) for p in fn.params):
+            self.fail("async methods are not supported: write an async function that takes the value as a parameter", tok=self.prev)
+        self.uses_async = True
+        fn.name = name + "__body"
+        fn.pub = False
+        ret = fn.ret
+        fallible = ret is not None and ret.kind == "TErrUnion"
+        inner = ret.inner if fallible else ret
+        void = inner is None or (inner.kind == "TName" and inner.path == ["void"])
+        params = [(p.name, self.type_text(p.tyn)) for p in fn.params]
+        fields = "".join(f"{n}: {t}, " for n, t in params)
+        sig = ", ".join(f"{n}: {t}" for n, t in params)
+        inits = "".join(f"{n}: {n}, " for n, _ in params)
+        call = f"{name}__body(" + ", ".join(f"read_at(&a.{n})" for n, _ in params) + ")"
+        if void and not fallible:
+            kind, ctor, store = "Job", "async.new_job()", f"{call};"
+        elif void:
+            kind, ctor = "TryJob", "async.new_try_job()"
+            store = f"{call}.catch(|e| {{ a.task.failed = true; a.task.err = e; return null; }});"
+        else:
+            tt = self.type_text(inner)
+            if not fallible:
+                kind, ctor, store = f"Task<{tt}>", f"async.new_task<{tt}>()", f"a.task.value = {call};"
+            else:
+                kind, ctor = f"TryTask<{tt}>", f"async.new_try_task<{tt}>()"
+                store = (f"let v = {call}.catch(|e| {{ a.task.failed = true; a.task.err = e; return null; }});\n"
+                         f"    a.task.value = v;")
+        text = (f"struct {name}__Args {{ {fields}task: *async.{kind} }}\n"
+                f"fn {name}__entry(p: *void) -> *void {{\n"
+                f"    let a = p as *{name}__Args;\n"
+                f"    {store}\n"
+                f"    return null;\n}}\n"
+                f"{'pub ' if pub else ''}fn {name}({sig}) -> *async.{kind} {{\n"
+                f"    let task = {ctor};\n"
+                f"    let args = alloc({name}__Args, 1);\n"
+                f"    args[0] = {name}__Args {{ {inits}task: task }};\n"
+                f"    task.start({name}__entry, &args[0] as *void);\n"
+                f"    return task;\n}}\n")
+        sub = Parser(Source(f"<async fn {name}>", text), self.d)
+        gen = sub.parse_module().items
+        return [fn] + gen
 
     def parse_import(self):
         start = self.advance()
@@ -849,6 +930,13 @@ class Parser:
             self.advance()
             operand = self.parse_unary()
             return N("Unary", self.sp(t), op=t.val, expr=operand)
+        if (t.kind == "ident" and t.val == "await" and (self.peek().kind in ("ident", "int", "float", "str", "char")
+                or self.peek().kind == "kw" and self.peek().val in ("true", "false", "try")
+                or self.is_op("(", 1) or self.is_op("*", 1) or self.is_op("&", 1))):
+            self.advance()                                           # `await task` is `task.wait()`
+            operand = self.parse_unary()
+            return N("Call", self.sp(t), callee=N("Field", self.sp(t), obj=operand, name="wait", name_span=t.span),
+                     args=[], targ=None, targs=None)
         if t.kind == "kw" and t.val == "try":
             self.advance()
             operand = self.parse_unary()

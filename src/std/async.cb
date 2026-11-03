@@ -1,0 +1,83 @@
+// std.async: `async fn` and `await`, built on OS threads (std.thread).
+//
+//   import std.async;                      // added for you when a file declares an `async fn`
+//
+//   async fn square(n: i32) -> i32 { return n * n; }
+//   async fn fetch(url: str) -> http.Response! { return try http.get(url); }
+//
+//   let a = square(6);                      // starts running right away, on its own thread
+//   let b = square(7);                      // ... so a and b are computed at the same time
+//   println("{}", await a + await b);       // `await` waits for the result: 85
+//   let page = try await fetch("http://example.org/");     // failing functions give `T!` back
+//
+// Calling an async function returns a task (a pointer to a Task, TryTask, Job or TryJob, below). `await task`
+// is the same as `task.wait()`: it blocks the calling thread until the task is done and gives back its
+// value (or its error). Await every task exactly once: the result is moved out, and an awaited thread is
+// the one that gets cleaned up. Tasks share the garbage-collected heap, so pass them data, not stack
+// pointers. Async functions cannot be generic and cannot take `self`.
+import std.thread;
+
+// a task that produces a `T`
+pub struct Task<T> { thread: thread.Thread, value: T, joined: bool }
+
+// a task whose function returns `T!`
+pub struct TryTask<T> { thread: thread.Thread, value: T, failed: bool, err: error, joined: bool }
+
+// a task whose function returns nothing
+pub struct Job { thread: thread.Thread, joined: bool }
+
+// a task whose function returns `void!`
+pub struct TryJob { thread: thread.Thread, failed: bool, err: error, joined: bool }
+
+fn begin(f: fn(*void) -> *void, arg: *void) -> thread.Thread {
+    return thread.spawn(f, arg).catch(|e| { panic("could not start the task's thread"); });
+}
+
+pub fn new_task<T>() -> *Task<T> {
+    let t = alloc(Task<T>, 1);
+    return &t[0];
+}
+pub fn new_try_task<T>() -> *TryTask<T> {
+    let t = alloc(TryTask<T>, 1);
+    return &t[0];
+}
+pub fn new_job() -> *Job {
+    let t = alloc(Job, 1);
+    return &t[0];
+}
+pub fn new_try_job() -> *TryJob {
+    let t = alloc(TryJob, 1);
+    return &t[0];
+}
+
+impl<T> Task<T> {
+    pub fn start(mut self, f: fn(*void) -> *void, arg: *void) { self.thread = begin(f, arg); }
+    pub fn wait(mut self) -> T {
+        if !self.joined { self.thread.join(); self.joined = true; }
+        return read_at(&self.value);
+    }
+}
+
+impl<T> TryTask<T> {
+    pub fn start(mut self, f: fn(*void) -> *void, arg: *void) { self.thread = begin(f, arg); }
+    pub fn wait(mut self) -> T! {
+        if !self.joined { self.thread.join(); self.joined = true; }
+        if self.failed { throw self.err; }
+        return read_at(&self.value);
+    }
+}
+
+impl Job {
+    pub fn start(mut self, f: fn(*void) -> *void, arg: *void) { self.thread = begin(f, arg); }
+    pub fn wait(mut self) {
+        if !self.joined { self.thread.join(); self.joined = true; }
+    }
+}
+
+impl TryJob {
+    pub fn start(mut self, f: fn(*void) -> *void, arg: *void) { self.thread = begin(f, arg); }
+    pub fn wait(mut self) -> void! {
+        if !self.joined { self.thread.join(); self.joined = true; }
+        if self.failed { throw self.err; }
+    }
+}
