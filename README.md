@@ -211,6 +211,31 @@ obj.resize(w = 10, h = 20);                      // methods too
 
 Names work for every function declared with `fn` (not function pointers or C variadics).
 
+**Optionals (`T?`).** A `T?` holds a `T` or nothing (`null`). A plain value converts to `T?` implicitly, `null` is the empty value, and the
+operators below take it apart. Pointers are already nullable, so `??` and `?.` work on them too.
+
+```
+fn find(id: i32) -> i32? { if id == 1 { return 42; } return null; }
+let a = find(1);
+println("{}", a ?? 0);                    // `??` : the value, or the right side when empty -> 42
+println("{}", find(2) ?? find(1) ?? 0);   // chains left to right
+let name = user?.profile?.name ?? "Guest";   // `?.` : the field or call result, or empty as soon as one link is empty
+a.is_some();  a.is_none();  a.unwrap();   a.unwrap_or(0);     // unwrap panics on an empty optional
+a == null;    a != null;                  // test for emptiness
+println("{a:?}");                         // 42 (or `null`): the automatic representation shows optionals
+```
+
+`x?.f` has type `F?` (a field or method result `F` that is already optional stays `F?`). A trailing `?` before `??` is accepted and ignored,
+so `user?.profile?.name? ?? "Guest"` reads like the other languages' spelling. `T??` is not allowed.
+
+**Ternary operator.** `cond ? a : b` picks one of two values of the same type (a literal adapts to the other arm, `null` fits an optional);
+it nests to the right (`x < 0 ? -1 : x > 0 ? 1 : 0`) and the unchosen arm is not evaluated.
+
+**`.catch(|e| ...)`.** Handle a failing call inline: `let n = parse(text).catch(|e| 0);` gives the fallback when `parse` fails, `e` is the
+error (usable in the expression: `.catch(|e| default_for(e))`), and `.catch(0)` ignores it. A block handler must leave the function or loop
+(`return`, `break`, `continue`, `throw`, `panic`): `let n = parse(text).catch(|e| { println("bad: {e}"); return; });`. It is
+the same as `catch |e| ...`, written in method style. The `|e|` form is syntax, not a closure: it cannot be stored or passed around.
+
 `to_str(x)` converts numbers/bool/enums to `str`. `==` / `!=` compare any mix of `str` and `String`.
 A `String` is moved, not copied (see Destructors); `let v: str = s;` and passing `s` where a `str` is expected only *borrow* it,
 so a `str` view must not outlive its `String` (returning a view of a local `String` is a compile error). Temporary `String`s
@@ -430,13 +455,14 @@ Written in Crumbs and imported with `import std.name;` (`String`, `str`, `List<T
 | area | modules | what they give you |
 |---|---|---|
 | input / output | `std.io` | `getc` (`io.Eof`), `putc`, `get_line`, `flush` |
-| collections | `std.list`, `std.mem` | growable `List<T>` for every element type (`new`, `with_capacity`, `from_slice`, `push`, `pop`, `at`, `get`, `set`, `insert`, `remove`, `swap_remove`, `extend`, `view`, `clear`, `release`, `reverse`, `sort_by`, `for_each`, `find_by`); `swap`, `min`, `max`, `sort` |
+| collections | `std.list`, `std.stack`, `std.queue`, `std.map`, `std.tree`, `std.mem` | growable `List<T>` for every element type (`new`, `with_capacity`, `from_slice`, `push`, `pop`, `at`, `get`, `set`, `insert`, `remove`, `swap_remove`, `extend`, `view`, `clear`, `release`, `reverse`, `sort_by`, `for_each`, `find_by`); `Stack<T>` (`push`, `pop` -> `T?`, `peek`), `Queue<T>` (`push`, `pop` -> `T?`, `peek`), `HashMap<V>` with `String` keys (`set`, `get`, `get_or`, `has`, `remove` -> `V?`, `keys`, `for_each`), ordered `Tree<T: Ord>` (`insert`, `has`, `get`, `remove`, `min`, `max`, `height`, `for_each`, `to_list`); `swap`, `min`, `max`, `sort` |
 | text, numbers | `std.str`, `std.conv`, `std.math`, `std.rand` | trim, find/rfind, split, join, replace, case conversion, compare; text/number conversion; math; random numbers |
 | time | `std.time` | `monotonic_ns`, `unix`, `unix_ms`, `sleep_ms`; `Duration` (`from_ms`, `as_secs_f64`, `to_string()`), `Stopwatch` (`start`, `elapsed`, `lap`, `reset`); calendar dates: `from_unix`, `now_utc`, `now_local`, `DateTime.new`, `.format()`, `.iso()`, `.weekday_name()`, `.add_days(n)`, `is_leap_year`, `days_in_month` |
 | files, environment | `std.fs`, `std.env` | `read_to_string`, `read_lines`, `write`, `append`, `exists`, `is_file`, `is_dir`, `size`, `remove`, `make_dir` (errors `NotFound`, `IoError`); `args`, `arg`, `arg_count`, `get` (`NotSet`), `has` |
+| network | `std.net`, `std.http` | TCP `Socket` (`connect`, `listen`, `accept`, `send`, `recv`, `read_line`, `read_all`, `read_exact`, `set_timeout_ms`, `local_port`); an HTTP/1.1 client: `http.get/post/put/delete/request` -> `Response` (`status`, `reason`, `body`, `.header(name)`, `.ok()`); plain `http://` only (no TLS) |
 | threads | `std.thread` | `spawn(f, arg)` / `spawn_fn(f)` -> `Thread` (`.join()`), `Mutex`, `Condvar`, `AtomicI64`, generic `channel<T>()` (`send`, `recv`, `close`; `Closed`), `sleep_ms`, `yield_now`, `current_id`, `cpu_count` |
 
-`std.list` owns its elements and releases them (running destructors and freeing `String`s) automatically; `list.List<T>` works for numbers,
+`std.list`, `std.stack`, `std.queue`, `std.map` and `std.tree` own their elements and release them (running destructors and freeing `String`s) automatically; `list.List<T>` works for numbers,
 `str`, `String`, structs, arrays, function pointers and nested lists. `std.time`, `std.fs`, `std.env`, `std.io` and `std.thread` contain no C
 helpers: they bind libc and pthread with plain `extern fn` / `extern struct` / `extern const` declarations, exactly like user code does.
 (The only runtime hooks they call are the collector's thread notifications in `std.thread`.)

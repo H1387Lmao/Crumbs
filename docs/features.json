@@ -235,6 +235,36 @@
           ]
         },
         {
+          "id": "optionals",
+          "title": "Optionals and ternary",
+          "features": [
+            {
+              "id": "optional-types",
+              "title": "Optional values: T?",
+              "desc": "A `T?` holds a `T` or nothing. A plain value converts to `T?` implicitly and `null` is the empty value. `x == null` and `x != null` test for emptiness, and `is_some()`, `is_none()`, `unwrap()` (panics when empty) and `unwrap_or(default)` take the value out. `T?` works for every type, including `String` and structs, and `T??` is not allowed. `{x:?}` shows the value or `null`.",
+              "code": "fn find(id: i32) -> i32? {\n    if id == 1 { return 42; }   // a plain value becomes Some(value)\n    return null;\n}\n\nlet a = find(1);\nlet b = find(2);\nprintln(\"{} {}\", a.is_some(), b.is_none());   // true true\nprintln(\"{}\", a.unwrap());                    // 42\nprintln(\"{a:?} {b:?}\");                        // 42 null\nlet n: str? = null;"
+            },
+            {
+              "id": "null-coalescing",
+              "title": "Null coalescing: ??",
+              "desc": "`a ?? b` is `a` when it holds a value and `b` otherwise; `b` is only evaluated when needed. It chains from left to right, and works on pointers too (a null pointer takes the right side). If `b` is itself optional the result stays optional.",
+              "code": "let port = config_port() ?? 8080;\nlet first = find(2) ?? find(1) ?? 0;     // 42\nlet node: *Node = lookup(\"x\");\nlet safe = node ?? &fallback;             // pointers too"
+            },
+            {
+              "id": "optional-chaining",
+              "title": "Optional chaining: ?.",
+              "desc": "`a?.b` reads a field or calls a method only when `a` holds a value (or is a non-null pointer); otherwise the whole chain is empty. The result type is the field or return type made optional, and a chain keeps going through further `?.`. Finish with `??` to supply a default. A `?` right before `??` is accepted and ignored.",
+              "code": "struct Profile { name: str?, age: i32? }\nstruct User { profile: Profile?, id: i32 }\n\nlet name = user?.profile?.name ?? \"Guest\";\nlet name2 = user?.profile?.name? ?? \"Guest\";   // same thing\nlet id: i32? = user?.id;                      // empty when `user` is null\nlet nick = user?.nick(1) ?? \"none\";           // methods too"
+            },
+            {
+              "id": "ternary",
+              "title": "Ternary operator",
+              "desc": "`cond ? a : b` evaluates to `a` or `b`. Both arms must have the same type; a literal adapts to the other arm and `null` fits an optional. Only the chosen arm is evaluated, and it nests to the right.",
+              "code": "let sign = x < 0 ? -1 : x > 0 ? 1 : 0;\nlet label = ok ? \"yes\" : \"no\";\nlet maybe: i32? = ready ? 9 : null;"
+            }
+          ]
+        },
+        {
           "id": "methods",
           "title": "Methods",
           "features": [
@@ -355,6 +385,12 @@
               "title": "Error Propagation and Handling",
               "desc": "Use `try` to propagate an error to the caller. Use `catch` to supply a fallback value or handle the error with a handler that must diverge.",
               "code": "let value = try lookup(3);\nlet fallback = lookup(-1) catch 0;\n\nlookup(-1) catch |err| {\n    println(\"lookup failed\");\n    return;\n};"
+            },
+            {
+              "id": "catch-lambda",
+              "title": "Inline handlers: .catch(|e| ...)",
+              "desc": "Handle a failing call in method style. `.catch(|e| value)` gives a fallback when the call fails, with the error `e` available inside the expression; `.catch(value)` ignores the error. A block form must leave the function or loop (`return`, `break`, `continue`, `throw` or `panic`). It is the same as `catch |e| ...`; the `|e|` part is syntax, not a closure, so it cannot be stored or passed around.",
+              "code": "fn parse(text: str) -> u8! { ... }\n\nlet a = parse(\"7\").catch(|e| 0);             // 7, or 0 when it fails\nlet b = parse(\"x\").catch(|e| default_for(e));\nlet c = parse(\"x\").catch(0);\nlet d = parse(\"x\").catch(|e| {\n    println(\"bad input: {e}\");\n    return;\n});"
             }
           ]
         },
@@ -448,7 +484,7 @@
             {
               "id": "std-modules",
               "title": "What is in std",
-              "desc": "`std.io` input and output; `std.list` and `std.mem` collections and helpers; `std.str`, `std.conv`, `std.math` and `std.rand` text, numbers and randomness; `std.time` clocks and dates; `std.fs` and `std.env` files and the environment; `std.thread` threads and channels. `std.fmt` holds the `Display` trait. `String`, `str`, `List<T>` and `Display` need no import. `std.time`, `std.fs`, `std.env`, `std.io` and `std.thread` contain no C helpers: they bind libc and pthread with ordinary `extern fn` declarations, exactly like user code.",
+              "desc": "`std.io` input and output; `std.list`, `std.stack`, `std.queue`, `std.map`, `std.tree` and `std.mem` collections and helpers; `std.net` sockets and `std.http` an HTTP client; `std.str`, `std.conv`, `std.math` and `std.rand` text, numbers and randomness; `std.time` clocks and dates; `std.fs` and `std.env` files and the environment; `std.thread` threads and channels. `std.fmt` holds the `Display` trait. `String`, `str`, `List<T>` and `Display` need no import. `std.time`, `std.fs`, `std.env`, `std.io` and `std.thread` contain no C helpers: they bind libc and pthread with ordinary `extern fn` declarations, exactly like user code.",
               "code": "import std.io;\nimport std.list;\nimport std.str;\nimport std.math;\nimport std.time;\nimport std.fs;\nimport std.thread;"
             }
           ]
@@ -480,6 +516,24 @@
               "title": "List API",
               "desc": "`new`, `with_capacity`, `from_slice`, `push`, `pop` (`T!`, error `Empty`), `at` (a pointer, any `T`), `get`, `set`, `insert`, `remove`, `swap_remove`, `extend`, `view`, `clear`, `release`, `reverse`, `sort_by(l, cmp)` (heap sort, `cmp` like C's `qsort`), `for_each`, `find_by`.",
               "code": "let mut xs: List<str> = List.new();\nxs.push(\"Hi\");\nxs.push(\"there\");\nprintln(xs.len, \" \", xs.get(1), \" \", str.join(xs.view(), \"+\"));"
+            },
+            {
+              "id": "std-stack-queue",
+              "title": "std.stack and std.queue",
+              "desc": "`Stack<T>` is last-in, first-out and `Queue<T>` (a growable ring buffer) is first-in, first-out, for every element type. `push` adds, `pop` returns a `T?` (empty when there is nothing left), and `peek` gives a pointer to the next element or null. Both own their elements and release them at the end of their scope, running destructors.",
+              "code": "import std.stack;\nimport std.queue;\n\nlet mut s: stack.Stack<i32> = stack.Stack.new();\ns.push(1);\ns.push(2);\nprintln(\"{}\", s.pop() ?? -1);      // 2\nprintln(\"{}\", s.len());\n\nlet mut q: queue.Queue<str> = queue.Queue.new();\nq.push(\"a\");\nq.push(\"b\");\nprintln(\"{}\", q.pop() ?? \"empty\"); // a\nif q.peek() != null { println(*q.peek()); }"
+            },
+            {
+              "id": "std-map",
+              "title": "std.map: HashMap",
+              "desc": "`HashMap<V>` maps `String` keys to values of any type (open addressing with linear probing, growing as needed). Keys are passed as `str` and the map keeps its own copies. `get` gives a pointer to the value (null when missing), `get_or` a copy or a default, `remove` returns the value as `V?`, `keys()` a `List<String>` and `for_each(f)` calls `f(key, &value)`. The iteration order is unspecified. Values are destroyed when replaced, removed or when the map goes out of scope.",
+              "code": "import std.map;\n\nlet mut ages: map.HashMap<i32> = map.HashMap.new();\nages.set(\"ann\", 31);\nages.set(\"bob\", 27);\nages.set(\"ann\", 32);                 // replaces\nprintln(\"{}\", ages.get_or(\"zed\", -1));  // -1\nif ages.has(\"bob\") { println(\"{:?}\", ages.remove(\"bob\")); }\nlet p = ages.get(\"ann\");\nif p != null { println(*p); }"
+            },
+            {
+              "id": "std-tree",
+              "title": "std.tree: ordered Tree",
+              "desc": "`Tree<T>` is an ordered set in a binary search tree for every element type that implements the `Ord` trait (`fn cmp(self, other: *Self) -> i32`, negative / zero / positive). Numbers, `str` and `String` already do; implement it for your own types. `insert` returns false for a duplicate, `has`, `get` and `remove` take the value to look for (a `String` probe is consumed), `min` and `max` give pointers, `for_each` visits in order and `to_list` copies the elements out.",
+              "code": "import std.tree;\n\nstruct P { x: i32, name: str }\nimpl tree.Ord for P {\n    fn cmp(self, o: *Self) -> i32 { return self.x - o.x; }\n}\n\nlet mut t: tree.Tree<i32> = tree.Tree.new();\nt.insert(5);  t.insert(2);  t.insert(9);\nprintln(\"{} {}\", t.has(9), t.len());      // true 3\nprintln(\"{} {}\", *t.min(), *t.max());     // 2 9\nprintln(\"{:?}\", t.remove(5));             // 5\nt.for_each(show);                         // 2 9"
             },
             {
               "id": "std-mem",
@@ -534,6 +588,24 @@
               "title": "std.env",
               "desc": "`args()`, `arg(i)`, `arg_count()`, `get(name)` (error `NotSet`) and `has(name)`.",
               "code": "import std.env;\n\nprintln(env.arg_count());\nlet home = env.get(\"HOME\") catch \"\";"
+            }
+          ]
+        },
+        {
+          "id": "std-network",
+          "title": "Network",
+          "features": [
+            {
+              "id": "std-net",
+              "title": "std.net: TCP sockets",
+              "desc": "`net.Socket` wraps a TCP socket (IPv4 and IPv6, POSIX sockets through FFI). `Socket.connect(host, port)` opens a connection, `Socket.listen(host, port)` starts a server (port 0 picks a free one; `local_port()` tells you which) and `accept()` waits for a client. `send(text)` writes every byte, `recv(buf)` reads what is available (0 means the peer closed), and `read_line`, `read_all` and `read_exact(n)` read text. `set_timeout_ms` makes waits fail with `Timeout`. A socket closes itself at the end of its scope. Waiting calls are collector safepoints, so other threads keep working. Errors: ResolveFailed, ConnectFailed, BindFailed, AcceptFailed, SendFailed, RecvFailed, Timeout.",
+              "code": "import std.net;\n\nlet s = net.Socket.connect(\"example.org\", 80) catch |e| { panic(\"no connection: {e}\"); };\ns.send(\"GET / HTTP/1.0\\r\\n\\r\\n\") catch |e| { return; };\nlet reply = s.read_all() catch string_new();\n\nlet mut srv = net.Socket.listen(\"127.0.0.1\", 0) catch |e| { return; };\nprintln(\"port {}\", srv.local_port());\nlet client = srv.accept() catch |e| { return; };\nlet line = client.read_line() catch string_new();"
+            },
+            {
+              "id": "std-http",
+              "title": "std.http: an HTTP client",
+              "desc": "A small HTTP/1.1 client on top of `std.net`: `http.get(url)`, `post(url, body)`, `put`, `delete` and `request(method, url, ...)` return a `Response` with `status`, `reason`, `body`, `ok()` (true for 2xx) and `header(name)` (case-insensitive, `str?`). `headers` is text with one `Name: value` per line; `timeout_ms` defaults to 10000. Bodies with `Content-Length` and `Transfer-Encoding: chunked` are understood. Only plain `http://` works (an `https://` URL fails with `Unsupported`, there is no TLS). Other errors: BadUrl, BadResponse, and the std.net errors.",
+              "code": "import std.http;\n\nlet r = http.get(\"http://example.org/\").catch(|e| { panic(\"request failed: {e}\"); });\nprintln(\"{} {} ok={}\", r.status, r.reason, r.ok());\nprintln(\"{}\", r.header(\"content-type\") ?? \"unknown\");\nprintln(\"{}\", r.body);\n\nlet p = http.post(\"http://localhost:8080/items\", \"{\\\"id\\\":1}\", headers = \"Content-Type: application/json\");"
             }
           ]
         },
