@@ -1,0 +1,207 @@
+// std.tree: an ordered set kept in a binary search tree, for every element type that implements `Ord`.
+//
+//     import std.tree;
+//     let mut t: tree.Tree<i32> = tree.Tree.new();
+//     t.insert(5);  t.insert(2);  t.insert(9);
+//     println(t.has(9));                 // true
+//     println(*t.min(), " ", *t.max());  // 2 9   (min/max/get give a pointer, or null when empty)
+//     t.for_each(show);                  // visits 2, 5, 9 in order
+//
+// Numbers, `str` and `String` are ordered already. For your own types, implement `Ord`:
+//
+//     impl tree.Ord for Point {
+//         fn cmp(self, other: *Self) -> i32 { return self.x - other.x; }    // <0, 0 or >0
+//     }
+//
+// The tree owns its elements (an equal element is not inserted twice) and is destroyed automatically
+// at the end of its scope. Inserting, finding and removing take time proportional to the tree's height.
+// `has`, `get` and `remove` take the value to look for by value (a `String` probe is consumed).
+
+pub trait Ord {
+    fn cmp(self, other: *Self) -> i32;        // negative: self < other, zero: equal, positive: self > other
+}
+
+impl Ord for i8 { fn cmp(self, o: *i8) -> i32 { return *self < *o ? -1 : *self > *o ? 1 : 0; } }
+impl Ord for i16 { fn cmp(self, o: *i16) -> i32 { return *self < *o ? -1 : *self > *o ? 1 : 0; } }
+impl Ord for i32 { fn cmp(self, o: *i32) -> i32 { return *self < *o ? -1 : *self > *o ? 1 : 0; } }
+impl Ord for i64 { fn cmp(self, o: *i64) -> i32 { return *self < *o ? -1 : *self > *o ? 1 : 0; } }
+impl Ord for u8 { fn cmp(self, o: *u8) -> i32 { return *self < *o ? -1 : *self > *o ? 1 : 0; } }
+impl Ord for u16 { fn cmp(self, o: *u16) -> i32 { return *self < *o ? -1 : *self > *o ? 1 : 0; } }
+impl Ord for u32 { fn cmp(self, o: *u32) -> i32 { return *self < *o ? -1 : *self > *o ? 1 : 0; } }
+impl Ord for u64 { fn cmp(self, o: *u64) -> i32 { return *self < *o ? -1 : *self > *o ? 1 : 0; } }
+impl Ord for f32 { fn cmp(self, o: *f32) -> i32 { return *self < *o ? -1 : *self > *o ? 1 : 0; } }
+impl Ord for f64 { fn cmp(self, o: *f64) -> i32 { return *self < *o ? -1 : *self > *o ? 1 : 0; } }
+
+fn cmp_text(a: str, b: str) -> i32 {
+    let n = a.len < b.len ? a.len : b.len;
+    for i in 0..n {
+        if a[i] != b[i] { return a[i] < b[i] ? -1 : 1; }
+    }
+    return a.len < b.len ? -1 : a.len > b.len ? 1 : 0;
+}
+impl Ord for str { fn cmp(self, o: *str) -> i32 { return cmp_text(*self, *o); } }
+impl Ord for String { fn cmp(self, o: *String) -> i32 { return cmp_text(*self, *o); } }
+
+pub struct Node<T> { val: T, left: *Node<T>, right: *Node<T> }
+
+pub struct Tree<T: Ord> { root: *Node<T>, count: i64 }
+
+drop<T> Tree<T>(self) { clear(self); }
+
+pub fn new<T: Ord>() -> Tree<T> {
+    return Tree { root: null, count: 0 };
+}
+
+fn make_node<T: Ord>(v: T) -> *Node<T> {
+    let n = alloc(Node<T>, 1);
+    write_at(&n[0].val, v);
+    n[0].left = null;
+    n[0].right = null;
+    return &n[0];
+}
+
+// adds `v`; false (and nothing changes) when an equal element is already in the tree
+pub fn insert<T: Ord>(t: *Tree<T>, v: T) -> bool {
+    let mut parent: *Node<T> = null;
+    let mut cur = t.root;
+    let mut dir = 0;
+    while cur != null {
+        let c = v.cmp(&cur.val);
+        if c == 0 { return false; }
+        parent = cur;
+        if c < 0 { cur = cur.left; dir = -1; } else { cur = cur.right; dir = 1; }
+    }
+    let n = make_node(v);
+    if parent == null { t.root = n; }
+    else if dir < 0 { parent.left = n; }
+    else { parent.right = n; }
+    t.count += 1;
+    return true;
+}
+
+// a pointer to the element equal to `probe`, or null
+pub fn get<T: Ord>(t: *Tree<T>, probe: T) -> *T {
+    let mut cur = t.root;
+    while cur != null {
+        let c = probe.cmp(&cur.val);
+        if c == 0 { return &cur.val; }
+        cur = c < 0 ? cur.left : cur.right;
+    }
+    return null;
+}
+
+pub fn has<T: Ord>(t: *Tree<T>, probe: T) -> bool { return get(t, probe) != null; }
+
+// removes the element equal to `probe` and returns it, or null when there is none
+pub fn remove<T: Ord>(t: *Tree<T>, probe: T) -> T? {
+    let mut parent: *Node<T> = null;
+    let mut cur = t.root;
+    let mut dir = 0;
+    while cur != null {
+        let c = probe.cmp(&cur.val);
+        if c == 0 { break; }
+        parent = cur;
+        if c < 0 { cur = cur.left; dir = -1; } else { cur = cur.right; dir = 1; }
+    }
+    if cur == null { return null; }
+    let out = read_at(&cur.val);
+    if cur.left != null && cur.right != null {
+        // two children: the smallest element of the right subtree takes this node's place
+        let mut sp = cur;
+        let mut s = cur.right;
+        while s.left != null { sp = s; s = s.left; }
+        write_at(&cur.val, read_at(&s.val));
+        if sp == cur { sp.right = s.right; } else { sp.left = s.right; }
+        free(slice_of(s, 1));
+    } else {
+        let child = cur.left != null ? cur.left : cur.right;
+        if parent == null { t.root = child; }
+        else if dir < 0 { parent.left = child; }
+        else { parent.right = child; }
+        free(slice_of(cur, 1));
+    }
+    t.count -= 1;
+    return out;
+}
+
+pub fn min<T: Ord>(t: *Tree<T>) -> *T {
+    let mut cur = t.root;
+    if cur == null { return null; }
+    while cur.left != null { cur = cur.left; }
+    return &cur.val;
+}
+
+pub fn max<T: Ord>(t: *Tree<T>) -> *T {
+    let mut cur = t.root;
+    if cur == null { return null; }
+    while cur.right != null { cur = cur.right; }
+    return &cur.val;
+}
+
+pub fn len<T: Ord>(t: *Tree<T>) -> i64 { return t.count; }
+pub fn is_empty<T: Ord>(t: *Tree<T>) -> bool { return t.count == 0; }
+
+fn depth<T: Ord>(n: *Node<T>) -> i64 {
+    if n == null { return 0; }
+    let l = depth(n.left);
+    let r = depth(n.right);
+    return 1 + (l > r ? l : r);
+}
+
+// the number of levels (0 for an empty tree)
+pub fn height<T: Ord>(t: *Tree<T>) -> i64 { return depth(t.root); }
+
+fn walk<T: Ord>(n: *Node<T>, f: fn(*T)) {
+    if n == null { return; }
+    walk(n.left, f);
+    f(&n.val);
+    walk(n.right, f);
+}
+
+// calls `f(&element)` for every element, smallest first
+pub fn for_each<T: Ord>(t: *Tree<T>, f: fn(*T)) { walk(t.root, f); }
+
+fn collect_into<T: Ord>(n: *Node<T>, out: *List<T>) {
+    if n == null { return; }
+    collect_into(n.left, out);
+    out.push(n.val);
+    collect_into(n.right, out);
+}
+
+// the elements in order, as a list of copies (copyable element types)
+pub fn to_list<T: Ord>(t: *Tree<T>) -> List<T> {
+    let mut out: List<T> = List.new();
+    collect_into(t.root, &out);
+    return out;
+}
+
+fn free_nodes<T: Ord>(n: *Node<T>) {
+    if n == null { return; }
+    free_nodes(n.left);
+    free_nodes(n.right);
+    drop_at(&n.val);
+    free(slice_of(n, 1));
+}
+
+// destroys every element; the tree is empty (and reusable) afterwards
+pub fn clear<T: Ord>(t: *Tree<T>) {
+    free_nodes(t.root);
+    t.root = null;
+    t.count = 0;
+}
+
+impl<T: Ord> Tree<T> {
+    pub fn new() -> Tree<T> { return new<T>(); }
+    pub fn insert(mut self, v: T) -> bool { return insert(self, v); }
+    pub fn get(self, probe: T) -> *T { return get(self, probe); }
+    pub fn has(self, probe: T) -> bool { return has(self, probe); }
+    pub fn remove(mut self, probe: T) -> T? { return remove(self, probe); }
+    pub fn min(self) -> *T { return min(self); }
+    pub fn max(self) -> *T { return max(self); }
+    pub fn len(self) -> i64 { return self.count; }
+    pub fn is_empty(self) -> bool { return self.count == 0; }
+    pub fn height(self) -> i64 { return height(self); }
+    pub fn for_each(self, f: fn(*T)) { for_each(self, f); }
+    pub fn to_list(self) -> List<T> { return to_list(self); }
+    pub fn clear(mut self) { clear(self); }
+}

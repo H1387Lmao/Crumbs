@@ -164,21 +164,27 @@ let u = t;                           // moves t (a String has one owner); `t` ca
 free(s);                             // optional: free early (this moves `s`)
 ```
 `str + str` also works and yields a `str` backed by a bump arena (never freed, appends are amortised O(1));
-**String interpolation.** `f"text {expr} more"` embeds any expression; `{expr:spec}` formats it, `{{` / `}}` are literal braces, and the
-result is a `str`. The spec is `[[fill]align][sign][#][0][width][,|_][.precision][type]`:
+**Format strings (Rust style).** The first argument of `println`, `print`, `format`, `panic` and `assert`'s message is a template:
+`{}` takes the next argument, `{0}` a numbered one, `{name}` a named argument (`name = value`) or else the variable of that name
+(`{p.x}` reaches fields), and `{{` / `}}` are literal braces. `{x:spec}` formats. `format(...)` returns an owned `String`;
+the others print or panic with the text. Expressions go in the argument list, not inside the braces. A template without braces
+still prints extra values one after another (`println("n = ", n)`).
+The spec is `[[fill]align][sign][#][0][width][,|_][.precision][type]`:
 
 ```
 let n = 255;  let pi = 3.14159;  let name = "world";
-println(f"hello {name}! {1 + 2}");                      // hello world! 3
-println(f"{n:x} {n:#b} {n:08.3f} {n:+} {1234567:,}");   // ff 0b11111111 0255.000 +255 1,234,567
-println(f"[{name:>8}] [{name:*^9}] [{name:.3}] {pi:.2}"); // [   world] [**world**] [wor] 3.14
+println("hello {name}! {}", 1 + 2);                       // hello world! 3
+println("{n:x} {n:#b} {n:08.3f} {n:+} {:,}", 1234567);    // ff 0b11111111 0255.000 +255 1,234,567
+println("[{name:>8}] [{name:*^9}] [{name:.3}] {pi:.2}");  // [   world] [**world**] [wor] 3.14
+println("{} + {} = {total}", 1, 2, total = 3);             // 1 + 2 = 3
+let label: String = format("{}-{:03}", name, 7);           // world-007
 ```
 
 align `<` `>` `^`; sign `+` or space; `#` adds `0x`/`0b`/`0o`; `0` zero-pads numbers; `,` `_` group digits; `.N` is decimals for floats
-and a character limit for text; types `d x X b o c` (integers), `f F e E g G` (floats), `?` (automatic representation). A bad spec is a
-compile error pointing at it.
+and a character limit for text; types `d x X b o c` (integers), `f F e E g G` (floats), `?` (automatic representation). A bad template
+or spec is a compile error that says what is wrong; an argument that the template never uses is an error too.
 
-**Showing your own types (`Display`).** Implement the prelude trait `Display` (no import) and `println(x)`, `to_str(x)` and `f"{x}"` use
+**Showing your own types (`Display`).** Implement the prelude trait `Display` (no import) and `println(x)`, `to_str(x)` and `"{x}"` use
 your text; the spec's width/alignment apply to it. `{x:?}` prints an automatic representation (`Point { x: 3, y: -4 }`) for any struct,
 enum, array or slice of printable things. A struct with neither is a compile error that says what to add. `T: Display` is a valid bound;
 numeric types and `bool` implement it, and `Duration` / `DateTime` already do.
@@ -186,11 +192,49 @@ numeric types and `bool` implement it, and `Duration` / `DateTime` already do.
 ```
 struct Point { x: i32, y: i32 }
 impl Display for Point {
-    fn to_string(self) -> String { return string_from(f"({self.x}, {self.y})"); }
+    fn to_string(self) -> String { return format("({}, {})", self.x, self.y); }
 }
 println(Point { x: 3, y: -4 });          // (3, -4)
-println(f"{p:>10} {p:?}");               // "    (3, -4) Point { x: 3, y: -4 }"
+println("{p:>10} {p:?}");                // "    (3, -4) Point { x: 3, y: -4 }"
 ```
+
+**Named and default arguments.** Give a parameter a default with `= literal` (numbers, strings, `true`/`false`, `null`); defaulted
+parameters come last. Callers may skip them, and may pass any argument by name after the positional ones:
+
+```
+fn connect(host: str, port: i32 = 80, secure: bool = false) -> str { ... }
+connect("example.org");                          // port 80
+connect("example.org", secure = true);           // skip port
+connect(secure = true, host = "a", port = 443);  // any order
+obj.resize(w = 10, h = 20);                      // methods too
+```
+
+Names work for every function declared with `fn` (not function pointers or C variadics).
+
+**Optionals (`T?`).** A `T?` holds a `T` or nothing (`null`). A plain value converts to `T?` implicitly, `null` is the empty value, and the
+operators below take it apart. Pointers are already nullable, so `??` and `?.` work on them too.
+
+```
+fn find(id: i32) -> i32? { if id == 1 { return 42; } return null; }
+let a = find(1);
+println("{}", a ?? 0);                    // `??` : the value, or the right side when empty -> 42
+println("{}", find(2) ?? find(1) ?? 0);   // chains left to right
+let name = user?.profile?.name ?? "Guest";   // `?.` : the field or call result, or empty as soon as one link is empty
+a.is_some();  a.is_none();  a.unwrap();   a.unwrap_or(0);     // unwrap panics on an empty optional
+a == null;    a != null;                  // test for emptiness
+println("{a:?}");                         // 42 (or `null`): the automatic representation shows optionals
+```
+
+`x?.f` has type `F?` (a field or method result `F` that is already optional stays `F?`). A trailing `?` before `??` is accepted and ignored,
+so `user?.profile?.name? ?? "Guest"` reads like the other languages' spelling. `T??` is not allowed.
+
+**Ternary operator.** `cond ? a : b` picks one of two values of the same type (a literal adapts to the other arm, `null` fits an optional);
+it nests to the right (`x < 0 ? -1 : x > 0 ? 1 : 0`) and the unchosen arm is not evaluated.
+
+**`.catch(|e| ...)`.** Handle a failing call inline: `let n = parse(text).catch(|e| 0);` gives the fallback when `parse` fails, `e` is the
+error (usable in the expression: `.catch(|e| default_for(e))`), and `.catch(0)` ignores it. A block handler must leave the function or loop
+(`return`, `break`, `continue`, `throw`, `panic`): `let n = parse(text).catch(|e| { println("bad: {e}"); return; });`. It is
+the same as `catch |e| ...`, written in method style. The `|e|` form is syntax, not a closure: it cannot be stored or passed around.
 
 `to_str(x)` converts numbers/bool/enums to `str`. `==` / `!=` compare any mix of `str` and `String`.
 A `String` is moved, not copied (see Destructors); `let v: str = s;` and passing `s` where a `str` is expected only *borrow* it,
@@ -200,6 +244,8 @@ so a `str` view must not outlive its `String` (returning a view of a local `Stri
 **Pointers.** `*T` may be null: `let p: *Node = null;` (`null` takes its type from context, or write `null as *T`).
 Dereferencing null panics with a location. Casts: `p as u64` / `n as *T` (any integer width) and `p as *U`
 reinterpret pointers; `0 as *T` is also a null pointer.
+Fields and methods are reached straight through a pointer (`level.player.x`, `level.get_block(x, y)`); `p->x` / `p->f()` is the C
+spelling of `(*p).x` / `(*p).f()` and means exactly that.
 
 **I/O (`std.io`).** `io.getc() -> u8!` (fails with `io.Eof`), `io.putc(c: u8)`,
 `io.get_line() -> String!` (a line ends at `\n`, `\r`, `\r\n` or Ctrl+D; `io.Eof` only if nothing was read),
@@ -409,13 +455,15 @@ Written in Crumbs and imported with `import std.name;` (`String`, `str`, `List<T
 | area | modules | what they give you |
 |---|---|---|
 | input / output | `std.io` | `getc` (`io.Eof`), `putc`, `get_line`, `flush` |
-| collections | `std.list`, `std.mem` | growable `List<T>` for every element type (`new`, `with_capacity`, `from_slice`, `push`, `pop`, `at`, `get`, `set`, `insert`, `remove`, `swap_remove`, `extend`, `view`, `clear`, `release`, `reverse`, `sort_by`, `for_each`, `find_by`); `swap`, `min`, `max`, `sort` |
+| collections | `std.list`, `std.stack`, `std.queue`, `std.map`, `std.tree`, `std.mem` | growable `List<T>` for every element type (`new`, `with_capacity`, `from_slice`, `push`, `pop`, `at`, `get`, `set`, `insert`, `remove`, `swap_remove`, `extend`, `view`, `clear`, `release`, `reverse`, `sort_by`, `for_each`, `find_by`); `Stack<T>` (`push`, `pop` -> `T?`, `peek`), `Queue<T>` (`push`, `pop` -> `T?`, `peek`), `HashMap<V>` with `String` keys (`set`, `get`, `get_or`, `has`, `remove` -> `V?`, `keys`, `for_each`), ordered `Tree<T: Ord>` (`insert`, `has`, `get`, `remove`, `min`, `max`, `height`, `for_each`, `to_list`); `swap`, `min`, `max`, `sort` |
 | text, numbers | `std.str`, `std.conv`, `std.math`, `std.rand` | trim, find/rfind, split, join, replace, case conversion, compare; text/number conversion; math; random numbers |
 | time | `std.time` | `monotonic_ns`, `unix`, `unix_ms`, `sleep_ms`; `Duration` (`from_ms`, `as_secs_f64`, `to_string()`), `Stopwatch` (`start`, `elapsed`, `lap`, `reset`); calendar dates: `from_unix`, `now_utc`, `now_local`, `DateTime.new`, `.format()`, `.iso()`, `.weekday_name()`, `.add_days(n)`, `is_leap_year`, `days_in_month` |
 | files, environment | `std.fs`, `std.env` | `read_to_string`, `read_lines`, `write`, `append`, `exists`, `is_file`, `is_dir`, `size`, `remove`, `make_dir` (errors `NotFound`, `IoError`); `args`, `arg`, `arg_count`, `get` (`NotSet`), `has` |
+| async | `std.async` | `async fn` / `await` on top of threads: calling an async function starts it and returns a task (`Task<T>`, `TryTask<T>`, `Job`, `TryJob`); `await t` is `t.wait()`; await each task once |
+| network | `std.net`, `std.http` | TCP `Socket` (`connect`, `listen`, `accept`, `send`, `recv`, `read_line`, `read_all`, `read_exact`, `set_timeout_ms`, `local_port`); an HTTP/1.1 client: `http.get/post/put/delete/request` -> `Response` (`status`, `reason`, `body`, `.header(name)`, `.ok()`); plain `http://` only (no TLS) |
 | threads | `std.thread` | `spawn(f, arg)` / `spawn_fn(f)` -> `Thread` (`.join()`), `Mutex`, `Condvar`, `AtomicI64`, generic `channel<T>()` (`send`, `recv`, `close`; `Closed`), `sleep_ms`, `yield_now`, `current_id`, `cpu_count` |
 
-`std.list` owns its elements and releases them (running destructors and freeing `String`s) automatically; `list.List<T>` works for numbers,
+`std.list`, `std.stack`, `std.queue`, `std.map` and `std.tree` own their elements and release them (running destructors and freeing `String`s) automatically; `list.List<T>` works for numbers,
 `str`, `String`, structs, arrays, function pointers and nested lists. `std.time`, `std.fs`, `std.env`, `std.io` and `std.thread` contain no C
 helpers: they bind libc and pthread with plain `extern fn` / `extern struct` / `extern const` declarations, exactly like user code does.
 (The only runtime hooks they call are the collector's thread notifications in `std.thread`.)
@@ -434,6 +482,18 @@ helpers: they bind libc and pthread with plain `extern fn` / `extern struct` / `
 | `cookie.py` | the build tool (projects, profiles, option forwarding) |
 | `crumbsc/diag.py` | rustc-style diagnostics with "did you mean" suggestions |
 | `driver.py` | build pipeline, link plan (`link`/`--link`/`--pkg`), command line |
+
+## Documentation
+
+`docs/index.html` is a single page with two halves, switched by the tabs at the top: the **Guide** (written in `docs/features.json`) and the
+**Standard library** reference (`docs/stdlib.json`). The search box in the sidebar looks inside both: it finds individual features of the guide
+and individual functions, types and errors of the library, and a click jumps straight to them.
+
+`docs/stdlib.json` is generated: `python3 tools/gen_stdlib_docs.py` reads every `pub` item of `src/std/*.cb` and uses the `//` comment block above
+it as the description. To document a function, put a comment above it. `tools/stdlib_notes.txt` adds parameter and return descriptions
+(`module.Type.method :: description :: returns :: param=note; param=note`), `tools/stdlib_meta.json` holds module summaries, examples and
+type notes, and `docs/stdlib_builtins.json` describes the prelude functions that live in the compiler. The test suite fails when
+`docs/stdlib.json` is out of date or an item has no description; `python3 tools/check_stdlib_examples.py` compiles every example.
 
 ## Preprocessor
 
@@ -460,4 +520,4 @@ Not supported: `#include` (use `import`, or `include "x.h";` for C headers). Mac
 
 ## Known limits (it is a toy)
 No generic enums, trait objects, generic traits or closures; no `if` expressions; the collector is conservative and stop-the-world (generational, so most pauses are short). Slices are mutable views even of
-immutable arrays. Interpolated strings must fit on one line, and `Display` is static (no `dyn Display`). The generated C needs GCC/Clang (statement expressions, overflow builtins).
+immutable arrays. Format strings take values from the argument list or named variables, not arbitrary expressions in braces; `{:width$}` dynamic widths do not exist; `Display` is static (no `dyn Display`). The generated C needs GCC/Clang (statement expressions, overflow builtins).

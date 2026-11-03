@@ -1,0 +1,239 @@
+# key :: description :: what it returns :: param=note; param=note
+# Fills in items whose source has no `//` comment above them (a source comment always wins).
+str.is_space :: True for a whitespace byte (space, tab, newline, carriage return, vertical tab, form feed). :: `bool` :: c=an ASCII byte
+str.is_digit :: True for `'0'`..`'9'`. :: `bool` :: c=an ASCII byte
+str.is_upper :: True for `'A'`..`'Z'`. :: `bool` :: c=an ASCII byte
+str.is_lower :: True for `'a'`..`'z'`. :: `bool` :: c=an ASCII byte
+str.is_alpha :: True for an ASCII letter. :: `bool` :: c=an ASCII byte
+str.to_upper_byte :: Upper-cases one ASCII byte; other bytes are unchanged. :: the converted byte :: c=an ASCII byte
+str.to_lower_byte :: Lower-cases one ASCII byte; other bytes are unchanged. :: the converted byte :: c=an ASCII byte
+str.starts_with :: True when `s` begins with `prefix`. :: `bool` :: s=the text to look at; prefix=what it should start with
+str.ends_with :: True when `s` ends with `suffix`. :: `bool` :: s=the text to look at; suffix=what it should end with
+str.contains :: True when `needle` occurs anywhere in `hay`. :: `bool` :: hay=the text to search; needle=the text to look for
+str.count_byte :: Counts how many times the byte `b` occurs in `s`. :: the count :: s=the text; b=the byte to count
+str.trim_start :: Drops leading whitespace. :: a view into `s` (no copy) :: s=the text
+str.trim_end :: Drops trailing whitespace. :: a view into `s` (no copy) :: s=the text
+str.trim :: Drops whitespace at both ends. :: a view into `s` (no copy) :: s=the text
+str.eq_ignore_case :: Compares two strings, treating ASCII upper and lower case as equal. :: `bool` :: a=first text; b=second text
+str.to_upper :: Upper-cases every ASCII letter. :: a new `String` :: s=the text
+str.to_lower :: Lower-cases every ASCII letter. :: a new `String` :: s=the text
+str.reverse :: Reverses the bytes of `s`. :: a new `String` :: s=the text
+str.repeat :: Concatenates `n` copies of `s`. :: a new `String` (empty when `n <= 0`) :: s=the text; n=how many copies
+str.str.join :: Concatenates `parts` with `sep` between them: `str.join(parts, ", ")`. :: a new `String` :: parts=the pieces; sep=text placed between pieces
+str.str.starts_with :: True when the string begins with `prefix`. :: `bool` :: prefix=what it should start with
+str.str.ends_with :: True when the string ends with `suffix`. :: `bool` :: suffix=what it should end with
+str.str.find :: Index of the first occurrence of `needle`. :: the byte index, or `-1` when it is not there :: needle=the text to look for
+str.str.rfind :: Index of the last occurrence of `needle`. :: the byte index, or `-1` when it is not there :: needle=the text to look for
+str.str.contains :: True when `needle` occurs in the string. :: `bool` :: needle=the text to look for
+str.str.count_byte :: Counts how many times the byte `b` occurs. :: the count :: b=the byte to count
+str.str.compare :: Three-way byte comparison, like C's `strcmp`. :: negative, zero or positive :: other=the string to compare with
+str.str.eq_ignore_case :: Equality that ignores ASCII case. :: `bool` :: other=the string to compare with
+str.str.trim :: Drops whitespace at both ends. :: a view into the string (no copy) ::
+str.str.lstrip :: Drops leading whitespace. :: a view into the string (no copy) ::
+str.str.rstrip :: Drops trailing whitespace. :: a view into the string (no copy) ::
+str.str.lower :: Lower-cases every ASCII letter. :: a new `String` ::
+str.str.reverse :: Reverses the bytes. :: a new `String` ::
+str.str.repeat :: Concatenates `n` copies. :: a new `String` :: n=how many copies
+str.str.replace :: Replaces every occurrence of `from` (non-empty) with `to`. :: a new `String` :: from=text to find; to=replacement
+str.str.to_string :: Copies the view into an owned `String`. :: a new `String` ::
+str.str.split :: Splits on a non-empty separator. The pieces are views into the original, so keep it alive while you use them. :: a `list.List<str>` (release it with `list.release`) :: sep=the separator
+str.String.new :: Creates an owned copy of `s`. :: a new `String` :: s=the initial text
+str.String.empty :: Creates an empty `String`. :: a new `String` ::
+str.String.from :: Creates an owned copy of `s` (same as `String.new`). :: a new `String` :: s=the initial text
+str.String.with_capacity :: Creates an empty `String` with room for `n` bytes, so appending does not reallocate. :: a new `String` :: n=bytes to reserve
+str.String.push :: Appends one byte (`s += c` does the same). :: nothing :: c=the byte to append
+str.String.append :: Appends text (`s += text` does the same). :: nothing :: s=the text to append
+str.String.clear :: Empties the string but keeps its buffer. :: nothing ::
+str.String.trim :: Whitespace-trimmed copy. :: a new `String` ::
+str.String.lstrip :: Copy without leading whitespace. :: a new `String` ::
+str.String.rstrip :: Copy without trailing whitespace. :: a new `String` ::
+conv.parse_i64 :: Parses a decimal integer, with an optional leading `-` or `+`. :: the number, or an error: `Empty`, `InvalidDigit` or `Overflow` :: s=the text to parse
+conv.parse_i32 :: Parses a decimal integer that must fit in 32 bits. :: the number, or an error: `Empty`, `InvalidDigit` or `Overflow` :: s=the text to parse
+math.abs_i32 :: Absolute value. :: `i32` :: x=the number
+math.abs_i64 :: Absolute value. :: `i64` :: x=the number
+math.min_i32 :: The smaller of two numbers. :: `i32` :: a=first; b=second
+math.max_i32 :: The larger of two numbers. :: `i32` :: a=first; b=second
+math.min_i64 :: The smaller of two numbers. :: `i64` :: a=first; b=second
+math.max_i64 :: The larger of two numbers. :: `i64` :: a=first; b=second
+math.min_f64 :: The smaller of two numbers. :: `f64` :: a=first; b=second
+math.max_f64 :: The larger of two numbers. :: `f64` :: a=first; b=second
+math.gcd :: Greatest common divisor (Euclid). :: `i64`, never negative :: a=first; b=second
+rand.Rng.new :: Creates a generator seeded from the clock. :: a new `Rng` ::
+rand.Rng.from_seed :: Creates a generator with a fixed seed, so the sequence repeats from run to run. :: a new `Rng` :: seed=the seed
+rand.Rng.below :: A random number in `0..n`. :: `u64` less than `n` :: n=the exclusive upper bound (must be above 0)
+rand.Rng.between :: A random number in `min..=max`. Panics when `min > max`. :: `u64` :: min=lowest value; max=highest value
+rand.Rng.float :: A random fraction. :: `f64` in `[0, 1)` ::
+rand.Rng.next :: The next raw 64-bit value of the sequence. :: `u64` ::
+list.new :: Creates an empty list. Name the type: `let l: list.List<i32> = list.new();`. :: a new `List<T>` ::
+list.with_capacity :: Creates an empty list with room for `n` elements. :: a new `List<T>` :: n=elements to reserve
+list.push :: Appends `v` at the end (moved in). :: nothing :: l=the list; v=the element
+list.pop :: Removes and returns the last element. :: the element, or the error `Empty` :: l=the list
+list.insert :: Inserts `v` before index `i`, shifting later elements up. Panics when `i` is out of range. :: nothing :: l=the list; i=where to insert (0..=len); v=the element
+list.reverse :: Reverses the order in place. :: nothing :: l=the list
+list.for_each :: Calls `f` with a pointer to each element, in order. :: nothing :: l=the list; f=the callback
+list.List.new :: Creates an empty list. :: a new `List<T>` ::
+list.List.with_capacity :: Creates an empty list with room for `n` elements. :: a new `List<T>` :: n=elements to reserve
+list.List.from :: Builds a list by copying the elements of a slice (copyable element types). :: a new `List<T>` :: xs=the slice to copy
+list.List.push :: Appends `v` at the end (moved in). :: nothing :: v=the element
+list.List.pop :: Removes and returns the last element. :: the element, or the error `Empty` ::
+list.List.insert :: Inserts `v` before index `i`. Panics when `i` is out of range. :: nothing :: i=where to insert (0..=len); v=the element
+list.List.remove :: Removes element `i` and shifts the rest down. Panics when out of range. :: the removed element :: i=index to remove
+list.List.swap_remove :: Removes element `i` by moving the last element into its place: O(1), order changes. :: the removed element :: i=index to remove
+list.List.set :: Replaces element `i`; the old element is destroyed. :: nothing :: i=the index; v=the new element
+list.List.extend :: Appends copies of every element of `xs` (copyable element types). :: nothing :: xs=the slice to copy from
+list.List.clear :: Destroys every element but keeps the buffer. :: nothing ::
+list.List.release :: Destroys the elements and frees the buffer now instead of at the end of scope. :: nothing ::
+list.List.reverse :: Reverses the order in place. :: nothing ::
+list.List.sort_by :: Sorts in place (heap sort, O(n log n), not stable) with a comparison callback. :: nothing :: cmp=returns negative, zero or positive for (a, b)
+list.List.at :: A bounds-checked pointer to element `i`; works for every element type. :: `*T` :: i=the index
+list.List.get :: A copy of element `i` (copyable element types). Panics when out of range. :: `T` :: i=the index
+list.List.view :: The live elements as a slice (valid until the next push). :: `[]T` ::
+list.List.is_empty :: True when the list has no elements. :: `bool` ::
+list.List.for_each :: Calls `f` with a pointer to each element, in order. :: nothing :: f=the callback
+list.List.find_by :: Index of the first element for which `pred` is true. :: the index, or the error `NotFound` :: pred=the test
+stack.new :: Creates an empty stack. :: a new `Stack<T>` ::
+stack.push :: Pushes `v` on top. :: nothing :: s=the stack; v=the element
+stack.len :: Number of elements. :: `i64` :: s=the stack
+stack.is_empty :: True when the stack has no elements. :: `bool` :: s=the stack
+stack.clear :: Destroys every element. :: nothing :: s=the stack
+stack.Stack.new :: Creates an empty stack. :: a new `Stack<T>` ::
+stack.Stack.push :: Pushes `v` on top. :: nothing :: v=the element
+stack.Stack.pop :: Removes the top element. :: the element, or `null` when the stack is empty ::
+stack.Stack.peek :: Looks at the top element without removing it. :: a pointer to it, or `null` when empty ::
+stack.Stack.len :: Number of elements. :: `i64` ::
+stack.Stack.is_empty :: True when the stack has no elements. :: `bool` ::
+stack.Stack.clear :: Destroys every element. :: nothing ::
+queue.new :: Creates an empty queue. :: a new `Queue<T>` ::
+queue.with_capacity :: Creates an empty queue with room for `n` elements. :: a new `Queue<T>` :: n=elements to reserve
+queue.len :: Number of elements. :: `i64` :: q=the queue
+queue.is_empty :: True when the queue has no elements. :: `bool` :: q=the queue
+queue.Queue.new :: Creates an empty queue. :: a new `Queue<T>` ::
+queue.Queue.with_capacity :: Creates an empty queue with room for `n` elements. :: a new `Queue<T>` :: n=elements to reserve
+queue.Queue.push :: Adds `v` at the back. :: nothing :: v=the element
+queue.Queue.pop :: Removes the front element (first in, first out). :: the element, or `null` when empty ::
+queue.Queue.peek :: Looks at the front element without removing it. :: a pointer to it, or `null` when empty ::
+queue.Queue.len :: Number of elements. :: `i64` ::
+queue.Queue.is_empty :: True when the queue has no elements. :: `bool` ::
+queue.Queue.clear :: Destroys every element. :: nothing ::
+queue.Queue.release :: Destroys the elements and frees the buffer now instead of at the end of scope. :: nothing ::
+map.new :: Creates an empty map. :: a new `HashMap<V>` ::
+map.has :: True when `key` is present. :: `bool` :: m=the map; key=the key
+map.len :: Number of entries. :: `i64` :: m=the map
+map.is_empty :: True when the map has no entries. :: `bool` :: m=the map
+map.HashMap.new :: Creates an empty map. :: a new `HashMap<V>` ::
+map.HashMap.set :: Stores `v` under `key` (the map copies the key); an existing value is replaced and destroyed. :: nothing :: key=the key; v=the value
+map.HashMap.get :: Looks a key up and gives access to the stored value. :: a pointer to the value, or `null` when the key is absent :: key=the key
+map.HashMap.get_or :: Looks a key up, falling back to `default`. Needs a copyable value type. :: a copy of the value or `default` :: key=the key; default=the fallback
+map.HashMap.has :: True when `key` is present. :: `bool` :: key=the key
+map.HashMap.remove :: Removes an entry and hands the value back. :: the value, or `null` when the key was absent :: key=the key
+map.HashMap.len :: Number of entries. :: `i64` ::
+map.HashMap.is_empty :: True when the map has no entries. :: `bool` ::
+map.HashMap.for_each :: Calls `f` with each key and a pointer to its value, in unspecified order. :: nothing :: f=the callback
+map.HashMap.keys :: Collects every key, in unspecified order. :: a new `List<String>` ::
+map.HashMap.clear :: Removes every entry. :: nothing ::
+map.HashMap.release :: Frees the table now instead of at the end of scope. :: nothing ::
+tree.new :: Creates an empty tree. `T` must implement `Ord`. :: a new `Tree<T>` ::
+tree.has :: True when an element equal to `probe` is stored. :: `bool` :: t=the tree; probe=a value to compare with
+tree.min :: The smallest element. :: a pointer to it, or `null` when empty :: t=the tree
+tree.max :: The largest element. :: a pointer to it, or `null` when empty :: t=the tree
+tree.len :: Number of elements. :: `i64` :: t=the tree
+tree.is_empty :: True when the tree has no elements. :: `bool` :: t=the tree
+tree.Tree.new :: Creates an empty tree. `T` must implement `Ord`. :: a new `Tree<T>` ::
+tree.Tree.insert :: Adds `v` in sorted position. When an equal element is already stored nothing changes. :: `true` when it was added, `false` when an equal element already exists :: v=the element
+tree.Tree.get :: Finds the stored element that compares equal to `probe`. :: a pointer to it, or `null` :: probe=a value to compare with
+tree.Tree.has :: True when an element equal to `probe` is stored. :: `bool` :: probe=a value to compare with
+tree.Tree.remove :: Removes the element equal to `probe`. :: the element, or `null` when none matched :: probe=a value to compare with
+tree.Tree.min :: The smallest element. :: a pointer to it, or `null` when empty ::
+tree.Tree.max :: The largest element. :: a pointer to it, or `null` when empty ::
+tree.Tree.len :: Number of elements. :: `i64` ::
+tree.Tree.is_empty :: True when the tree has no elements. :: `bool` ::
+tree.Tree.height :: Length of the longest path from the root. :: `i64` (0 when empty) ::
+tree.Tree.for_each :: Calls `f` with a pointer to each element in ascending order. :: nothing :: f=the callback
+tree.Tree.to_list :: Copies the elements into a list in ascending order (copyable element types). :: a new `List<T>` ::
+tree.Tree.clear :: Destroys every element. :: nothing ::
+mem.swap :: Exchanges the values behind two pointers. :: nothing :: a=first pointer; b=second pointer
+mem.min :: The smaller of two values of any type with `<`. :: `T` :: a=first; b=second
+mem.max :: The larger of two values of any type with `>`. :: `T` :: a=first; b=second
+fs.exists :: True when something exists at `path` (file or directory). :: `bool` :: path=the path
+fs.is_file :: True when `path` is a regular file. :: `bool` :: path=the path
+fs.is_dir :: True when `path` is a directory. :: `bool` :: path=the path
+fs.remove :: Deletes a file. :: nothing, or the error `NotFound` / `IoError` :: path=the file
+fs.make_dir :: Creates a directory. :: nothing, or the error `IoError` :: path=the directory
+env.arg_count :: Number of command-line arguments, including the program name. :: `i64` ::
+env.has :: True when the environment variable `name` is set. :: `bool` :: name=the variable
+time.unix :: Seconds since 1970-01-01 UTC. :: `i64` ::
+time.unix_ms :: Milliseconds since 1970-01-01 UTC. :: `i64` ::
+time.sleep_ms :: Pauses the thread. Other threads and the collector keep running. :: nothing :: ms=milliseconds
+time.sleep_secs :: Pauses the thread for a fractional number of seconds. :: nothing :: s=seconds
+time.is_leap_year :: True for a leap year in the Gregorian calendar. :: `bool` :: y=the year
+time.days_in_month :: Days in a month, leap years included. :: `i32` :: y=the year; m=the month, 1..=12
+time.now_utc :: The current date and time in UTC. :: a `DateTime` ::
+time.local :: Converts a Unix timestamp to local time. :: a `DateTime` :: secs=seconds since 1970-01-01 UTC
+time.Duration.from_ns :: A span of nanoseconds. :: a `Duration` :: ns=nanoseconds
+time.Duration.from_us :: A span of microseconds. :: a `Duration` :: us=microseconds
+time.Duration.from_ms :: A span of milliseconds. :: a `Duration` :: ms=milliseconds
+time.Duration.from_secs :: A span of whole seconds. :: a `Duration` :: s=seconds
+time.Duration.from_secs_f64 :: A span of fractional seconds. :: a `Duration` :: s=seconds
+time.Duration.as_ns :: The span in nanoseconds. :: `i64` ::
+time.Duration.as_us :: The span in microseconds (truncated). :: `i64` ::
+time.Duration.as_ms :: The span in milliseconds (truncated). :: `i64` ::
+time.Duration.as_secs :: The span in whole seconds (truncated). :: `i64` ::
+time.Duration.as_secs_f64 :: The span in seconds. :: `f64` ::
+time.Duration.add :: Sum of two spans. :: a `Duration` :: o=the span to add
+time.Duration.sub :: Difference of two spans. :: a `Duration` :: o=the span to subtract
+time.Duration.mul :: The span multiplied by a whole number. :: a `Duration` :: k=the factor
+time.Duration.less :: True when this span is shorter than `o`. :: `bool` :: o=the span to compare with
+time.Duration.sleep :: Pauses the thread for this long. :: nothing ::
+time.Stopwatch.start :: Starts a monotonic stopwatch. :: a `Stopwatch` ::
+time.Stopwatch.elapsed :: Time since `start` (or the last `reset`). :: a `Duration` ::
+time.Stopwatch.elapsed_ms :: Milliseconds since `start` (or the last `reset`). :: `i64` ::
+time.Stopwatch.elapsed_secs :: Seconds since `start` (or the last `reset`). :: `f64` ::
+time.Stopwatch.reset :: Restarts the count from now. :: nothing ::
+time.DateTime.new :: Builds a date and time from its parts (no time zone). :: a `DateTime` :: year=the year; month=1..=12; day=1..=31; hour=0..=23; minute=0..=59; second=0..=59
+time.DateTime.weekday_name :: Name of the day of the week, such as `"Monday"`. :: `str` ::
+time.DateTime.month_name :: Name of the month, such as `"March"`. :: `str` ::
+time.DateTime.add_days :: Moves the date by a number of days. :: a new `DateTime` :: n=days (may be negative)
+time.DateTime.add_secs :: Moves the date and time by a number of seconds. :: a new `DateTime` :: n=seconds (may be negative)
+net.Socket.close :: Closes the connection now (it also closes at the end of the scope). :: nothing ::
+http.get :: Sends an HTTP GET request. :: a `Response`, or an error (`BadUrl`, `Unsupported`, `BadResponse` or a `std.net` error) :: url=an `http://` URL; headers=extra headers, one `Name: value` per line; timeout_ms=how long a send or receive may wait
+http.delete :: Sends an HTTP DELETE request. :: a `Response`, or an error :: url=an `http://` URL; headers=extra headers, one `Name: value` per line; timeout_ms=how long a send or receive may wait
+http.post :: Sends an HTTP POST request with a body. :: a `Response`, or an error :: url=an `http://` URL; body=the request body; headers=extra headers, one `Name: value` per line; timeout_ms=how long a send or receive may wait
+http.put :: Sends an HTTP PUT request with a body. :: a `Response`, or an error :: url=an `http://` URL; body=the request body; headers=extra headers, one `Name: value` per line; timeout_ms=how long a send or receive may wait
+thread.current_id :: Identifier of the calling thread. :: `u64` ::
+thread.yield_now :: Lets another thread run. :: nothing ::
+thread.cpu_count :: Number of processors that are online. :: `i64` ::
+thread.sleep_ms :: Pauses the calling thread. :: nothing :: ms=milliseconds
+thread.channel :: Creates an unbounded channel for passing `T` values between threads. :: a `*Channel<T>` ::
+thread.Mutex.new :: Creates an unlocked mutex. :: a `*Mutex` ::
+thread.Mutex.lock :: Waits until the mutex is free, then takes it. Waiting is a collector safepoint. :: nothing ::
+thread.Mutex.unlock :: Releases the mutex. :: nothing ::
+thread.Condvar.new :: Creates a condition variable. :: a `*Condvar` ::
+thread.Condvar.signal :: Wakes one waiting thread. :: nothing ::
+thread.Condvar.broadcast :: Wakes every waiting thread. :: nothing ::
+thread.AtomicI64.new :: Creates an atomic integer. :: a `*AtomicI64` :: v=the starting value
+thread.AtomicI64.load :: Reads the value. :: `i64` ::
+thread.AtomicI64.store :: Writes the value. :: nothing :: v=the new value
+thread.Channel.close :: Closes the channel. Values already queued can still be received; after that `recv` fails with `Closed`, and `send` fails with `Closed` right away. :: nothing ::
+async.new_task :: Allocates the task object for an `async fn` that returns `T`. The compiler calls this for you. :: a `*Task<T>` ::
+async.new_try_task :: Allocates the task object for an `async fn` that returns `T!`. The compiler calls this for you. :: a `*TryTask<T>` ::
+async.new_job :: Allocates the task object for an `async fn` that returns nothing. The compiler calls this for you. :: a `*Job` ::
+async.new_try_job :: Allocates the task object for an `async fn` that returns `void!`. The compiler calls this for you. :: a `*TryJob` ::
+async.Task.start :: Starts the task's thread. Called by the generated code of an `async fn`. :: nothing :: f=the thread entry point; arg=its argument
+async.Task.wait :: Waits for the task to finish (`await task` is the same). Call it once. :: the value the function returned ::
+async.TryTask.start :: Starts the task's thread. Called by the generated code of an `async fn`. :: nothing :: f=the thread entry point; arg=its argument
+async.TryTask.wait :: Waits for the task to finish (`await task` is the same). Call it once. :: the value, or the error the function threw ::
+async.Job.start :: Starts the task's thread. Called by the generated code of an `async fn`. :: nothing :: f=the thread entry point; arg=its argument
+async.Job.wait :: Waits for the task to finish (`await task` is the same). Call it once. :: nothing ::
+async.TryJob.start :: Starts the task's thread. Called by the generated code of an `async fn`. :: nothing :: f=the thread entry point; arg=its argument
+async.TryJob.wait :: Waits for the task to finish (`await task` is the same). Call it once. :: nothing, or the error the function threw ::
+math.sqrt :: Square root (libm). :: `f64` (NaN for negative input) :: x=the number
+math.sin :: Sine (libm). :: `f64` :: x=angle in radians
+math.cos :: Cosine (libm). :: `f64` :: x=angle in radians
+math.tan :: Tangent (libm). :: `f64` :: x=angle in radians
+math.atan2 :: Angle of the point (x, y) from the x axis (libm). :: `f64` in radians, `-PI..=PI` :: y=the vertical part; x=the horizontal part
+math.exp :: e raised to the power `x` (libm). :: `f64` :: x=the exponent
+math.log :: Natural logarithm (libm). :: `f64` :: x=a positive number
+math.pow :: `x` raised to the power `y` (libm). :: `f64` :: x=the base; y=the exponent
+math.floor :: Rounds down to a whole number (libm). :: `f64` :: x=the number
+math.ceil :: Rounds up to a whole number (libm). :: `f64` :: x=the number
+math.fabs :: Absolute value of a float (libm). :: `f64` :: x=the number

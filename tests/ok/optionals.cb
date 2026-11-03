@@ -1,0 +1,90 @@
+// Optionals (`T?`), `??`, `?.`, the ternary operator and `.catch(|e| ...)`.
+error Bad;
+
+struct Profile { name: str?, age: i32? }
+struct User { profile: Profile?, id: i32 }
+impl User {
+    fn tag(self) -> str { return "u"; }
+    fn nick(self, n: i32) -> str? { if n > 0 { return "nick"; } return null; }
+}
+
+fn find(id: i32) -> i32? {
+    if id == 1 { return 42; }                  // a plain value becomes Some(value)
+    return null;
+}
+
+fn lookup(users: []User, id: i32) -> *User {
+    for i in 0..users.len { if users[i].id == id { return &users[i]; } }
+    return null;
+}
+
+fn risky(n: i32) -> u8! {
+    if n < 0 { throw Bad; }
+    return n as u8;
+}
+
+fn label(n: i32?) -> String {
+    return n.is_some() ? format("n={}", n.unwrap()) : string_from("n=none");
+}
+
+fn main() {
+    // optionals
+    let a = find(1);
+    let b = find(2);
+    println("{} {}", a.is_some(), b.is_none());
+    println("{} {}", a ?? 0, b ?? -1);
+    println("{}", a.unwrap());
+    println("{a:?} {b:?}");
+    println(b == null, " ", a != null);
+    let x: i32? = 5;
+    let y: i64? = 7;
+    let z: str? = null;
+    println("{x:?} {y:?} {z:?}");
+    println("{} {}", x.unwrap_or(0), z.unwrap_or("fallback"));
+    println(label(3), " ", label(null));
+    let owned: String? = string_from("heap");
+    println("{owned:?}");
+
+    // null coalescing, also for pointers
+    let guest = z ?? "Guest";
+    println(guest);
+    let chain = find(2) ?? find(1) ?? 0;
+    println(chain);
+
+    // optional chains
+    let users = alloc(User, 2);
+    users[0] = User { profile: Profile { name: "Ann", age: null }, id: 1 };
+    users[1] = User { profile: null, id: 2 };
+    let u1 = lookup(users, 1);
+    let u2 = lookup(users, 2);
+    let u3 = lookup(users, 3);
+    let mut name1 = u1?.profile?.name? ?? "Guest";
+    let name2 = u2?.profile?.name ?? "Guest";
+    let name3 = u3?.profile?.name ?? "Guest";
+    println("{name1} {name2} {name3}");
+    println("{:?} {:?}", u1?.id, u3?.id);
+    println("{:?} {:?}", u1?.nick(1), u1?.nick(0));
+    println("{}", u1?.tag() ?? "none");
+    println("{:?}", u1?.profile?.age);
+
+    // ternary
+    let c = 5 > 3 ? "yes" : "no";
+    let d = x.is_some() ? 1 : 2;
+    println("{c} {d} {}", false ? 1.5 : 2.0);
+    let t: i32? = x.is_some() ? 9 : null;
+    println("{t:?}");
+    println(1 > 2 ? "a" : 2 > 1 ? "b" : "c");
+
+    // catch with a lambda
+    let v1 = risky(7).catch(|e| 0);
+    let v2 = risky(-1).catch(|e| 99);
+    println("{v1} {v2}");
+    let v3 = risky(-2).catch(0);
+    println(v3);
+    quiet();
+}
+
+fn quiet() {
+    let v = risky(-1).catch(|e| { println("caught {e}"); return; });
+    println("not reached {v}");
+}

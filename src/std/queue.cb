@@ -1,0 +1,85 @@
+// std.queue: a first-in, first-out queue (a growable ring buffer) for every element type.
+//
+//     import std.queue;
+//     let mut q: queue.Queue<str> = queue.Queue.new();
+//     q.push("a");
+//     q.push("b");
+//     println(q.pop() ?? "empty");       // a   (pop gives `T?`)
+//     println(q.len());                  // 1
+//
+// The queue owns its elements: it is destroyed automatically at the end of its scope.
+
+pub struct Queue<T> { items: []T, head: i64, count: i64 }
+
+drop<T> Queue<T>(self) { release(self); }
+
+pub fn new<T>() -> Queue<T> {
+    return Queue { items: slice_of(null as *T, 0), head: 0, count: 0 };
+}
+
+pub fn with_capacity<T>(n: i64) -> Queue<T> {
+    return Queue { items: alloc(T, n), head: 0, count: 0 };
+}
+
+fn grow<T>(q: *Queue<T>) {
+    let mut cap = q.items.len * 2;
+    if cap < 4 { cap = 4; }
+    let bigger = alloc(T, cap);
+    for i in 0..q.count {
+        write_at(&bigger[i], read_at(&q.items[(q.head + i) % q.items.len]));
+    }
+    free(q.items);
+    q.items = bigger;
+    q.head = 0;
+}
+
+// adds an element at the back
+pub fn push<T>(q: *Queue<T>, v: T) {
+    if q.count == q.items.len { grow(q); }
+    write_at(&q.items[(q.head + q.count) % q.items.len], v);
+    q.count += 1;
+}
+
+// removes and returns the front element, or null when the queue is empty
+pub fn pop<T>(q: *Queue<T>) -> T? {
+    if q.count == 0 { return null; }
+    let v = read_at(&q.items[q.head]);
+    q.head = (q.head + 1) % q.items.len;
+    q.count -= 1;
+    return v;
+}
+
+// a pointer to the front element (null when empty); the element stays in the queue
+pub fn peek<T>(q: *Queue<T>) -> *T {
+    if q.count == 0 { return null; }
+    return &q.items[q.head];
+}
+
+pub fn len<T>(q: *Queue<T>) -> i64 { return q.count; }
+pub fn is_empty<T>(q: *Queue<T>) -> bool { return q.count == 0; }
+
+// destroys every element but keeps the storage
+pub fn clear<T>(q: *Queue<T>) {
+    for i in 0..q.count { drop_at(&q.items[(q.head + i) % q.items.len]); }
+    q.head = 0;
+    q.count = 0;
+}
+
+// destroys every element and frees the storage (optional: queues are released at the end of their scope)
+pub fn release<T>(q: *Queue<T>) {
+    clear(q);
+    free(q.items);
+    q.items = slice_of(null as *T, 0);
+}
+
+impl<T> Queue<T> {
+    pub fn new() -> Queue<T> { return new<T>(); }
+    pub fn with_capacity(n: i64) -> Queue<T> { return with_capacity<T>(n); }
+    pub fn push(mut self, v: T) { push(self, v); }
+    pub fn pop(mut self) -> T? { return pop(self); }
+    pub fn peek(self) -> *T { return peek(self); }
+    pub fn len(self) -> i64 { return self.count; }
+    pub fn is_empty(self) -> bool { return self.count == 0; }
+    pub fn clear(mut self) { clear(self); }
+    pub fn release(mut self) { release(self); }
+}

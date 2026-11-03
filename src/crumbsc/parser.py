@@ -1,7 +1,7 @@
 """Recursive-descent parser with panic-mode error recovery."""
 import time
 from .timing import TIMINGS
-from .diag import Span
+from .diag import Span, Source
 from .lexer import lex, Token
 from .types import PRIMS
 
@@ -24,7 +24,7 @@ class ParseAbort(Exception):
 
 
 BIN_PREC = {
-    "||": 2, "&&": 3,
+    "??": 1, "||": 2, "&&": 3,
     "==": 4, "!=": 4, "<": 4, ">": 4, "<=": 4, ">=": 4,
     "|": 5, "^": 6, "&": 7, "<<": 8, ">>": 8,
     "+": 9, "-": 9,
@@ -49,6 +49,7 @@ class Parser:
         self.p = 0
         self.no_struct = False
         self.undo = None
+        self.uses_async = False
         self.impl_ty = None          # type node of the `impl` block being parsed (for `self` / `Self`)
         self.tbounds = {}
 
@@ -233,12 +234,17 @@ class Parser:
             start = self.p
             try:
                 it = self.parse_item()
-                if it:
+                if isinstance(it, list):
+                    items.extend(it)
+                elif it:
                     items.append(it)
             except ParseAbort:
                 self.sync_item()
                 if self.p == start:
                     self.advance()
+        if self.uses_async and not any(i.kind == "Import" and i.path == ["std", "async"] for i in items):
+            sp = Span(self.src, 1, 1, 1)
+            items.insert(0, N("Import", sp, path=["std", "async"], alias=None, name_span=sp))
         return N("Module", Span(self.src, 1, 1, 1), items=items)
 
     def is_directive(self):
@@ -368,6 +374,9 @@ class Parser:
             if pub:
                 self.fail("`pub` is not allowed on `impl` blocks; mark the functions inside as `pub`", tok=start)
             return self.parse_impl()
+        if t.kind == "ident" and t.val == "async" and self.is_kw("fn", 1):
+            self.advance()
+            return self.parse_async_fn(pub)
         if t.kind != "kw":
             self.fail(f"expected an item (`fn`, `struct`, `enum`, `trait`, `const`, `error`, `import`, `impl`), found {self.describe(t)}",
                       label="not a valid top-level item")
@@ -405,6 +414,78 @@ class Parser:
             return self.parse_error_decl(pub)
         self.fail(f"expected an item, found {self.describe(t)}")
 
+    def type_text(self, tn):
+        """Source text of a parsed type (used to generate the helpers of an `async fn`)."""
+        k = tn.kind
+        if k == "TName":
+            return ".".join(tn.path) + (f"<{', '.join(self.type_text(a) for a in tn.args)}>" if tn.args else "")
+        if k == "TPtr":
+            return "*" + self.type_text(tn.inner)
+        if k == "TSlice":
+            return "[]" + self.type_text(tn.inner)
+        if k == "TArray":
+            n = getattr(tn.size, "value", None)
+            if n is None:
+                self.fail("an async function's parameter types must use plain array lengths", tok=self.prev)
+            return f"[{n}]" + self.type_text(tn.inner)
+        if k == "TErrUnion":
+            return self.type_text(tn.inner) + "!"
+        if k == "TOpt":
+            return self.type_text(tn.inner) + "?"
+        if k == "TFn":
+            ret = f" -> {self.type_text(tn.ret)}" if tn.ret is not None else ""
+            return f"fn({', '.join(self.type_text(x) for x in tn.params)}){ret}"
+        self.fail("this type cannot be used in an async function", tok=self.prev)
+
+    def parse_async_fn(self, pub):
+        """`async fn f(a: A) -> R { body }` becomes the ordinary function `f__body`, plus a generated argument struct,
+        a thread entry point and `f(a: A)` itself, which starts the body on a new thread and returns a task."""
+        fn = self.parse_fn(pub, extern=False)
+        name = fn.name
+        if fn.tparams:
+            self.fail("async functions cannot be generic", tok=self.prev)
+        if any(getattr(p, "self_param", False) for p in fn.params):
+            self.fail("async methods are not supported: write an async function that takes the value as a parameter", tok=self.prev)
+        self.uses_async = True
+        fn.name = name + "__body"
+        fn.pub = False
+        ret = fn.ret
+        fallible = ret is not None and ret.kind == "TErrUnion"
+        inner = ret.inner if fallible else ret
+        void = inner is None or (inner.kind == "TName" and inner.path == ["void"])
+        params = [(p.name, self.type_text(p.tyn)) for p in fn.params]
+        fields = "".join(f"{n}: {t}, " for n, t in params)
+        sig = ", ".join(f"{n}: {t}" for n, t in params)
+        inits = "".join(f"{n}: {n}, " for n, _ in params)
+        call = f"{name}__body(" + ", ".join(f"read_at(&a.{n})" for n, _ in params) + ")"
+        if void and not fallible:
+            kind, ctor, store = "Job", "async.new_job()", f"{call};"
+        elif void:
+            kind, ctor = "TryJob", "async.new_try_job()"
+            store = f"{call}.catch(|e| {{ a.task.failed = true; a.task.err = e; return null; }});"
+        else:
+            tt = self.type_text(inner)
+            if not fallible:
+                kind, ctor, store = f"Task<{tt}>", f"async.new_task<{tt}>()", f"a.task.value = {call};"
+            else:
+                kind, ctor = f"TryTask<{tt}>", f"async.new_try_task<{tt}>()"
+                store = (f"let v = {call}.catch(|e| {{ a.task.failed = true; a.task.err = e; return null; }});\n"
+                         f"    a.task.value = v;")
+        text = (f"struct {name}__Args {{ {fields}task: *async.{kind} }}\n"
+                f"fn {name}__entry(p: *void) -> *void {{\n"
+                f"    let a = p as *{name}__Args;\n"
+                f"    {store}\n"
+                f"    return null;\n}}\n"
+                f"{'pub ' if pub else ''}fn {name}({sig}) -> *async.{kind} {{\n"
+                f"    let task = {ctor};\n"
+                f"    let args = alloc({name}__Args, 1);\n"
+                f"    args[0] = {name}__Args {{ {inits}task: task }};\n"
+                f"    task.start({name}__entry, &args[0] as *void);\n"
+                f"    return task;\n}}\n")
+        sub = Parser(Source(f"<async fn {name}>", text), self.d)
+        gen = sub.parse_module().items
+        return [fn] + gen
+
     def parse_import(self):
         start = self.advance()
         parts = [self.expect_ident("module name")]
@@ -440,7 +521,16 @@ class Parser:
                 continue
             self.expect_op(":", "after parameter name")
             ty = self.parse_type()
-            params.append(N("Param", nm.span.join(self.prev.span), name=nm.val, tyn=ty, name_span=nm.span, mut=is_mut))
+            default = None
+            if self.accept_op("="):                                  # `port: i32 = 80`
+                saved = self.no_struct
+                self.no_struct = False
+                default = self.parse_expr()
+                self.no_struct = saved
+            elif params and getattr(params[-1], "default", None) is not None:
+                self.fail(f"parameter `{nm.val}` has no default, but the one before it does",
+                          tok=nm, help="parameters with defaults must come last")
+            params.append(N("Param", nm.span.join(self.prev.span), name=nm.val, tyn=ty, name_span=nm.span, mut=is_mut, default=default))
             if not self.accept_op(","):
                 break
         self.expect_op(")", "after parameters")
@@ -539,6 +629,16 @@ class Parser:
         return t
 
     def parse_type(self):
+        t = self.tok
+        ty = self.parse_type_base()
+        while self.is_op("?") or self.is_op("??"):                 # `T?`: a value or nothing
+            q = self.advance()
+            if ty.kind == "TOpt" or q.val == "??":
+                self.fail("optional types cannot be nested", tok=q, help="`T??` is the same as `T?`")
+            ty = N("TOpt", t.span.join(q.span), inner=ty)
+        return ty
+
+    def parse_type_base(self):
         t = self.tok
         if t.kind == "op" and t.val == "*":
             self.advance()
@@ -764,7 +864,16 @@ class Parser:
     # -------------------------------------------------------- expressions
     def parse_expr(self):
         start = self.tok
-        lhs = self.parse_bin(2)
+        lhs = self.parse_bin(1)
+        if self.is_op("?"):                                        # cond ? a : b
+            self.advance()
+            saved = self.no_struct
+            self.no_struct = False
+            a = self.parse_expr()
+            self.no_struct = saved
+            self.expect_op(":", "in the `cond ? a : b` expression")
+            b = self.parse_expr()
+            lhs = N("Ternary", self.sp(start), cond=lhs, a=a, b=b)
         while self.is_kw("catch"):
             self.advance()
             binder = None
@@ -779,7 +888,7 @@ class Parser:
             else:
                 if binder is not None:
                     self.fail("expected `{` after `catch |name|`")
-                handler = self.parse_bin(2)
+                handler = self.parse_bin(1)
             lhs = N("Catch", self.sp(start), expr=lhs, binder=binder.val if binder else None,
                     binder_span=binder.span if binder else None, handler=handler)
         return lhs
@@ -821,6 +930,13 @@ class Parser:
             self.advance()
             operand = self.parse_unary()
             return N("Unary", self.sp(t), op=t.val, expr=operand)
+        if (t.kind == "ident" and t.val == "await" and (self.peek().kind in ("ident", "int", "float", "str", "char")
+                or self.peek().kind == "kw" and self.peek().val in ("true", "false", "try")
+                or self.is_op("(", 1) or self.is_op("*", 1) or self.is_op("&", 1))):
+            self.advance()                                           # `await task` is `task.wait()`
+            operand = self.parse_unary()
+            return N("Call", self.sp(t), callee=N("Field", self.sp(t), obj=operand, name="wait", name_span=t.span),
+                     args=[], targ=None, targs=None)
         if t.kind == "kw" and t.val == "try":
             self.advance()
             operand = self.parse_unary()
@@ -832,7 +948,13 @@ class Parser:
         self.no_struct = False
         args = []
         while not self.is_op(")"):
-            args.append(self.parse_expr())
+            if self.tok.kind == "ident" and self.is_op("=", 1):      # `name = value`
+                nm = self.advance()
+                self.advance()
+                val = self.parse_expr()
+                args.append(N("NamedArg", nm.span.join(val.span), name=nm.val, name_span=nm.span, expr=val))
+            else:
+                args.append(self.parse_expr())
             if not self.accept_op(","):
                 break
         self.no_struct = saved
@@ -875,10 +997,42 @@ class Parser:
                 self.no_struct = False
                 e = self.parse_index_tail(start, e)
                 self.no_struct = saved
+            elif t.val == "?." :                      # optional chain: `a?.b`, `a?.f(x)`
+                self.advance()
+                nm = self.expect_ident("field or method name")
+                args = None
+                if self.is_op("("):
+                    self.advance()
+                    args = self.parse_args()
+                e = N("OptChain", self.sp(start), obj=e, name=nm.val, name_span=nm.span, args=args)
+            elif t.val == "?" and self.is_op("??", 1):  # `name? ?? "x"`: the `?` just marks the chain as optional
+                self.advance()
+            elif t.val == "." and self.is_kw("catch", 1) and self.is_op("(", 2):     # expr.catch(|e| handler)
+                self.advance()
+                self.advance()
+                self.advance()
+                binder = None
+                if self.accept_op("|"):
+                    binder = self.expect_ident("error binding")
+                    self.expect_op("|", "after the error name")
+                saved = self.no_struct
+                self.no_struct = False
+                if self.is_op("{"):
+                    handler = self.parse_block()
+                else:
+                    handler = self.parse_expr()
+                self.no_struct = saved
+                self.expect_op(")", "after the catch handler")
+                e = N("Catch", self.sp(start), expr=e, binder=binder.val if binder else None,
+                      binder_span=binder.span if binder else None, handler=handler, lambda_form=True)
             elif t.val == ".":
                 self.advance()
                 nm = self.expect_ident("field name")
                 e = N("Field", self.sp(start), obj=e, name=nm.val, name_span=nm.span)
+            elif t.val == "->":                       # `p->x` is `(*p).x`, `p->f(..)` is `(*p).f(..)`
+                self.advance()
+                nm = self.expect_ident("field or method name")
+                e = N("Field", self.sp(start), obj=N("Unary", self.sp(start), op="*", expr=e), name=nm.val, name_span=nm.span)
             elif t.val in ("++", "--"):
                 self.advance()
                 e = N("IncDec", self.sp(start), op=t.val, prefix=False, expr=e)
@@ -958,30 +1112,6 @@ class Parser:
         self.expect_op("]", "after index")
         return N("Index", self.sp(start), obj=base, idx=idx)
 
-    def parse_fstr(self, t):
-        """`f"a {expr:spec} b"` -> FStr(parts); a part is FPart(lit=bytes) or FPart(expr=, spec=)."""
-        parts = []
-        for fp in t.val:
-            if fp.lit is not None:
-                parts.append(N("FPart", t.span, lit=fp.lit, expr=None, spec="", spec_span=None))
-                continue
-            toks = list(fp.toks) + [Token("eof", None, fp.span)]
-            if len(toks) == 1:
-                self.d.error(fp.span, "empty `{}` in an interpolated string", label="expected an expression here",
-                             help="write `{name}` or `{a + b}`; use `{{` and `}}` for literal braces")
-                continue
-            saved = (self.toks, self.p, self.no_struct)
-            self.toks, self.p, self.no_struct = toks, 0, False
-            try:
-                ex = self.parse_expr()
-                if self.tok.kind != "eof":
-                    self.d.error(self.tok.span, "unexpected token in an interpolated expression",
-                                 help="only one expression fits between the braces; a format goes after `:`, as in `{x:>8.2f}`")
-            finally:
-                self.toks, self.p, self.no_struct = saved
-            parts.append(N("FPart", fp.span, lit=None, expr=ex, spec=fp.spec, spec_span=fp.spec_span))
-        return N("FStr", t.span, parts=parts)
-
     def parse_primary(self):
         t = self.tok
         k = t.kind
@@ -997,9 +1127,6 @@ class Parser:
         if k == "str":
             self.advance()
             return N("Str", t.span, value=t.val)
-        if k == "fstr":
-            self.advance()
-            return self.parse_fstr(t)
         if k == "kw" and t.val in ("true", "false"):
             self.advance()
             return N("Bool", t.span, value=(t.val == "true"))

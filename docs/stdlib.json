@@ -1,0 +1,6667 @@
+{
+ "groups": [
+  {
+   "title": "Prelude and builtins",
+   "modules": [
+    "prelude"
+   ]
+  },
+  {
+   "title": "Text and numbers",
+   "modules": [
+    "str",
+    "conv",
+    "fmt",
+    "math",
+    "rand"
+   ]
+  },
+  {
+   "title": "Collections",
+   "modules": [
+    "list",
+    "stack",
+    "queue",
+    "map",
+    "tree",
+    "mem"
+   ]
+  },
+  {
+   "title": "Input, output and system",
+   "modules": [
+    "io",
+    "fs",
+    "env",
+    "time"
+   ]
+  },
+  {
+   "title": "Networking",
+   "modules": [
+    "net",
+    "http"
+   ]
+  },
+  {
+   "title": "Concurrency",
+   "modules": [
+    "thread",
+    "async"
+   ]
+  }
+ ],
+ "modules": [
+  {
+   "id": "prelude",
+   "name": "prelude",
+   "import": "(built in)",
+   "summary": "Functions that need no import",
+   "description": "These names are always available. `String`, `str`, `List<T>` and the `Display` trait need no import either. Types, `null`, `?` optionals and error unions are part of the language itself: see the guide.",
+   "example": "let name = string_from(\"world\");\nprintln(\"hello, {name}!\");\nlet buf = alloc(i64, 4);\nbuf[0] = 7;\nprintln(\"{} {}\", buf[0], size_of(i64));\nfree(buf);",
+   "errors": [],
+   "consts": [],
+   "types": [],
+   "traits": [],
+   "functions": [
+    {
+     "name": "print",
+     "tparams": [],
+     "params": [
+      {
+       "name": "template",
+       "type": "str",
+       "doc": "a format string; `{}` and `{name}` insert values (see Format strings)"
+      },
+      {
+       "name": "args",
+       "type": "...",
+       "doc": "the values to insert"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Writes formatted text to standard output with no newline.",
+     "fallible": false
+    },
+    {
+     "name": "println",
+     "tparams": [],
+     "params": [
+      {
+       "name": "template",
+       "type": "str",
+       "doc": "a format string, or any single value"
+      },
+      {
+       "name": "args",
+       "type": "...",
+       "doc": "the values to insert"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Like `print`, then a newline. `println(x)` prints any `Display` value.",
+     "fallible": false
+    },
+    {
+     "name": "format",
+     "tparams": [],
+     "params": [
+      {
+       "name": "template",
+       "type": "str",
+       "doc": "a format string"
+      },
+      {
+       "name": "args",
+       "type": "...",
+       "doc": "the values to insert"
+      }
+     ],
+     "returns": "String",
+     "returns_doc": "a new `String`",
+     "receiver": null,
+     "doc": "Builds text the way `print` would write it.",
+     "fallible": false
+    },
+    {
+     "name": "panic",
+     "tparams": [],
+     "params": [
+      {
+       "name": "template",
+       "type": "str",
+       "doc": "a format string describing what went wrong"
+      },
+      {
+       "name": "args",
+       "type": "...",
+       "doc": "the values to insert"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Prints the message with its source location to standard error and stops the program with exit status 1. Destructors do not run.",
+     "fallible": false
+    },
+    {
+     "name": "assert",
+     "tparams": [],
+     "params": [
+      {
+       "name": "condition",
+       "type": "bool",
+       "doc": "must be true"
+      },
+      {
+       "name": "template",
+       "type": "str",
+       "doc": "optional message (a format string)"
+      },
+      {
+       "name": "args",
+       "type": "...",
+       "doc": "the values to insert"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Panics with `assertion failed` (or your message) when `condition` is false.",
+     "fallible": false
+    },
+    {
+     "name": "exit",
+     "tparams": [],
+     "params": [
+      {
+       "name": "code",
+       "type": "i32",
+       "doc": "the process exit status"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Ends the program immediately. Destructors do not run.",
+     "fallible": false
+    },
+    {
+     "name": "to_str",
+     "tparams": [],
+     "params": [
+      {
+       "name": "value",
+       "type": "any",
+       "doc": "a number, `bool`, `u8` or pointer"
+      }
+     ],
+     "returns": "String",
+     "returns_doc": "a new `String`",
+     "receiver": null,
+     "doc": "Converts a value to its text form. Use `\"{x}\"` for any `Display` type.",
+     "fallible": false
+    },
+    {
+     "name": "string_new",
+     "tparams": [],
+     "params": [],
+     "returns": "String",
+     "returns_doc": "a new `String`",
+     "receiver": null,
+     "doc": "Creates an empty `String`.",
+     "fallible": false
+    },
+    {
+     "name": "string_from",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text to copy"
+      }
+     ],
+     "returns": "String",
+     "returns_doc": "a new `String`",
+     "receiver": null,
+     "doc": "Creates an owned `String` holding a copy of `s`.",
+     "fallible": false
+    },
+    {
+     "name": "string_clear",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "String",
+       "doc": "the string to empty"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Empties a `String` but keeps its buffer.",
+     "fallible": false
+    },
+    {
+     "name": "alloc",
+     "tparams": [],
+     "params": [
+      {
+       "name": "T",
+       "type": "type",
+       "doc": "the element type"
+      },
+      {
+       "name": "n",
+       "type": "i64",
+       "doc": "how many elements"
+      }
+     ],
+     "returns": "[]T",
+     "returns_doc": "a heap slice of length `n`",
+     "receiver": null,
+     "doc": "Allocates `n` zeroed elements on the garbage-collected heap: `let buf = alloc(i64, 100);`.",
+     "fallible": false
+    },
+    {
+     "name": "alloc_in",
+     "tparams": [],
+     "params": [
+      {
+       "name": "T",
+       "type": "type",
+       "doc": "the element type"
+      },
+      {
+       "name": "n",
+       "type": "i64",
+       "doc": "how many elements"
+      },
+      {
+       "name": "r",
+       "type": "region",
+       "doc": "the region that owns the memory"
+      }
+     ],
+     "returns": "[]T",
+     "returns_doc": "a slice that lives as long as the region",
+     "receiver": null,
+     "doc": "Allocates `n` zeroed elements inside a `region` block. They are released when the region ends.",
+     "fallible": false
+    },
+    {
+     "name": "free",
+     "tparams": [],
+     "params": [
+      {
+       "name": "buf",
+       "type": "[]T or String",
+       "doc": "a slice from `alloc`, or a `String`"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Releases the memory now instead of waiting for the collector.",
+     "fallible": false
+    },
+    {
+     "name": "slice_of",
+     "tparams": [],
+     "params": [
+      {
+       "name": "p",
+       "type": "*T",
+       "doc": "a pointer to the first element"
+      },
+      {
+       "name": "n",
+       "type": "i64",
+       "doc": "the number of elements"
+      }
+     ],
+     "returns": "[]T",
+     "returns_doc": "a slice of length `n`",
+     "receiver": null,
+     "doc": "Wraps C memory (or any pointer) as a slice. Nothing is copied.",
+     "fallible": false
+    },
+    {
+     "name": "size_of",
+     "tparams": [],
+     "params": [
+      {
+       "name": "T",
+       "type": "type",
+       "doc": "any type"
+      }
+     ],
+     "returns": "i64",
+     "returns_doc": "`i64`",
+     "receiver": null,
+     "doc": "The size of a type in bytes, like C's `sizeof`.",
+     "fallible": false
+    },
+    {
+     "name": "cstr",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str or String",
+       "doc": "the text"
+      }
+     ],
+     "returns": "*u8",
+     "returns_doc": "a pointer to the copy",
+     "receiver": null,
+     "doc": "Makes a NUL-terminated copy for passing to C functions.",
+     "fallible": false
+    },
+    {
+     "name": "from_cstr",
+     "tparams": [],
+     "params": [
+      {
+       "name": "p",
+       "type": "*u8",
+       "doc": "a NUL-terminated C string"
+      }
+     ],
+     "returns": "str",
+     "returns_doc": "a `str` over the same memory",
+     "receiver": null,
+     "doc": "Views a C string as a `str`. Nothing is copied.",
+     "fallible": false
+    },
+    {
+     "name": "drop",
+     "tparams": [],
+     "params": [
+      {
+       "name": "value",
+       "type": "any",
+       "doc": "the value to destroy"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Destroys a value early, running its destructor. The value cannot be used afterwards.",
+     "fallible": false
+    },
+    {
+     "name": "drop_at",
+     "tparams": [],
+     "params": [
+      {
+       "name": "p",
+       "type": "*T",
+       "doc": "the location to destroy"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Runs the destructor of the value `p` points to. For container authors.",
+     "fallible": false
+    },
+    {
+     "name": "write_at",
+     "tparams": [],
+     "params": [
+      {
+       "name": "p",
+       "type": "*T",
+       "doc": "where to store"
+      },
+      {
+       "name": "v",
+       "type": "T",
+       "doc": "the value to store"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Stores `v` without destroying whatever was there before. For container authors.",
+     "fallible": false
+    },
+    {
+     "name": "read_at",
+     "tparams": [],
+     "params": [
+      {
+       "name": "p",
+       "type": "*T",
+       "doc": "where to read from"
+      }
+     ],
+     "returns": "T",
+     "returns_doc": "the value",
+     "receiver": null,
+     "doc": "Takes ownership of the value `p` points to (a move out of raw storage). For container authors.",
+     "fallible": false
+    },
+    {
+     "name": "gc_collect",
+     "tparams": [],
+     "params": [],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Forces a major collection (every generation) in every GC mode.",
+     "fallible": false
+    },
+    {
+     "name": "gc_collect_gen",
+     "tparams": [],
+     "params": [
+      {
+       "name": "g",
+       "type": "i32",
+       "doc": "the oldest generation to collect: 0, 1 or 2"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Collects generations `0..g`. Only available with `--gc-mode=manual`.",
+     "fallible": false
+    },
+    {
+     "name": "gc_bytes",
+     "tparams": [],
+     "params": [],
+     "returns": "i64",
+     "returns_doc": "`i64`",
+     "receiver": null,
+     "doc": "Bytes currently held by the collector.",
+     "fallible": false
+    },
+    {
+     "name": "gc_collections",
+     "tparams": [],
+     "params": [],
+     "returns": "i64",
+     "returns_doc": "`i64`",
+     "receiver": null,
+     "doc": "Number of collections so far, all generations together.",
+     "fallible": false
+    },
+    {
+     "name": "gc_gen_bytes",
+     "tparams": [],
+     "params": [
+      {
+       "name": "g",
+       "type": "i32",
+       "doc": "generation 0, 1 or 2"
+      }
+     ],
+     "returns": "i64",
+     "returns_doc": "`i64`",
+     "receiver": null,
+     "doc": "Bytes held by one generation.",
+     "fallible": false
+    },
+    {
+     "name": "gc_gen_collections",
+     "tparams": [],
+     "params": [
+      {
+       "name": "g",
+       "type": "i32",
+       "doc": "generation 0, 1 or 2"
+      }
+     ],
+     "returns": "i64",
+     "returns_doc": "`i64`",
+     "receiver": null,
+     "doc": "Number of collections of one generation.",
+     "fallible": false
+    }
+   ]
+  },
+  {
+   "id": "str",
+   "name": "str",
+   "import": "std.str",
+   "summary": "string helpers. Functions take `str` views (a `String` converts automatically);",
+   "description": "those that build new text return an owned `String` that the caller should `free`.",
+   "example": "let s = string_from(\"  Hello, Crumbs  \");\nlet t = s.trim();                         // \"Hello, Crumbs\" (a view, no copy)\nprintln(\"{}\", t.upper());                 // HELLO, CRUMBS\nprintln(\"{}\", t.find(\"Crumbs\"));          // 7\nlet mut parts = \"a,b,c\".split(\",\");\nprintln(\"{}\", str.join(parts.view(), \"-\"));   // a-b-c\nparts.release();",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "str",
+     "kind": "builtin",
+     "tparams": [],
+     "doc": "A borrowed view of text (pointer and length). String literals are `str`. These are the methods you can call on one: `s.find(\"x\")`.",
+     "fields": [],
+     "methods": [
+      {
+       "name": "join",
+       "tparams": [],
+       "params": [
+        {
+         "name": "parts",
+         "type": "[]str",
+         "doc": "the pieces"
+        },
+        {
+         "name": "sep",
+         "type": "str",
+         "doc": "text placed between pieces"
+        }
+       ],
+       "returns": "String",
+       "receiver": null,
+       "doc": "Concatenates `parts` with `sep` between them: `str.join(parts, \", \")`.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "starts_with",
+       "tparams": [],
+       "params": [
+        {
+         "name": "prefix",
+         "type": "str",
+         "doc": "what it should start with"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "True when the string begins with `prefix`.",
+       "fallible": false,
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "ends_with",
+       "tparams": [],
+       "params": [
+        {
+         "name": "suffix",
+         "type": "str",
+         "doc": "what it should end with"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "True when the string ends with `suffix`.",
+       "fallible": false,
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "find",
+       "tparams": [],
+       "params": [
+        {
+         "name": "needle",
+         "type": "str",
+         "doc": "the text to look for"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Index of the first occurrence of `needle`.",
+       "fallible": false,
+       "returns_doc": "the byte index, or `-1` when it is not there"
+      },
+      {
+       "name": "rfind",
+       "tparams": [],
+       "params": [
+        {
+         "name": "needle",
+         "type": "str",
+         "doc": "the text to look for"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Index of the last occurrence of `needle`.",
+       "fallible": false,
+       "returns_doc": "the byte index, or `-1` when it is not there"
+      },
+      {
+       "name": "contains",
+       "tparams": [],
+       "params": [
+        {
+         "name": "needle",
+         "type": "str",
+         "doc": "the text to look for"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "True when `needle` occurs in the string.",
+       "fallible": false,
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "count_byte",
+       "tparams": [],
+       "params": [
+        {
+         "name": "b",
+         "type": "u8",
+         "doc": "the byte to count"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Counts how many times the byte `b` occurs.",
+       "fallible": false,
+       "returns_doc": "the count"
+      },
+      {
+       "name": "compare",
+       "tparams": [],
+       "params": [
+        {
+         "name": "other",
+         "type": "str",
+         "doc": "the string to compare with"
+        }
+       ],
+       "returns": "i32",
+       "receiver": "self",
+       "doc": "Three-way byte comparison, like C's `strcmp`.",
+       "fallible": false,
+       "returns_doc": "negative, zero or positive"
+      },
+      {
+       "name": "eq_ignore_case",
+       "tparams": [],
+       "params": [
+        {
+         "name": "other",
+         "type": "str",
+         "doc": "the string to compare with"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Equality that ignores ASCII case.",
+       "fallible": false,
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "strip",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "views into the original text",
+       "fallible": false
+      },
+      {
+       "name": "trim",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "Drops whitespace at both ends.",
+       "fallible": false,
+       "returns_doc": "a view into the string (no copy)"
+      },
+      {
+       "name": "lstrip",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "Drops leading whitespace.",
+       "fallible": false,
+       "returns_doc": "a view into the string (no copy)"
+      },
+      {
+       "name": "rstrip",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "Drops trailing whitespace.",
+       "fallible": false,
+       "returns_doc": "a view into the string (no copy)"
+      },
+      {
+       "name": "upper",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "new owned text",
+       "fallible": false
+      },
+      {
+       "name": "lower",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Lower-cases every ASCII letter.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "reverse",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Reverses the bytes.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "repeat",
+       "tparams": [],
+       "params": [
+        {
+         "name": "n",
+         "type": "i64",
+         "doc": "how many copies"
+        }
+       ],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Concatenates `n` copies.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "replace",
+       "tparams": [],
+       "params": [
+        {
+         "name": "from",
+         "type": "str",
+         "doc": "text to find"
+        },
+        {
+         "name": "to",
+         "type": "str",
+         "doc": "replacement"
+        }
+       ],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Replaces every occurrence of `from` (non-empty) with `to`.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "to_string",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Copies the view into an owned `String`.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "split",
+       "tparams": [],
+       "params": [
+        {
+         "name": "sep",
+         "type": "str",
+         "doc": "the separator"
+        }
+       ],
+       "returns": "list.List<str>",
+       "receiver": "self",
+       "doc": "Splits on a non-empty separator. The pieces are views into the original, so keep it alive while you use them.",
+       "fallible": false,
+       "returns_doc": "a `list.List<str>` (release it with `list.release`)"
+      }
+     ],
+     "ext": true
+    },
+    {
+     "name": "String",
+     "kind": "builtin",
+     "tparams": [],
+     "doc": "An owned, growable string. Appending: `s += \"text\"`. Methods below work on `String` too (a `String` converts to `str`).",
+     "fields": [],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the initial text"
+        }
+       ],
+       "returns": "String",
+       "receiver": null,
+       "doc": "Creates an owned copy of `s`.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "empty",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": null,
+       "doc": "Creates an empty `String`.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "from",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the initial text"
+        }
+       ],
+       "returns": "String",
+       "receiver": null,
+       "doc": "Creates an owned copy of `s` (same as `String.new`).",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "with_capacity",
+       "tparams": [],
+       "params": [
+        {
+         "name": "n",
+         "type": "i64",
+         "doc": "bytes to reserve"
+        }
+       ],
+       "returns": "String",
+       "receiver": null,
+       "doc": "Creates an empty `String` with room for `n` bytes, so appending does not reallocate.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "push",
+       "tparams": [],
+       "params": [
+        {
+         "name": "c",
+         "type": "u8",
+         "doc": "the byte to append"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Appends one byte (`s += c` does the same).",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "append",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to append"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Appends text (`s += text` does the same).",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "clear",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Empties the string but keeps its buffer.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "strip",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "these return a new String (the original is untouched)",
+       "fallible": false
+      },
+      {
+       "name": "trim",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Whitespace-trimmed copy.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "lstrip",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Copy without leading whitespace.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "rstrip",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Copy without trailing whitespace.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      }
+     ],
+     "ext": true
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "is_space",
+     "tparams": [],
+     "params": [
+      {
+       "name": "c",
+       "type": "u8",
+       "doc": "an ASCII byte"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True for a whitespace byte (space, tab, newline, carriage return, vertical tab, form feed).",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "is_digit",
+     "tparams": [],
+     "params": [
+      {
+       "name": "c",
+       "type": "u8",
+       "doc": "an ASCII byte"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True for `'0'`..`'9'`.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "is_upper",
+     "tparams": [],
+     "params": [
+      {
+       "name": "c",
+       "type": "u8",
+       "doc": "an ASCII byte"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True for `'A'`..`'Z'`.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "is_lower",
+     "tparams": [],
+     "params": [
+      {
+       "name": "c",
+       "type": "u8",
+       "doc": "an ASCII byte"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True for `'a'`..`'z'`.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "is_alpha",
+     "tparams": [],
+     "params": [
+      {
+       "name": "c",
+       "type": "u8",
+       "doc": "an ASCII byte"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True for an ASCII letter.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "to_upper_byte",
+     "tparams": [],
+     "params": [
+      {
+       "name": "c",
+       "type": "u8",
+       "doc": "an ASCII byte"
+      }
+     ],
+     "returns": "u8",
+     "receiver": null,
+     "doc": "Upper-cases one ASCII byte; other bytes are unchanged.",
+     "fallible": false,
+     "returns_doc": "the converted byte"
+    },
+    {
+     "name": "to_lower_byte",
+     "tparams": [],
+     "params": [
+      {
+       "name": "c",
+       "type": "u8",
+       "doc": "an ASCII byte"
+      }
+     ],
+     "returns": "u8",
+     "receiver": null,
+     "doc": "Lower-cases one ASCII byte; other bytes are unchanged.",
+     "fallible": false,
+     "returns_doc": "the converted byte"
+    },
+    {
+     "name": "starts_with",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text to look at"
+      },
+      {
+       "name": "prefix",
+       "type": "str",
+       "doc": "what it should start with"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True when `s` begins with `prefix`.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "ends_with",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text to look at"
+      },
+      {
+       "name": "suffix",
+       "type": "str",
+       "doc": "what it should end with"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True when `s` ends with `suffix`.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "find",
+     "tparams": [],
+     "params": [
+      {
+       "name": "hay",
+       "type": "str"
+      },
+      {
+       "name": "needle",
+       "type": "str"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "index of the first occurrence of `needle` in `hay`, or -1",
+     "fallible": false
+    },
+    {
+     "name": "rfind",
+     "tparams": [],
+     "params": [
+      {
+       "name": "hay",
+       "type": "str"
+      },
+      {
+       "name": "needle",
+       "type": "str"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "index of the last occurrence of `needle` in `hay`, or -1",
+     "fallible": false
+    },
+    {
+     "name": "contains",
+     "tparams": [],
+     "params": [
+      {
+       "name": "hay",
+       "type": "str",
+       "doc": "the text to search"
+      },
+      {
+       "name": "needle",
+       "type": "str",
+       "doc": "the text to look for"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True when `needle` occurs anywhere in `hay`.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "count_byte",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text"
+      },
+      {
+       "name": "b",
+       "type": "u8",
+       "doc": "the byte to count"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "Counts how many times the byte `b` occurs in `s`.",
+     "fallible": false,
+     "returns_doc": "the count"
+    },
+    {
+     "name": "trim_start",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text"
+      }
+     ],
+     "returns": "str",
+     "receiver": null,
+     "doc": "Drops leading whitespace.",
+     "fallible": false,
+     "returns_doc": "a view into `s` (no copy)"
+    },
+    {
+     "name": "trim_end",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text"
+      }
+     ],
+     "returns": "str",
+     "receiver": null,
+     "doc": "Drops trailing whitespace.",
+     "fallible": false,
+     "returns_doc": "a view into `s` (no copy)"
+    },
+    {
+     "name": "trim",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text"
+      }
+     ],
+     "returns": "str",
+     "receiver": null,
+     "doc": "Drops whitespace at both ends.",
+     "fallible": false,
+     "returns_doc": "a view into `s` (no copy)"
+    },
+    {
+     "name": "compare",
+     "tparams": [],
+     "params": [
+      {
+       "name": "a",
+       "type": "str"
+      },
+      {
+       "name": "b",
+       "type": "str"
+      }
+     ],
+     "returns": "i32",
+     "receiver": null,
+     "doc": "-1, 0 or 1 (byte-wise lexicographic)",
+     "fallible": false
+    },
+    {
+     "name": "eq_ignore_case",
+     "tparams": [],
+     "params": [
+      {
+       "name": "a",
+       "type": "str",
+       "doc": "first text"
+      },
+      {
+       "name": "b",
+       "type": "str",
+       "doc": "second text"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "Compares two strings, treating ASCII upper and lower case as equal.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "to_upper",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text"
+      }
+     ],
+     "returns": "String",
+     "receiver": null,
+     "doc": "Upper-cases every ASCII letter.",
+     "fallible": false,
+     "returns_doc": "a new `String`"
+    },
+    {
+     "name": "to_lower",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text"
+      }
+     ],
+     "returns": "String",
+     "receiver": null,
+     "doc": "Lower-cases every ASCII letter.",
+     "fallible": false,
+     "returns_doc": "a new `String`"
+    },
+    {
+     "name": "reverse",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text"
+      }
+     ],
+     "returns": "String",
+     "receiver": null,
+     "doc": "Reverses the bytes of `s`.",
+     "fallible": false,
+     "returns_doc": "a new `String`"
+    },
+    {
+     "name": "repeat",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text"
+      },
+      {
+       "name": "n",
+       "type": "i64",
+       "doc": "how many copies"
+      }
+     ],
+     "returns": "String",
+     "receiver": null,
+     "doc": "Concatenates `n` copies of `s`.",
+     "fallible": false,
+     "returns_doc": "a new `String` (empty when `n <= 0`)"
+    },
+    {
+     "name": "replace",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str"
+      },
+      {
+       "name": "from",
+       "type": "str"
+      },
+      {
+       "name": "to",
+       "type": "str"
+      }
+     ],
+     "returns": "String",
+     "receiver": null,
+     "doc": "replace every occurrence of `from` (must be non-empty) with `to`",
+     "fallible": false
+    },
+    {
+     "name": "join",
+     "tparams": [],
+     "params": [
+      {
+       "name": "parts",
+       "type": "[]str"
+      },
+      {
+       "name": "sep",
+       "type": "str"
+      }
+     ],
+     "returns": "String",
+     "receiver": null,
+     "doc": "concatenate `parts` with `sep` between them",
+     "fallible": false
+    },
+    {
+     "name": "split",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str"
+      },
+      {
+       "name": "sep",
+       "type": "str"
+      }
+     ],
+     "returns": "list.List<str>",
+     "receiver": null,
+     "doc": "split on a non-empty separator; the pieces are views into `s`. Release with list.release.",
+     "fallible": false
+    }
+   ]
+  },
+  {
+   "id": "conv",
+   "name": "conv",
+   "import": "std.conv",
+   "summary": "string -> number conversion with real error handling.",
+   "description": "Both functions accept an optional sign and decimal digits only. Whitespace, `1e3` and `0x10` are rejected with `InvalidDigit`.",
+   "example": "import std.conv;\n\nlet n = conv.parse_i32(\"42\").catch(|e| 0);          // 42\nlet bad = conv.parse_i32(\"4x\").catch(|e| -1);       // -1: InvalidDigit\nprintln(\"{} {}\", n, bad);",
+   "errors": [
+    {
+     "name": "Empty",
+     "doc": "the text is empty (or only a sign)"
+    },
+    {
+     "name": "InvalidDigit",
+     "doc": "a character is not a decimal digit"
+    },
+    {
+     "name": "Overflow",
+     "doc": "the number does not fit the result type"
+    }
+   ],
+   "consts": [],
+   "types": [],
+   "traits": [],
+   "functions": [
+    {
+     "name": "parse_i64",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text to parse"
+      }
+     ],
+     "returns": "i64!",
+     "receiver": null,
+     "doc": "Parses a decimal integer, with an optional leading `-` or `+`.",
+     "fallible": true,
+     "returns_doc": "the number, or an error: `Empty`, `InvalidDigit` or `Overflow`"
+    },
+    {
+     "name": "parse_i32",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text to parse"
+      }
+     ],
+     "returns": "i32!",
+     "receiver": null,
+     "doc": "Parses a decimal integer that must fit in 32 bits.",
+     "fallible": true,
+     "returns_doc": "the number, or an error: `Empty`, `InvalidDigit` or `Overflow`"
+    }
+   ]
+  },
+  {
+   "id": "fmt",
+   "name": "fmt",
+   "import": "std.fmt",
+   "summary": "how values turn into text.",
+   "description": "`Display` is the trait behind `println(x)`, `to_str(x)` and `\"{x}\"` for your own types: implement it and\nthe value prints the way you wrote. It is part of the prelude, so no import is needed.\n\nTypes without an impl can still be shown with `{value:?}`, the automatic representation:\n`Point { x: 1, y: 2 }`.",
+   "example": "struct Point { x: i32, y: i32 }\n\nimpl Display for Point {\n    fn to_string(self) -> String { return format(\"({}, {})\", self.x, self.y); }\n}\n\nfn main() {\n    let p = Point { x: 1, y: 2 };\n    println(p);                // (1, 2)\n    println(\"at {p:>10}\");     // at     (1, 2)\n    println(\"{p:?}\");          // Point { x: 1, y: 2 }\n}",
+   "errors": [],
+   "consts": [],
+   "types": [],
+   "traits": [
+    {
+     "name": "Display",
+     "doc": "The trait behind `println(x)`, `to_str(x)`, `x.to_string()` and `\"{x}\"`. Implement it for your own types and they print the way you wrote. It is part of the prelude, so no import is needed. All built-in number types and `bool` implement it already, so `T: Display` bounds accept them.",
+     "methods": [
+      {
+       "name": "to_string",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Builds the text for this value. A format such as `{p:>10}` applies to the text this returns.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      }
+     ]
+    }
+   ],
+   "functions": []
+  },
+  {
+   "id": "math",
+   "name": "math",
+   "import": "std.math",
+   "summary": "constants, libm bindings and small integer helpers.",
+   "description": "`sqrt`, `sin`, `cos`, `tan`, `atan2`, `exp`, `log`, `pow`, `floor`, `ceil` and `fabs` are the libm functions of the same name (all `f64`). The `_i32`, `_i64` and `_f64` helpers exist because plain `min`/`max` live in `std.mem` and are generic.",
+   "example": "import std.math;\n\nprintln(\"{:.4}\", math.sqrt(2.0));        // 1.4142\nprintln(\"{}\", math.gcd(48, 18));          // 6\nprintln(\"{}\", math.max_i32(3, 9));        // 9\nprintln(\"{:.5}\", math.PI);                // 3.14159",
+   "errors": [],
+   "consts": [
+    {
+     "name": "PI",
+     "type": "f64",
+     "value": "3.14159265358979323846",
+     "doc": "the ratio of a circle's circumference to its diameter"
+    },
+    {
+     "name": "E",
+     "type": "f64",
+     "value": "2.71828182845904523536",
+     "doc": "Euler's number"
+    }
+   ],
+   "types": [],
+   "traits": [],
+   "functions": [
+    {
+     "name": "sqrt",
+     "tparams": [],
+     "params": [
+      {
+       "name": "x",
+       "type": "f64",
+       "doc": "the number"
+      }
+     ],
+     "returns": "f64",
+     "receiver": null,
+     "doc": "Square root (libm).",
+     "fallible": false,
+     "returns_doc": "`f64` (NaN for negative input)"
+    },
+    {
+     "name": "sin",
+     "tparams": [],
+     "params": [
+      {
+       "name": "x",
+       "type": "f64",
+       "doc": "angle in radians"
+      }
+     ],
+     "returns": "f64",
+     "receiver": null,
+     "doc": "Sine (libm).",
+     "fallible": false,
+     "returns_doc": "`f64`"
+    },
+    {
+     "name": "cos",
+     "tparams": [],
+     "params": [
+      {
+       "name": "x",
+       "type": "f64",
+       "doc": "angle in radians"
+      }
+     ],
+     "returns": "f64",
+     "receiver": null,
+     "doc": "Cosine (libm).",
+     "fallible": false,
+     "returns_doc": "`f64`"
+    },
+    {
+     "name": "tan",
+     "tparams": [],
+     "params": [
+      {
+       "name": "x",
+       "type": "f64",
+       "doc": "angle in radians"
+      }
+     ],
+     "returns": "f64",
+     "receiver": null,
+     "doc": "Tangent (libm).",
+     "fallible": false,
+     "returns_doc": "`f64`"
+    },
+    {
+     "name": "atan2",
+     "tparams": [],
+     "params": [
+      {
+       "name": "y",
+       "type": "f64",
+       "doc": "the vertical part"
+      },
+      {
+       "name": "x",
+       "type": "f64",
+       "doc": "the horizontal part"
+      }
+     ],
+     "returns": "f64",
+     "receiver": null,
+     "doc": "Angle of the point (x, y) from the x axis (libm).",
+     "fallible": false,
+     "returns_doc": "`f64` in radians, `-PI..=PI`"
+    },
+    {
+     "name": "exp",
+     "tparams": [],
+     "params": [
+      {
+       "name": "x",
+       "type": "f64",
+       "doc": "the exponent"
+      }
+     ],
+     "returns": "f64",
+     "receiver": null,
+     "doc": "e raised to the power `x` (libm).",
+     "fallible": false,
+     "returns_doc": "`f64`"
+    },
+    {
+     "name": "log",
+     "tparams": [],
+     "params": [
+      {
+       "name": "x",
+       "type": "f64",
+       "doc": "a positive number"
+      }
+     ],
+     "returns": "f64",
+     "receiver": null,
+     "doc": "Natural logarithm (libm).",
+     "fallible": false,
+     "returns_doc": "`f64`"
+    },
+    {
+     "name": "pow",
+     "tparams": [],
+     "params": [
+      {
+       "name": "x",
+       "type": "f64",
+       "doc": "the base"
+      },
+      {
+       "name": "y",
+       "type": "f64",
+       "doc": "the exponent"
+      }
+     ],
+     "returns": "f64",
+     "receiver": null,
+     "doc": "`x` raised to the power `y` (libm).",
+     "fallible": false,
+     "returns_doc": "`f64`"
+    },
+    {
+     "name": "floor",
+     "tparams": [],
+     "params": [
+      {
+       "name": "x",
+       "type": "f64",
+       "doc": "the number"
+      }
+     ],
+     "returns": "f64",
+     "receiver": null,
+     "doc": "Rounds down to a whole number (libm).",
+     "fallible": false,
+     "returns_doc": "`f64`"
+    },
+    {
+     "name": "ceil",
+     "tparams": [],
+     "params": [
+      {
+       "name": "x",
+       "type": "f64",
+       "doc": "the number"
+      }
+     ],
+     "returns": "f64",
+     "receiver": null,
+     "doc": "Rounds up to a whole number (libm).",
+     "fallible": false,
+     "returns_doc": "`f64`"
+    },
+    {
+     "name": "fabs",
+     "tparams": [],
+     "params": [
+      {
+       "name": "x",
+       "type": "f64",
+       "doc": "the number"
+      }
+     ],
+     "returns": "f64",
+     "receiver": null,
+     "doc": "Absolute value of a float (libm).",
+     "fallible": false,
+     "returns_doc": "`f64`"
+    },
+    {
+     "name": "abs_i32",
+     "tparams": [],
+     "params": [
+      {
+       "name": "x",
+       "type": "i32",
+       "doc": "the number"
+      }
+     ],
+     "returns": "i32",
+     "receiver": null,
+     "doc": "Absolute value.",
+     "fallible": false,
+     "returns_doc": "`i32`"
+    },
+    {
+     "name": "abs_i64",
+     "tparams": [],
+     "params": [
+      {
+       "name": "x",
+       "type": "i64",
+       "doc": "the number"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "Absolute value.",
+     "fallible": false,
+     "returns_doc": "`i64`"
+    },
+    {
+     "name": "min_i32",
+     "tparams": [],
+     "params": [
+      {
+       "name": "a",
+       "type": "i32",
+       "doc": "first"
+      },
+      {
+       "name": "b",
+       "type": "i32",
+       "doc": "second"
+      }
+     ],
+     "returns": "i32",
+     "receiver": null,
+     "doc": "The smaller of two numbers.",
+     "fallible": false,
+     "returns_doc": "`i32`"
+    },
+    {
+     "name": "max_i32",
+     "tparams": [],
+     "params": [
+      {
+       "name": "a",
+       "type": "i32",
+       "doc": "first"
+      },
+      {
+       "name": "b",
+       "type": "i32",
+       "doc": "second"
+      }
+     ],
+     "returns": "i32",
+     "receiver": null,
+     "doc": "The larger of two numbers.",
+     "fallible": false,
+     "returns_doc": "`i32`"
+    },
+    {
+     "name": "min_i64",
+     "tparams": [],
+     "params": [
+      {
+       "name": "a",
+       "type": "i64",
+       "doc": "first"
+      },
+      {
+       "name": "b",
+       "type": "i64",
+       "doc": "second"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "The smaller of two numbers.",
+     "fallible": false,
+     "returns_doc": "`i64`"
+    },
+    {
+     "name": "max_i64",
+     "tparams": [],
+     "params": [
+      {
+       "name": "a",
+       "type": "i64",
+       "doc": "first"
+      },
+      {
+       "name": "b",
+       "type": "i64",
+       "doc": "second"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "The larger of two numbers.",
+     "fallible": false,
+     "returns_doc": "`i64`"
+    },
+    {
+     "name": "min_f64",
+     "tparams": [],
+     "params": [
+      {
+       "name": "a",
+       "type": "f64",
+       "doc": "first"
+      },
+      {
+       "name": "b",
+       "type": "f64",
+       "doc": "second"
+      }
+     ],
+     "returns": "f64",
+     "receiver": null,
+     "doc": "The smaller of two numbers.",
+     "fallible": false,
+     "returns_doc": "`f64`"
+    },
+    {
+     "name": "max_f64",
+     "tparams": [],
+     "params": [
+      {
+       "name": "a",
+       "type": "f64",
+       "doc": "first"
+      },
+      {
+       "name": "b",
+       "type": "f64",
+       "doc": "second"
+      }
+     ],
+     "returns": "f64",
+     "receiver": null,
+     "doc": "The larger of two numbers.",
+     "fallible": false,
+     "returns_doc": "`f64`"
+    },
+    {
+     "name": "gcd",
+     "tparams": [],
+     "params": [
+      {
+       "name": "a",
+       "type": "i64",
+       "doc": "first"
+      },
+      {
+       "name": "b",
+       "type": "i64",
+       "doc": "second"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "Greatest common divisor (Euclid).",
+     "fallible": false,
+     "returns_doc": "`i64`, never negative"
+    }
+   ]
+  },
+  {
+   "id": "rand",
+   "name": "rand",
+   "import": "std.rand",
+   "summary": "pseudo-random numbers (xorshift64)",
+   "description": "`Rng` is a small, fast generator. It is not cryptographically secure. Seed it with `Rng.from_seed(n)` for repeatable sequences (tests, games with replays) or `Rng.new()` to seed it from the clock.",
+   "example": "import std.rand;\n\nlet mut rng = rand.Rng.from_seed(42);\nprintln(\"{}\", rng.below(6) + 1);       // a dice roll\nprintln(\"{}\", rng.between(10, 20));     // 10..=20\nprintln(\"{:.3}\", rng.float());          // 0.0 <= x < 1.0",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "Rng",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "A pseudo-random number generator. Methods that draw numbers need a `let mut` variable.",
+     "fields": [
+      {
+       "name": "state",
+       "type": "u64"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [],
+       "returns": "Rng",
+       "receiver": null,
+       "doc": "Creates a generator seeded from the clock.",
+       "fallible": false,
+       "returns_doc": "a new `Rng`"
+      },
+      {
+       "name": "from_seed",
+       "tparams": [],
+       "params": [
+        {
+         "name": "seed",
+         "type": "u64",
+         "doc": "the seed"
+        }
+       ],
+       "returns": "Rng",
+       "receiver": null,
+       "doc": "Creates a generator with a fixed seed, so the sequence repeats from run to run.",
+       "fallible": false,
+       "returns_doc": "a new `Rng`"
+      },
+      {
+       "name": "below",
+       "tparams": [],
+       "params": [
+        {
+         "name": "n",
+         "type": "u64",
+         "doc": "the exclusive upper bound (must be above 0)"
+        }
+       ],
+       "returns": "u64",
+       "receiver": "mut self",
+       "doc": "A random number in `0..n`.",
+       "fallible": false,
+       "returns_doc": "`u64` less than `n`"
+      },
+      {
+       "name": "between",
+       "tparams": [],
+       "params": [
+        {
+         "name": "min",
+         "type": "u64",
+         "doc": "lowest value"
+        },
+        {
+         "name": "max",
+         "type": "u64",
+         "doc": "highest value"
+        }
+       ],
+       "returns": "u64",
+       "receiver": "mut self",
+       "doc": "A random number in `min..=max`. Panics when `min > max`.",
+       "fallible": false,
+       "returns_doc": "`u64`"
+      },
+      {
+       "name": "float",
+       "tparams": [],
+       "params": [],
+       "returns": "f64",
+       "receiver": "mut self",
+       "doc": "A random fraction.",
+       "fallible": false,
+       "returns_doc": "`f64` in `[0, 1)`"
+      },
+      {
+       "name": "next",
+       "tparams": [],
+       "params": [],
+       "returns": "u64",
+       "receiver": "mut self",
+       "doc": "The next raw 64-bit value of the sequence.",
+       "fallible": false,
+       "returns_doc": "`u64`"
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": []
+  },
+  {
+   "id": "list",
+   "name": "list",
+   "import": "std.list",
+   "summary": "a growable array that works for every element type.",
+   "description": "A List owns its elements: it is destroyed automatically at the end of its scope, running each\nelement's destructor (and freeing `String` elements). Elements with destructors can only be moved\nin and out (`push`, `pop`, `remove`) or borrowed (`at`); copying accessors such as `get` and\n`extend` need a copyable element type.",
+   "example": "import std.list;\n\nfn by_value(a: *i32, b: *i32) -> i32 { return *a - *b; }\n\nfn main() {\n    let mut xs: list.List<i32> = list.List.new();\n    xs.push(3);\n    xs.push(1);\n    xs.push(2);\n    xs.sort_by(by_value);\n    for i in 0..xs.len { println(\"{}\", xs.get(i)); }   // 1 2 3\n}",
+   "errors": [
+    {
+     "name": "Empty",
+     "doc": "`pop` was called on an empty list"
+    },
+    {
+     "name": "NotFound",
+     "doc": "`find_by` found no matching element"
+    }
+   ],
+   "consts": [],
+   "types": [
+    {
+     "name": "List",
+     "kind": "struct",
+     "tparams": [
+      "T"
+     ],
+     "doc": "A growable array that owns its elements. Fields: `len` (the number of elements) and the buffer. Destroyed automatically at the end of its scope.",
+     "fields": [
+      {
+       "name": "items",
+       "type": "[]T"
+      },
+      {
+       "name": "len",
+       "type": "i64"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [],
+       "returns": "List<T>",
+       "receiver": null,
+       "doc": "Creates an empty list.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `List<T>`"
+      },
+      {
+       "name": "with_capacity",
+       "tparams": [],
+       "params": [
+        {
+         "name": "n",
+         "type": "i64",
+         "doc": "elements to reserve"
+        }
+       ],
+       "returns": "List<T>",
+       "receiver": null,
+       "doc": "Creates an empty list with room for `n` elements.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `List<T>`"
+      },
+      {
+       "name": "from",
+       "tparams": [],
+       "params": [
+        {
+         "name": "xs",
+         "type": "[]T",
+         "doc": "the slice to copy"
+        }
+       ],
+       "returns": "List<T>",
+       "receiver": null,
+       "doc": "Builds a list by copying the elements of a slice (copyable element types).",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `List<T>`"
+      },
+      {
+       "name": "push",
+       "tparams": [],
+       "params": [
+        {
+         "name": "v",
+         "type": "T",
+         "doc": "the element"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Appends `v` at the end (moved in).",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "pop",
+       "tparams": [],
+       "params": [],
+       "returns": "T!",
+       "receiver": "mut self",
+       "doc": "Removes and returns the last element.",
+       "fallible": true,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the element, or the error `Empty`"
+      },
+      {
+       "name": "insert",
+       "tparams": [],
+       "params": [
+        {
+         "name": "i",
+         "type": "i64",
+         "doc": "where to insert (0..=len)"
+        },
+        {
+         "name": "v",
+         "type": "T",
+         "doc": "the element"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Inserts `v` before index `i`. Panics when `i` is out of range.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "remove",
+       "tparams": [],
+       "params": [
+        {
+         "name": "i",
+         "type": "i64",
+         "doc": "index to remove"
+        }
+       ],
+       "returns": "T",
+       "receiver": "mut self",
+       "doc": "Removes element `i` and shifts the rest down. Panics when out of range.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the removed element"
+      },
+      {
+       "name": "swap_remove",
+       "tparams": [],
+       "params": [
+        {
+         "name": "i",
+         "type": "i64",
+         "doc": "index to remove"
+        }
+       ],
+       "returns": "T",
+       "receiver": "mut self",
+       "doc": "Removes element `i` by moving the last element into its place: O(1), order changes.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the removed element"
+      },
+      {
+       "name": "set",
+       "tparams": [],
+       "params": [
+        {
+         "name": "i",
+         "type": "i64",
+         "doc": "the index"
+        },
+        {
+         "name": "v",
+         "type": "T",
+         "doc": "the new element"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Replaces element `i`; the old element is destroyed.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "extend",
+       "tparams": [],
+       "params": [
+        {
+         "name": "xs",
+         "type": "[]T",
+         "doc": "the slice to copy from"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Appends copies of every element of `xs` (copyable element types).",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "clear",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Destroys every element but keeps the buffer.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "release",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Destroys the elements and frees the buffer now instead of at the end of scope.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "reverse",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Reverses the order in place.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "sort_by",
+       "tparams": [],
+       "params": [
+        {
+         "name": "cmp",
+         "type": "fn(*T, *T) -> i32",
+         "doc": "returns negative, zero or positive for (a, b)"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Sorts in place (heap sort, O(n log n), not stable) with a comparison callback.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "at",
+       "tparams": [],
+       "params": [
+        {
+         "name": "i",
+         "type": "i64",
+         "doc": "the index"
+        }
+       ],
+       "returns": "*T",
+       "receiver": "self",
+       "doc": "A bounds-checked pointer to element `i`; works for every element type.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`*T`"
+      },
+      {
+       "name": "get",
+       "tparams": [],
+       "params": [
+        {
+         "name": "i",
+         "type": "i64",
+         "doc": "the index"
+        }
+       ],
+       "returns": "T",
+       "receiver": "self",
+       "doc": "A copy of element `i` (copyable element types). Panics when out of range.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`T`"
+      },
+      {
+       "name": "view",
+       "tparams": [],
+       "params": [],
+       "returns": "[]T",
+       "receiver": "self",
+       "doc": "The live elements as a slice (valid until the next push).",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`[]T`"
+      },
+      {
+       "name": "is_empty",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "True when the list has no elements.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "for_each",
+       "tparams": [],
+       "params": [
+        {
+         "name": "f",
+         "type": "fn(*T)",
+         "doc": "the callback"
+        }
+       ],
+       "returns": "",
+       "receiver": "self",
+       "doc": "Calls `f` with a pointer to each element, in order.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "find_by",
+       "tparams": [],
+       "params": [
+        {
+         "name": "pred",
+         "type": "fn(*T) -> bool",
+         "doc": "the test"
+        }
+       ],
+       "returns": "i64!",
+       "receiver": "self",
+       "doc": "Index of the first element for which `pred` is true.",
+       "fallible": true,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the index, or the error `NotFound`"
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "new",
+     "tparams": [
+      "T"
+     ],
+     "params": [],
+     "returns": "List<T>",
+     "receiver": null,
+     "doc": "Creates an empty list. Name the type: `let l: list.List<i32> = list.new();`.",
+     "fallible": false,
+     "returns_doc": "a new `List<T>`"
+    },
+    {
+     "name": "with_capacity",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "n",
+       "type": "i64",
+       "doc": "elements to reserve"
+      }
+     ],
+     "returns": "List<T>",
+     "receiver": null,
+     "doc": "Creates an empty list with room for `n` elements.",
+     "fallible": false,
+     "returns_doc": "a new `List<T>`"
+    },
+    {
+     "name": "from_slice",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "xs",
+       "type": "[]T"
+      }
+     ],
+     "returns": "List<T>",
+     "receiver": null,
+     "doc": "copies the elements of a slice (copyable element types)",
+     "fallible": false
+    },
+    {
+     "name": "push",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>",
+       "doc": "the list"
+      },
+      {
+       "name": "v",
+       "type": "T",
+       "doc": "the element"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "Appends `v` at the end (moved in).",
+     "fallible": false,
+     "returns_doc": "nothing"
+    },
+    {
+     "name": "pop",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>",
+       "doc": "the list"
+      }
+     ],
+     "returns": "T!",
+     "receiver": null,
+     "doc": "Removes and returns the last element.",
+     "fallible": true,
+     "returns_doc": "the element, or the error `Empty`"
+    },
+    {
+     "name": "at",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>"
+      },
+      {
+       "name": "i",
+       "type": "i64"
+      }
+     ],
+     "returns": "*T",
+     "receiver": null,
+     "doc": "a pointer to element i (bounds-checked); works for every element type",
+     "fallible": false
+    },
+    {
+     "name": "get",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>"
+      },
+      {
+       "name": "i",
+       "type": "i64"
+      }
+     ],
+     "returns": "T",
+     "receiver": null,
+     "doc": "a copy of element i (copyable element types)",
+     "fallible": false
+    },
+    {
+     "name": "set",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>"
+      },
+      {
+       "name": "i",
+       "type": "i64"
+      },
+      {
+       "name": "v",
+       "type": "T"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "replaces element i; the old element is destroyed",
+     "fallible": false
+    },
+    {
+     "name": "view",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>"
+      }
+     ],
+     "returns": "[]T",
+     "receiver": null,
+     "doc": "the live elements as a slice (valid until the next push)",
+     "fallible": false
+    },
+    {
+     "name": "insert",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>",
+       "doc": "the list"
+      },
+      {
+       "name": "i",
+       "type": "i64",
+       "doc": "where to insert (0..=len)"
+      },
+      {
+       "name": "v",
+       "type": "T",
+       "doc": "the element"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "Inserts `v` before index `i`, shifting later elements up. Panics when `i` is out of range.",
+     "fallible": false,
+     "returns_doc": "nothing"
+    },
+    {
+     "name": "remove",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>"
+      },
+      {
+       "name": "i",
+       "type": "i64"
+      }
+     ],
+     "returns": "T",
+     "receiver": null,
+     "doc": "removes element i and returns it, keeping the order of the rest",
+     "fallible": false
+    },
+    {
+     "name": "swap_remove",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>"
+      },
+      {
+       "name": "i",
+       "type": "i64"
+      }
+     ],
+     "returns": "T",
+     "receiver": null,
+     "doc": "removes element i by moving the last element into its place (O(1), does not keep the order)",
+     "fallible": false
+    },
+    {
+     "name": "extend",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>"
+      },
+      {
+       "name": "xs",
+       "type": "[]T"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "appends copies of a slice's elements (copyable element types)",
+     "fallible": false
+    },
+    {
+     "name": "clear",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "destroys every element but keeps the allocation",
+     "fallible": false
+    },
+    {
+     "name": "release",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "destroys every element and frees the storage; the list is empty (and reusable) afterwards.\nCalling it is optional: lists are released automatically at the end of their scope.",
+     "fallible": false
+    },
+    {
+     "name": "reverse",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>",
+       "doc": "the list"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "Reverses the order in place.",
+     "fallible": false,
+     "returns_doc": "nothing"
+    },
+    {
+     "name": "sort_by",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>"
+      },
+      {
+       "name": "cmp",
+       "type": "fn(*T, *T) -> i32"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "in-place heap sort, O(n log n), not stable. `cmp` returns <0, 0 or >0 like C's qsort.",
+     "fallible": false
+    },
+    {
+     "name": "for_each",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>",
+       "doc": "the list"
+      },
+      {
+       "name": "f",
+       "type": "fn(*T)",
+       "doc": "the callback"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "Calls `f` with a pointer to each element, in order.",
+     "fallible": false,
+     "returns_doc": "nothing"
+    },
+    {
+     "name": "find_by",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "l",
+       "type": "*List<T>"
+      },
+      {
+       "name": "pred",
+       "type": "fn(*T) -> bool"
+      }
+     ],
+     "returns": "i64!",
+     "receiver": null,
+     "doc": "index of the first element for which `pred` is true",
+     "fallible": true
+    }
+   ]
+  },
+  {
+   "id": "stack",
+   "name": "stack",
+   "import": "std.stack",
+   "summary": "a last-in, first-out stack for every element type.",
+   "description": "The stack owns its elements: it is destroyed automatically at the end of its scope.",
+   "example": "import std.stack;\nlet mut s: stack.Stack<i32> = stack.Stack.new();\ns.push(1);\ns.push(2);\nprintln(s.pop() ?? -1);            // 2   (pop gives `T?`: empty when there is nothing left)\nif s.peek() != null { println(*s.peek()); }     // peek gives a pointer to the top, or null",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "Stack",
+     "kind": "struct",
+     "tparams": [
+      "T"
+     ],
+     "doc": "A last-in, first-out stack that owns its elements.",
+     "fields": [
+      {
+       "name": "items",
+       "type": "List<T>"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [],
+       "returns": "Stack<T>",
+       "receiver": null,
+       "doc": "Creates an empty stack.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `Stack<T>`"
+      },
+      {
+       "name": "push",
+       "tparams": [],
+       "params": [
+        {
+         "name": "v",
+         "type": "T",
+         "doc": "the element"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Pushes `v` on top.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "pop",
+       "tparams": [],
+       "params": [],
+       "returns": "T?",
+       "receiver": "mut self",
+       "doc": "Removes the top element.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the element, or `null` when the stack is empty"
+      },
+      {
+       "name": "peek",
+       "tparams": [],
+       "params": [],
+       "returns": "*T",
+       "receiver": "self",
+       "doc": "Looks at the top element without removing it.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a pointer to it, or `null` when empty"
+      },
+      {
+       "name": "len",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Number of elements.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`i64`"
+      },
+      {
+       "name": "is_empty",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "True when the stack has no elements.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "clear",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Destroys every element.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "new",
+     "tparams": [
+      "T"
+     ],
+     "params": [],
+     "returns": "Stack<T>",
+     "receiver": null,
+     "doc": "Creates an empty stack.",
+     "fallible": false,
+     "returns_doc": "a new `Stack<T>`"
+    },
+    {
+     "name": "push",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "s",
+       "type": "*Stack<T>",
+       "doc": "the stack"
+      },
+      {
+       "name": "v",
+       "type": "T",
+       "doc": "the element"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "Pushes `v` on top.",
+     "fallible": false,
+     "returns_doc": "nothing"
+    },
+    {
+     "name": "pop",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "s",
+       "type": "*Stack<T>"
+      }
+     ],
+     "returns": "T?",
+     "receiver": null,
+     "doc": "removes and returns the top element, or null when the stack is empty",
+     "fallible": false
+    },
+    {
+     "name": "peek",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "s",
+       "type": "*Stack<T>"
+      }
+     ],
+     "returns": "*T",
+     "receiver": null,
+     "doc": "a pointer to the top element (null when empty); the element stays on the stack",
+     "fallible": false
+    },
+    {
+     "name": "len",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "s",
+       "type": "*Stack<T>",
+       "doc": "the stack"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "Number of elements.",
+     "fallible": false,
+     "returns_doc": "`i64`"
+    },
+    {
+     "name": "is_empty",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "s",
+       "type": "*Stack<T>",
+       "doc": "the stack"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True when the stack has no elements.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "clear",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "s",
+       "type": "*Stack<T>",
+       "doc": "the stack"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "Destroys every element.",
+     "fallible": false,
+     "returns_doc": "nothing"
+    }
+   ]
+  },
+  {
+   "id": "queue",
+   "name": "queue",
+   "import": "std.queue",
+   "summary": "a first-in, first-out queue (a growable ring buffer) for every element type.",
+   "description": "The queue owns its elements: it is destroyed automatically at the end of its scope.",
+   "example": "import std.queue;\nlet mut q: queue.Queue<str> = queue.Queue.new();\nq.push(\"a\");\nq.push(\"b\");\nprintln(q.pop() ?? \"empty\");       // a   (pop gives `T?`)\nprintln(q.len());                  // 1",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "Queue",
+     "kind": "struct",
+     "tparams": [
+      "T"
+     ],
+     "doc": "A first-in, first-out queue (a ring buffer) that owns its elements.",
+     "fields": [
+      {
+       "name": "items",
+       "type": "[]T"
+      },
+      {
+       "name": "head",
+       "type": "i64"
+      },
+      {
+       "name": "count",
+       "type": "i64"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [],
+       "returns": "Queue<T>",
+       "receiver": null,
+       "doc": "Creates an empty queue.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `Queue<T>`"
+      },
+      {
+       "name": "with_capacity",
+       "tparams": [],
+       "params": [
+        {
+         "name": "n",
+         "type": "i64",
+         "doc": "elements to reserve"
+        }
+       ],
+       "returns": "Queue<T>",
+       "receiver": null,
+       "doc": "Creates an empty queue with room for `n` elements.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `Queue<T>`"
+      },
+      {
+       "name": "push",
+       "tparams": [],
+       "params": [
+        {
+         "name": "v",
+         "type": "T",
+         "doc": "the element"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Adds `v` at the back.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "pop",
+       "tparams": [],
+       "params": [],
+       "returns": "T?",
+       "receiver": "mut self",
+       "doc": "Removes the front element (first in, first out).",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the element, or `null` when empty"
+      },
+      {
+       "name": "peek",
+       "tparams": [],
+       "params": [],
+       "returns": "*T",
+       "receiver": "self",
+       "doc": "Looks at the front element without removing it.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a pointer to it, or `null` when empty"
+      },
+      {
+       "name": "len",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Number of elements.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`i64`"
+      },
+      {
+       "name": "is_empty",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "True when the queue has no elements.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "clear",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Destroys every element.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "release",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Destroys the elements and frees the buffer now instead of at the end of scope.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "new",
+     "tparams": [
+      "T"
+     ],
+     "params": [],
+     "returns": "Queue<T>",
+     "receiver": null,
+     "doc": "Creates an empty queue.",
+     "fallible": false,
+     "returns_doc": "a new `Queue<T>`"
+    },
+    {
+     "name": "with_capacity",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "n",
+       "type": "i64",
+       "doc": "elements to reserve"
+      }
+     ],
+     "returns": "Queue<T>",
+     "receiver": null,
+     "doc": "Creates an empty queue with room for `n` elements.",
+     "fallible": false,
+     "returns_doc": "a new `Queue<T>`"
+    },
+    {
+     "name": "push",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "q",
+       "type": "*Queue<T>"
+      },
+      {
+       "name": "v",
+       "type": "T"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "adds an element at the back",
+     "fallible": false
+    },
+    {
+     "name": "pop",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "q",
+       "type": "*Queue<T>"
+      }
+     ],
+     "returns": "T?",
+     "receiver": null,
+     "doc": "removes and returns the front element, or null when the queue is empty",
+     "fallible": false
+    },
+    {
+     "name": "peek",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "q",
+       "type": "*Queue<T>"
+      }
+     ],
+     "returns": "*T",
+     "receiver": null,
+     "doc": "a pointer to the front element (null when empty); the element stays in the queue",
+     "fallible": false
+    },
+    {
+     "name": "len",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "q",
+       "type": "*Queue<T>",
+       "doc": "the queue"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "Number of elements.",
+     "fallible": false,
+     "returns_doc": "`i64`"
+    },
+    {
+     "name": "is_empty",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "q",
+       "type": "*Queue<T>",
+       "doc": "the queue"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True when the queue has no elements.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "clear",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "q",
+       "type": "*Queue<T>"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "destroys every element but keeps the storage",
+     "fallible": false
+    },
+    {
+     "name": "release",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "q",
+       "type": "*Queue<T>"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "destroys every element and frees the storage (optional: queues are released at the end of their scope)",
+     "fallible": false
+    }
+   ]
+  },
+  {
+   "id": "map",
+   "name": "map",
+   "import": "std.map",
+   "summary": "a hash map from `String` keys to values of any type (open addressing, linear probing).",
+   "description": "The map owns its keys and values: it is destroyed automatically at the end of its scope, running each\nvalue's destructor. Values with destructors are moved in (`set`) and out (`remove`) or borrowed (`get`);\n`get_or` needs a copyable value type. The iteration order of `for_each` and `keys` is unspecified.",
+   "example": "import std.map;\nlet mut ages: map.HashMap<i32> = map.HashMap.new();\nages.set(\"ann\", 31);                     // keys are `str`; the map keeps its own copy\nages.set(\"bob\", 27);\nprintln(*ages.get(\"ann\"));              // get gives a pointer to the value, or null\nprintln(ages.get_or(\"zed\", -1));         // a copy of the value, or the default\nif ages.has(\"bob\") { ages.remove(\"bob\"); }",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "HashMap",
+     "kind": "struct",
+     "tparams": [
+      "V"
+     ],
+     "doc": "A hash map from `String` keys to values of type `V`. It owns its keys and values.",
+     "fields": [
+      {
+       "name": "kk",
+       "type": "[]String"
+      },
+      {
+       "name": "vv",
+       "type": "[]V"
+      },
+      {
+       "name": "st",
+       "type": "[]u8"
+      },
+      {
+       "name": "cap",
+       "type": "i64"
+      },
+      {
+       "name": "count",
+       "type": "i64"
+      },
+      {
+       "name": "used",
+       "type": "i64"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [],
+       "returns": "HashMap<V>",
+       "receiver": null,
+       "doc": "Creates an empty map.",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ],
+       "returns_doc": "a new `HashMap<V>`"
+      },
+      {
+       "name": "set",
+       "tparams": [],
+       "params": [
+        {
+         "name": "key",
+         "type": "str",
+         "doc": "the key"
+        },
+        {
+         "name": "v",
+         "type": "V",
+         "doc": "the value"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Stores `v` under `key` (the map copies the key); an existing value is replaced and destroyed.",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "get",
+       "tparams": [],
+       "params": [
+        {
+         "name": "key",
+         "type": "str",
+         "doc": "the key"
+        }
+       ],
+       "returns": "*V",
+       "receiver": "self",
+       "doc": "Looks a key up and gives access to the stored value.",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ],
+       "returns_doc": "a pointer to the value, or `null` when the key is absent"
+      },
+      {
+       "name": "get_or",
+       "tparams": [],
+       "params": [
+        {
+         "name": "key",
+         "type": "str",
+         "doc": "the key"
+        },
+        {
+         "name": "default",
+         "type": "V",
+         "doc": "the fallback"
+        }
+       ],
+       "returns": "V",
+       "receiver": "self",
+       "doc": "Looks a key up, falling back to `default`. Needs a copyable value type.",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ],
+       "returns_doc": "a copy of the value or `default`"
+      },
+      {
+       "name": "has",
+       "tparams": [],
+       "params": [
+        {
+         "name": "key",
+         "type": "str",
+         "doc": "the key"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "True when `key` is present.",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ],
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "remove",
+       "tparams": [],
+       "params": [
+        {
+         "name": "key",
+         "type": "str",
+         "doc": "the key"
+        }
+       ],
+       "returns": "V?",
+       "receiver": "mut self",
+       "doc": "Removes an entry and hands the value back.",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ],
+       "returns_doc": "the value, or `null` when the key was absent"
+      },
+      {
+       "name": "len",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Number of entries.",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ],
+       "returns_doc": "`i64`"
+      },
+      {
+       "name": "is_empty",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "True when the map has no entries.",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ],
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "for_each",
+       "tparams": [],
+       "params": [
+        {
+         "name": "f",
+         "type": "fn(str, *V)",
+         "doc": "the callback"
+        }
+       ],
+       "returns": "",
+       "receiver": "self",
+       "doc": "Calls `f` with each key and a pointer to its value, in unspecified order.",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "keys",
+       "tparams": [],
+       "params": [],
+       "returns": "List<String>",
+       "receiver": "self",
+       "doc": "Collects every key, in unspecified order.",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ],
+       "returns_doc": "a new `List<String>`"
+      },
+      {
+       "name": "clear",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Removes every entry.",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "release",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Frees the table now instead of at the end of scope.",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ],
+       "returns_doc": "nothing"
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "new",
+     "tparams": [
+      "V"
+     ],
+     "params": [],
+     "returns": "HashMap<V>",
+     "receiver": null,
+     "doc": "Creates an empty map.",
+     "fallible": false,
+     "returns_doc": "a new `HashMap<V>`"
+    },
+    {
+     "name": "set",
+     "tparams": [
+      "V"
+     ],
+     "params": [
+      {
+       "name": "m",
+       "type": "*HashMap<V>"
+      },
+      {
+       "name": "key",
+       "type": "str"
+      },
+      {
+       "name": "v",
+       "type": "V"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "stores `v` under `key`; an existing value for the key is replaced (and destroyed)",
+     "fallible": false
+    },
+    {
+     "name": "get",
+     "tparams": [
+      "V"
+     ],
+     "params": [
+      {
+       "name": "m",
+       "type": "*HashMap<V>"
+      },
+      {
+       "name": "key",
+       "type": "str"
+      }
+     ],
+     "returns": "*V",
+     "receiver": null,
+     "doc": "a pointer to the value stored under `key`, or null",
+     "fallible": false
+    },
+    {
+     "name": "get_or",
+     "tparams": [
+      "V"
+     ],
+     "params": [
+      {
+       "name": "m",
+       "type": "*HashMap<V>"
+      },
+      {
+       "name": "key",
+       "type": "str"
+      },
+      {
+       "name": "default",
+       "type": "V"
+      }
+     ],
+     "returns": "V",
+     "receiver": null,
+     "doc": "a copy of the value under `key`, or `default` (copyable value types)",
+     "fallible": false
+    },
+    {
+     "name": "has",
+     "tparams": [
+      "V"
+     ],
+     "params": [
+      {
+       "name": "m",
+       "type": "*HashMap<V>",
+       "doc": "the map"
+      },
+      {
+       "name": "key",
+       "type": "str",
+       "doc": "the key"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True when `key` is present.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "remove",
+     "tparams": [
+      "V"
+     ],
+     "params": [
+      {
+       "name": "m",
+       "type": "*HashMap<V>"
+      },
+      {
+       "name": "key",
+       "type": "str"
+      }
+     ],
+     "returns": "V?",
+     "receiver": null,
+     "doc": "removes `key` and returns its value, or null when it was not there",
+     "fallible": false
+    },
+    {
+     "name": "len",
+     "tparams": [
+      "V"
+     ],
+     "params": [
+      {
+       "name": "m",
+       "type": "*HashMap<V>",
+       "doc": "the map"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "Number of entries.",
+     "fallible": false,
+     "returns_doc": "`i64`"
+    },
+    {
+     "name": "is_empty",
+     "tparams": [
+      "V"
+     ],
+     "params": [
+      {
+       "name": "m",
+       "type": "*HashMap<V>",
+       "doc": "the map"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True when the map has no entries.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "for_each",
+     "tparams": [
+      "V"
+     ],
+     "params": [
+      {
+       "name": "m",
+       "type": "*HashMap<V>"
+      },
+      {
+       "name": "f",
+       "type": "fn(str, *V)"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "calls `f(key, &value)` for every entry",
+     "fallible": false
+    },
+    {
+     "name": "keys",
+     "tparams": [
+      "V"
+     ],
+     "params": [
+      {
+       "name": "m",
+       "type": "*HashMap<V>"
+      }
+     ],
+     "returns": "List<String>",
+     "receiver": null,
+     "doc": "copies of all the keys",
+     "fallible": false
+    },
+    {
+     "name": "clear",
+     "tparams": [
+      "V"
+     ],
+     "params": [
+      {
+       "name": "m",
+       "type": "*HashMap<V>"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "destroys every entry but keeps the storage",
+     "fallible": false
+    },
+    {
+     "name": "release",
+     "tparams": [
+      "V"
+     ],
+     "params": [
+      {
+       "name": "m",
+       "type": "*HashMap<V>"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "destroys every entry and frees the storage (optional: maps are released at the end of their scope)",
+     "fallible": false
+    }
+   ]
+  },
+  {
+   "id": "tree",
+   "name": "tree",
+   "import": "std.tree",
+   "summary": "an ordered set kept in a binary search tree, for every element type that implements `Ord`.",
+   "description": "Numbers, `str` and `String` are ordered already. For your own types, implement `Ord`:\n\nThe tree owns its elements (an equal element is not inserted twice) and is destroyed automatically\nat the end of its scope. Inserting, finding and removing take time proportional to the tree's height.\n`has`, `get` and `remove` take the value to look for by value (a `String` probe is consumed).",
+   "example": "import std.tree;\n\nstruct Score { points: i32 }\n\nimpl tree.Ord for Score {\n    fn cmp(self, other: *Score) -> i32 { return self.points - other.points; }\n}\n\nfn main() {\n    let mut t: tree.Tree<Score> = tree.Tree.new();\n    t.insert(Score { points: 30 });\n    t.insert(Score { points: 10 });\n    t.insert(Score { points: 20 });\n    println(\"{}\", t.min().points);   // 10\n    println(\"{}\", t.len());          // 3\n}",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "Tree",
+     "kind": "struct",
+     "tparams": [
+      "T: Ord"
+     ],
+     "doc": "An ordered set in a binary search tree. `T` must implement `Ord` (a method `cmp`).",
+     "fields": [
+      {
+       "name": "root",
+       "type": "*Node<T>"
+      },
+      {
+       "name": "count",
+       "type": "i64"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [],
+       "returns": "Tree<T>",
+       "receiver": null,
+       "doc": "Creates an empty tree. `T` must implement `Ord`.",
+       "fallible": false,
+       "impl_tparams": [
+        "T: Ord"
+       ],
+       "returns_doc": "a new `Tree<T>`"
+      },
+      {
+       "name": "insert",
+       "tparams": [],
+       "params": [
+        {
+         "name": "v",
+         "type": "T",
+         "doc": "the element"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "mut self",
+       "doc": "Adds `v` in sorted position. When an equal element is already stored nothing changes.",
+       "fallible": false,
+       "impl_tparams": [
+        "T: Ord"
+       ],
+       "returns_doc": "`true` when it was added, `false` when an equal element already exists"
+      },
+      {
+       "name": "get",
+       "tparams": [],
+       "params": [
+        {
+         "name": "probe",
+         "type": "T",
+         "doc": "a value to compare with"
+        }
+       ],
+       "returns": "*T",
+       "receiver": "self",
+       "doc": "Finds the stored element that compares equal to `probe`.",
+       "fallible": false,
+       "impl_tparams": [
+        "T: Ord"
+       ],
+       "returns_doc": "a pointer to it, or `null`"
+      },
+      {
+       "name": "has",
+       "tparams": [],
+       "params": [
+        {
+         "name": "probe",
+         "type": "T",
+         "doc": "a value to compare with"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "True when an element equal to `probe` is stored.",
+       "fallible": false,
+       "impl_tparams": [
+        "T: Ord"
+       ],
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "remove",
+       "tparams": [],
+       "params": [
+        {
+         "name": "probe",
+         "type": "T",
+         "doc": "a value to compare with"
+        }
+       ],
+       "returns": "T?",
+       "receiver": "mut self",
+       "doc": "Removes the element equal to `probe`.",
+       "fallible": false,
+       "impl_tparams": [
+        "T: Ord"
+       ],
+       "returns_doc": "the element, or `null` when none matched"
+      },
+      {
+       "name": "min",
+       "tparams": [],
+       "params": [],
+       "returns": "*T",
+       "receiver": "self",
+       "doc": "The smallest element.",
+       "fallible": false,
+       "impl_tparams": [
+        "T: Ord"
+       ],
+       "returns_doc": "a pointer to it, or `null` when empty"
+      },
+      {
+       "name": "max",
+       "tparams": [],
+       "params": [],
+       "returns": "*T",
+       "receiver": "self",
+       "doc": "The largest element.",
+       "fallible": false,
+       "impl_tparams": [
+        "T: Ord"
+       ],
+       "returns_doc": "a pointer to it, or `null` when empty"
+      },
+      {
+       "name": "len",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Number of elements.",
+       "fallible": false,
+       "impl_tparams": [
+        "T: Ord"
+       ],
+       "returns_doc": "`i64`"
+      },
+      {
+       "name": "is_empty",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "True when the tree has no elements.",
+       "fallible": false,
+       "impl_tparams": [
+        "T: Ord"
+       ],
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "height",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Length of the longest path from the root.",
+       "fallible": false,
+       "impl_tparams": [
+        "T: Ord"
+       ],
+       "returns_doc": "`i64` (0 when empty)"
+      },
+      {
+       "name": "for_each",
+       "tparams": [],
+       "params": [
+        {
+         "name": "f",
+         "type": "fn(*T)",
+         "doc": "the callback"
+        }
+       ],
+       "returns": "",
+       "receiver": "self",
+       "doc": "Calls `f` with a pointer to each element in ascending order.",
+       "fallible": false,
+       "impl_tparams": [
+        "T: Ord"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "to_list",
+       "tparams": [],
+       "params": [],
+       "returns": "List<T>",
+       "receiver": "self",
+       "doc": "Copies the elements into a list in ascending order (copyable element types).",
+       "fallible": false,
+       "impl_tparams": [
+        "T: Ord"
+       ],
+       "returns_doc": "a new `List<T>`"
+      },
+      {
+       "name": "clear",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Destroys every element.",
+       "fallible": false,
+       "impl_tparams": [
+        "T: Ord"
+       ],
+       "returns_doc": "nothing"
+      }
+     ]
+    }
+   ],
+   "traits": [
+    {
+     "name": "Ord",
+     "doc": "",
+     "methods": [
+      {
+       "name": "cmp",
+       "tparams": [],
+       "params": [
+        {
+         "name": "other",
+         "type": "*Self"
+        }
+       ],
+       "returns": "i32",
+       "receiver": "self",
+       "doc": "",
+       "fallible": false
+      }
+     ]
+    }
+   ],
+   "functions": [
+    {
+     "name": "new",
+     "tparams": [
+      "T: Ord"
+     ],
+     "params": [],
+     "returns": "Tree<T>",
+     "receiver": null,
+     "doc": "Creates an empty tree. `T` must implement `Ord`.",
+     "fallible": false,
+     "returns_doc": "a new `Tree<T>`"
+    },
+    {
+     "name": "insert",
+     "tparams": [
+      "T: Ord"
+     ],
+     "params": [
+      {
+       "name": "t",
+       "type": "*Tree<T>"
+      },
+      {
+       "name": "v",
+       "type": "T"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "adds `v`; false (and nothing changes) when an equal element is already in the tree",
+     "fallible": false
+    },
+    {
+     "name": "get",
+     "tparams": [
+      "T: Ord"
+     ],
+     "params": [
+      {
+       "name": "t",
+       "type": "*Tree<T>"
+      },
+      {
+       "name": "probe",
+       "type": "T"
+      }
+     ],
+     "returns": "*T",
+     "receiver": null,
+     "doc": "a pointer to the element equal to `probe`, or null",
+     "fallible": false
+    },
+    {
+     "name": "has",
+     "tparams": [
+      "T: Ord"
+     ],
+     "params": [
+      {
+       "name": "t",
+       "type": "*Tree<T>",
+       "doc": "the tree"
+      },
+      {
+       "name": "probe",
+       "type": "T",
+       "doc": "a value to compare with"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True when an element equal to `probe` is stored.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "remove",
+     "tparams": [
+      "T: Ord"
+     ],
+     "params": [
+      {
+       "name": "t",
+       "type": "*Tree<T>"
+      },
+      {
+       "name": "probe",
+       "type": "T"
+      }
+     ],
+     "returns": "T?",
+     "receiver": null,
+     "doc": "removes the element equal to `probe` and returns it, or null when there is none",
+     "fallible": false
+    },
+    {
+     "name": "min",
+     "tparams": [
+      "T: Ord"
+     ],
+     "params": [
+      {
+       "name": "t",
+       "type": "*Tree<T>",
+       "doc": "the tree"
+      }
+     ],
+     "returns": "*T",
+     "receiver": null,
+     "doc": "The smallest element.",
+     "fallible": false,
+     "returns_doc": "a pointer to it, or `null` when empty"
+    },
+    {
+     "name": "max",
+     "tparams": [
+      "T: Ord"
+     ],
+     "params": [
+      {
+       "name": "t",
+       "type": "*Tree<T>",
+       "doc": "the tree"
+      }
+     ],
+     "returns": "*T",
+     "receiver": null,
+     "doc": "The largest element.",
+     "fallible": false,
+     "returns_doc": "a pointer to it, or `null` when empty"
+    },
+    {
+     "name": "len",
+     "tparams": [
+      "T: Ord"
+     ],
+     "params": [
+      {
+       "name": "t",
+       "type": "*Tree<T>",
+       "doc": "the tree"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "Number of elements.",
+     "fallible": false,
+     "returns_doc": "`i64`"
+    },
+    {
+     "name": "is_empty",
+     "tparams": [
+      "T: Ord"
+     ],
+     "params": [
+      {
+       "name": "t",
+       "type": "*Tree<T>",
+       "doc": "the tree"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True when the tree has no elements.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "height",
+     "tparams": [
+      "T: Ord"
+     ],
+     "params": [
+      {
+       "name": "t",
+       "type": "*Tree<T>"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "the number of levels (0 for an empty tree)",
+     "fallible": false
+    },
+    {
+     "name": "for_each",
+     "tparams": [
+      "T: Ord"
+     ],
+     "params": [
+      {
+       "name": "t",
+       "type": "*Tree<T>"
+      },
+      {
+       "name": "f",
+       "type": "fn(*T)"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "calls `f(&element)` for every element, smallest first",
+     "fallible": false
+    },
+    {
+     "name": "to_list",
+     "tparams": [
+      "T: Ord"
+     ],
+     "params": [
+      {
+       "name": "t",
+       "type": "*Tree<T>"
+      }
+     ],
+     "returns": "List<T>",
+     "receiver": null,
+     "doc": "the elements in order, as a list of copies (copyable element types)",
+     "fallible": false
+    },
+    {
+     "name": "clear",
+     "tparams": [
+      "T: Ord"
+     ],
+     "params": [
+      {
+       "name": "t",
+       "type": "*Tree<T>"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "destroys every element; the tree is empty (and reusable) afterwards",
+     "fallible": false
+    }
+   ]
+  },
+  {
+   "id": "mem",
+   "name": "mem",
+   "import": "std.mem",
+   "summary": "small generic helpers.",
+   "description": "",
+   "example": "import std.mem;\n\nlet mut a = 1;\nlet mut b = 2;\nmem.swap(&a, &b);                 // a == 2, b == 1\nprintln(\"{}\", mem.max(a, b));     // 2\nlet mut xs = [5, 3, 9, 1];\nmem.sort(xs[0..4]);               // 1 3 5 9",
+   "errors": [],
+   "consts": [],
+   "types": [],
+   "traits": [],
+   "functions": [
+    {
+     "name": "swap",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "a",
+       "type": "*T",
+       "doc": "first pointer"
+      },
+      {
+       "name": "b",
+       "type": "*T",
+       "doc": "second pointer"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "Exchanges the values behind two pointers.",
+     "fallible": false,
+     "returns_doc": "nothing"
+    },
+    {
+     "name": "min",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "a",
+       "type": "T",
+       "doc": "first"
+      },
+      {
+       "name": "b",
+       "type": "T",
+       "doc": "second"
+      }
+     ],
+     "returns": "T",
+     "receiver": null,
+     "doc": "The smaller of two values of any type with `<`.",
+     "fallible": false,
+     "returns_doc": "`T`"
+    },
+    {
+     "name": "max",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "a",
+       "type": "T",
+       "doc": "first"
+      },
+      {
+       "name": "b",
+       "type": "T",
+       "doc": "second"
+      }
+     ],
+     "returns": "T",
+     "receiver": null,
+     "doc": "The larger of two values of any type with `>`.",
+     "fallible": false,
+     "returns_doc": "`T`"
+    },
+    {
+     "name": "sort",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "s",
+       "type": "[]T"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "in-place insertion sort for any element type with `<`",
+     "fallible": false
+    }
+   ]
+  },
+  {
+   "id": "io",
+   "name": "io",
+   "import": "std.io",
+   "summary": "character-level input/output on stdin/stdout (libc through FFI).",
+   "description": "",
+   "example": "import std.io;\n\nlet line = io.get_line().catch(|e| string_new());\nprintln(\"you typed: {line}\");\nio.putc('!');\nprintln(\"\");",
+   "errors": [
+    {
+     "name": "Eof",
+     "doc": "input ended before anything could be read"
+    }
+   ],
+   "consts": [],
+   "types": [],
+   "traits": [],
+   "functions": [
+    {
+     "name": "getc",
+     "tparams": [],
+     "params": [],
+     "returns": "u8!",
+     "receiver": null,
+     "doc": "Read one byte from stdin. Fails with io.Eof at end of input (or Ctrl+D).",
+     "fallible": true
+    },
+    {
+     "name": "putc",
+     "tparams": [],
+     "params": [
+      {
+       "name": "c",
+       "type": "u8"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "Write one byte to stdout.",
+     "fallible": false
+    },
+    {
+     "name": "get_line",
+     "tparams": [],
+     "params": [],
+     "returns": "String!",
+     "receiver": null,
+     "doc": "Read one line from stdin, without its terminator. A line ends at '\\n', '\\r', \"\\r\\n\",\nor at end of input (Ctrl+D). Fails with io.Eof only if input ended before any byte was read.",
+     "fallible": true
+    },
+    {
+     "name": "flush",
+     "tparams": [],
+     "params": [],
+     "returns": "",
+     "receiver": null,
+     "doc": "Flush buffered output (useful before reading, e.g. after printing a prompt).",
+     "fallible": false
+    }
+   ]
+  },
+  {
+   "id": "fs",
+   "name": "fs",
+   "import": "std.fs",
+   "summary": "whole-file reading and writing, and a few file-system queries (libc through FFI).",
+   "description": "",
+   "example": "import std.fs;\n\nfn main() {\n    fs.write(\"hello.txt\", \"hi\\n\").catch(|e| { panic(\"cannot write\"); });\n    let text = fs.read_to_string(\"hello.txt\").catch(|e| string_new());\n    println(\"{}\", text);\n    fs.remove(\"hello.txt\").catch(|e| { println(\"could not remove it\"); });\n}",
+   "errors": [
+    {
+     "name": "NotFound",
+     "doc": "the file or directory does not exist"
+    },
+    {
+     "name": "IoError",
+     "doc": "the operation failed (permissions, disk, ...)"
+    }
+   ],
+   "consts": [],
+   "types": [],
+   "traits": [],
+   "functions": [
+    {
+     "name": "read_to_string",
+     "tparams": [],
+     "params": [
+      {
+       "name": "path",
+       "type": "str"
+      }
+     ],
+     "returns": "String!",
+     "receiver": null,
+     "doc": "the whole file as a String",
+     "fallible": true
+    },
+    {
+     "name": "read_lines",
+     "tparams": [],
+     "params": [
+      {
+       "name": "path",
+       "type": "str"
+      }
+     ],
+     "returns": "List<String>!",
+     "receiver": null,
+     "doc": "the file split into lines (without the line terminators)",
+     "fallible": true
+    },
+    {
+     "name": "write",
+     "tparams": [],
+     "params": [
+      {
+       "name": "path",
+       "type": "str"
+      },
+      {
+       "name": "data",
+       "type": "str"
+      }
+     ],
+     "returns": "void!",
+     "receiver": null,
+     "doc": "creates or replaces the file",
+     "fallible": true
+    },
+    {
+     "name": "append",
+     "tparams": [],
+     "params": [
+      {
+       "name": "path",
+       "type": "str"
+      },
+      {
+       "name": "data",
+       "type": "str"
+      }
+     ],
+     "returns": "void!",
+     "receiver": null,
+     "doc": "adds to the end of the file (creating it if needed)",
+     "fallible": true
+    },
+    {
+     "name": "exists",
+     "tparams": [],
+     "params": [
+      {
+       "name": "path",
+       "type": "str",
+       "doc": "the path"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True when something exists at `path` (file or directory).",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "is_file",
+     "tparams": [],
+     "params": [
+      {
+       "name": "path",
+       "type": "str",
+       "doc": "the path"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True when `path` is a regular file.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "is_dir",
+     "tparams": [],
+     "params": [
+      {
+       "name": "path",
+       "type": "str",
+       "doc": "the path"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True when `path` is a directory.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "size",
+     "tparams": [],
+     "params": [
+      {
+       "name": "path",
+       "type": "str"
+      }
+     ],
+     "returns": "i64!",
+     "receiver": null,
+     "doc": "size in bytes of a file",
+     "fallible": true
+    },
+    {
+     "name": "remove",
+     "tparams": [],
+     "params": [
+      {
+       "name": "path",
+       "type": "str",
+       "doc": "the file"
+      }
+     ],
+     "returns": "void!",
+     "receiver": null,
+     "doc": "Deletes a file.",
+     "fallible": true,
+     "returns_doc": "nothing, or the error `NotFound` / `IoError`"
+    },
+    {
+     "name": "make_dir",
+     "tparams": [],
+     "params": [
+      {
+       "name": "path",
+       "type": "str",
+       "doc": "the directory"
+      }
+     ],
+     "returns": "void!",
+     "receiver": null,
+     "doc": "Creates a directory.",
+     "fallible": true,
+     "returns_doc": "nothing, or the error `IoError`"
+    }
+   ]
+  },
+  {
+   "id": "env",
+   "name": "env",
+   "import": "std.env",
+   "summary": "command-line arguments and environment variables (libc through FFI).",
+   "description": "",
+   "example": "import std.env;\n\nprintln(\"{} arguments\", env.arg_count());\nlet home = env.get(\"HOME\").catch(|e| string_new());\nprintln(\"home = {home}\");",
+   "errors": [
+    {
+     "name": "NotSet",
+     "doc": "the environment variable is not set"
+    }
+   ],
+   "consts": [],
+   "types": [],
+   "traits": [],
+   "functions": [
+    {
+     "name": "arg_count",
+     "tparams": [],
+     "params": [],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "Number of command-line arguments, including the program name.",
+     "fallible": false,
+     "returns_doc": "`i64`"
+    },
+    {
+     "name": "arg",
+     "tparams": [],
+     "params": [
+      {
+       "name": "i",
+       "type": "i64"
+      }
+     ],
+     "returns": "str",
+     "receiver": null,
+     "doc": "argument i (0 is the program name); empty if out of range",
+     "fallible": false
+    },
+    {
+     "name": "args",
+     "tparams": [],
+     "params": [],
+     "returns": "List<String>",
+     "receiver": null,
+     "doc": "every argument, copied into owned strings",
+     "fallible": false
+    },
+    {
+     "name": "get",
+     "tparams": [],
+     "params": [
+      {
+       "name": "name",
+       "type": "str"
+      }
+     ],
+     "returns": "String!",
+     "receiver": null,
+     "doc": "the value of an environment variable",
+     "fallible": true
+    },
+    {
+     "name": "has",
+     "tparams": [],
+     "params": [
+      {
+       "name": "name",
+       "type": "str",
+       "doc": "the variable"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True when the environment variable `name` is set.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    }
+   ]
+  },
+  {
+   "id": "time",
+   "name": "time",
+   "import": "std.time",
+   "summary": "clocks, durations, sleeping and calendar dates.",
+   "description": "",
+   "example": "import std.time;\n\nlet sw = time.Stopwatch.start();\ntime.sleep_ms(50);\nprintln(\"took {} ms\", sw.elapsed_ms());\nlet now = time.now_utc();\nprintln(\"{}\", now.iso());",
+   "errors": [],
+   "consts": [
+    {
+     "name": "NS_PER_US",
+     "type": "i64",
+     "value": "1000",
+     "doc": "nanoseconds in a microsecond"
+    },
+    {
+     "name": "NS_PER_MS",
+     "type": "i64",
+     "value": "1000000",
+     "doc": "nanoseconds in a millisecond"
+    },
+    {
+     "name": "NS_PER_SEC",
+     "type": "i64",
+     "value": "1000000000",
+     "doc": "nanoseconds in a second"
+    }
+   ],
+   "types": [
+    {
+     "name": "Duration",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "A span of time with nanosecond resolution.",
+     "fields": [
+      {
+       "name": "ns",
+       "type": "i64"
+      }
+     ],
+     "methods": [
+      {
+       "name": "from_ns",
+       "tparams": [],
+       "params": [
+        {
+         "name": "ns",
+         "type": "i64",
+         "doc": "nanoseconds"
+        }
+       ],
+       "returns": "Duration",
+       "receiver": null,
+       "doc": "A span of nanoseconds.",
+       "fallible": false,
+       "returns_doc": "a `Duration`"
+      },
+      {
+       "name": "from_us",
+       "tparams": [],
+       "params": [
+        {
+         "name": "us",
+         "type": "i64",
+         "doc": "microseconds"
+        }
+       ],
+       "returns": "Duration",
+       "receiver": null,
+       "doc": "A span of microseconds.",
+       "fallible": false,
+       "returns_doc": "a `Duration`"
+      },
+      {
+       "name": "from_ms",
+       "tparams": [],
+       "params": [
+        {
+         "name": "ms",
+         "type": "i64",
+         "doc": "milliseconds"
+        }
+       ],
+       "returns": "Duration",
+       "receiver": null,
+       "doc": "A span of milliseconds.",
+       "fallible": false,
+       "returns_doc": "a `Duration`"
+      },
+      {
+       "name": "from_secs",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "i64",
+         "doc": "seconds"
+        }
+       ],
+       "returns": "Duration",
+       "receiver": null,
+       "doc": "A span of whole seconds.",
+       "fallible": false,
+       "returns_doc": "a `Duration`"
+      },
+      {
+       "name": "from_secs_f64",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "f64",
+         "doc": "seconds"
+        }
+       ],
+       "returns": "Duration",
+       "receiver": null,
+       "doc": "A span of fractional seconds.",
+       "fallible": false,
+       "returns_doc": "a `Duration`"
+      },
+      {
+       "name": "as_ns",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "The span in nanoseconds.",
+       "fallible": false,
+       "returns_doc": "`i64`"
+      },
+      {
+       "name": "as_us",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "The span in microseconds (truncated).",
+       "fallible": false,
+       "returns_doc": "`i64`"
+      },
+      {
+       "name": "as_ms",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "The span in milliseconds (truncated).",
+       "fallible": false,
+       "returns_doc": "`i64`"
+      },
+      {
+       "name": "as_secs",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "The span in whole seconds (truncated).",
+       "fallible": false,
+       "returns_doc": "`i64`"
+      },
+      {
+       "name": "as_secs_f64",
+       "tparams": [],
+       "params": [],
+       "returns": "f64",
+       "receiver": "self",
+       "doc": "The span in seconds.",
+       "fallible": false,
+       "returns_doc": "`f64`"
+      },
+      {
+       "name": "add",
+       "tparams": [],
+       "params": [
+        {
+         "name": "o",
+         "type": "Duration",
+         "doc": "the span to add"
+        }
+       ],
+       "returns": "Duration",
+       "receiver": "self",
+       "doc": "Sum of two spans.",
+       "fallible": false,
+       "returns_doc": "a `Duration`"
+      },
+      {
+       "name": "sub",
+       "tparams": [],
+       "params": [
+        {
+         "name": "o",
+         "type": "Duration",
+         "doc": "the span to subtract"
+        }
+       ],
+       "returns": "Duration",
+       "receiver": "self",
+       "doc": "Difference of two spans.",
+       "fallible": false,
+       "returns_doc": "a `Duration`"
+      },
+      {
+       "name": "mul",
+       "tparams": [],
+       "params": [
+        {
+         "name": "k",
+         "type": "i64",
+         "doc": "the factor"
+        }
+       ],
+       "returns": "Duration",
+       "receiver": "self",
+       "doc": "The span multiplied by a whole number.",
+       "fallible": false,
+       "returns_doc": "a `Duration`"
+      },
+      {
+       "name": "less",
+       "tparams": [],
+       "params": [
+        {
+         "name": "o",
+         "type": "Duration",
+         "doc": "the span to compare with"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "True when this span is shorter than `o`.",
+       "fallible": false,
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "sleep",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "self",
+       "doc": "Pauses the thread for this long.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "to_string",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "\"850ns\", \"12.500us\", \"3.250ms\", \"1.500s\", \"2m05.250s\"",
+       "fallible": false,
+       "via": "Display"
+      }
+     ]
+    },
+    {
+     "name": "Stopwatch",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "A monotonic stopwatch.",
+     "fields": [
+      {
+       "name": "began",
+       "type": "i64"
+      }
+     ],
+     "methods": [
+      {
+       "name": "start",
+       "tparams": [],
+       "params": [],
+       "returns": "Stopwatch",
+       "receiver": null,
+       "doc": "Starts a monotonic stopwatch.",
+       "fallible": false,
+       "returns_doc": "a `Stopwatch`"
+      },
+      {
+       "name": "elapsed",
+       "tparams": [],
+       "params": [],
+       "returns": "Duration",
+       "receiver": "self",
+       "doc": "Time since `start` (or the last `reset`).",
+       "fallible": false,
+       "returns_doc": "a `Duration`"
+      },
+      {
+       "name": "elapsed_ms",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Milliseconds since `start` (or the last `reset`).",
+       "fallible": false,
+       "returns_doc": "`i64`"
+      },
+      {
+       "name": "elapsed_secs",
+       "tparams": [],
+       "params": [],
+       "returns": "f64",
+       "receiver": "self",
+       "doc": "Seconds since `start` (or the last `reset`).",
+       "fallible": false,
+       "returns_doc": "`f64`"
+      },
+      {
+       "name": "lap",
+       "tparams": [],
+       "params": [],
+       "returns": "Duration",
+       "receiver": "mut self",
+       "doc": "returns the time since the last start/lap and begins a new lap",
+       "fallible": false
+      },
+      {
+       "name": "reset",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Restarts the count from now.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      }
+     ]
+    },
+    {
+     "name": "DateTime",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "A calendar date and time (proleptic Gregorian calendar).",
+     "fields": [
+      {
+       "name": "year",
+       "type": "i32",
+       "doc": "the year"
+      },
+      {
+       "name": "month",
+       "type": "i32",
+       "doc": "1..=12"
+      },
+      {
+       "name": "day",
+       "type": "i32",
+       "doc": "1..=31"
+      },
+      {
+       "name": "hour",
+       "type": "i32",
+       "doc": "0..=23"
+      },
+      {
+       "name": "minute",
+       "type": "i32",
+       "doc": "0..=59"
+      },
+      {
+       "name": "second",
+       "type": "i32",
+       "doc": "0..=59"
+      },
+      {
+       "name": "weekday",
+       "type": "i32",
+       "doc": "0 = Sunday .. 6 = Saturday"
+      },
+      {
+       "name": "yearday",
+       "type": "i32",
+       "doc": "1..=366"
+      },
+      {
+       "name": "unix",
+       "type": "i64",
+       "doc": "seconds since 1970-01-01 UTC this value was made from"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [
+        {
+         "name": "year",
+         "type": "i32",
+         "doc": "the year"
+        },
+        {
+         "name": "month",
+         "type": "i32",
+         "doc": "1..=12"
+        },
+        {
+         "name": "day",
+         "type": "i32",
+         "doc": "1..=31"
+        },
+        {
+         "name": "hour",
+         "type": "i32",
+         "doc": "0..=23"
+        },
+        {
+         "name": "minute",
+         "type": "i32",
+         "doc": "0..=59"
+        },
+        {
+         "name": "second",
+         "type": "i32",
+         "doc": "0..=59"
+        }
+       ],
+       "returns": "DateTime",
+       "receiver": null,
+       "doc": "Builds a date and time from its parts (no time zone).",
+       "fallible": false,
+       "returns_doc": "a `DateTime`"
+      },
+      {
+       "name": "weekday_name",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "Name of the day of the week, such as `\"Monday\"`.",
+       "fallible": false,
+       "returns_doc": "`str`"
+      },
+      {
+       "name": "month_name",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "Name of the month, such as `\"March\"`.",
+       "fallible": false,
+       "returns_doc": "`str`"
+      },
+      {
+       "name": "date",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "\"2026-11-01\"",
+       "fallible": false
+      },
+      {
+       "name": "clock",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "\"13:05:09\"",
+       "fallible": false
+      },
+      {
+       "name": "format",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "\"2026-11-01 13:05:09\"",
+       "fallible": false
+      },
+      {
+       "name": "iso",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "\"2026-11-01T13:05:09Z\" (this is the UTC form; use format() for local times)",
+       "fallible": false
+      },
+      {
+       "name": "add_days",
+       "tparams": [],
+       "params": [
+        {
+         "name": "n",
+         "type": "i64",
+         "doc": "days (may be negative)"
+        }
+       ],
+       "returns": "DateTime",
+       "receiver": "self",
+       "doc": "Moves the date by a number of days.",
+       "fallible": false,
+       "returns_doc": "a new `DateTime`"
+      },
+      {
+       "name": "add_secs",
+       "tparams": [],
+       "params": [
+        {
+         "name": "n",
+         "type": "i64",
+         "doc": "seconds (may be negative)"
+        }
+       ],
+       "returns": "DateTime",
+       "receiver": "self",
+       "doc": "Moves the date and time by a number of seconds.",
+       "fallible": false,
+       "returns_doc": "a new `DateTime`"
+      },
+      {
+       "name": "since",
+       "tparams": [],
+       "params": [
+        {
+         "name": "o",
+         "type": "DateTime"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "whole seconds from `o` to this date",
+       "fallible": false
+      },
+      {
+       "name": "to_string",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "",
+       "fallible": false,
+       "via": "Display"
+      }
+     ],
+     "show_fields": true
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "monotonic_ns",
+     "tparams": [],
+     "params": [],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "nanoseconds on a clock that only moves forward (use it to measure elapsed time)",
+     "fallible": false
+    },
+    {
+     "name": "unix_ns",
+     "tparams": [],
+     "params": [],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "nanoseconds since 1970-01-01 00:00:00 UTC (the wall clock; it can jump)",
+     "fallible": false
+    },
+    {
+     "name": "unix",
+     "tparams": [],
+     "params": [],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "Seconds since 1970-01-01 UTC.",
+     "fallible": false,
+     "returns_doc": "`i64`"
+    },
+    {
+     "name": "unix_ms",
+     "tparams": [],
+     "params": [],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "Milliseconds since 1970-01-01 UTC.",
+     "fallible": false,
+     "returns_doc": "`i64`"
+    },
+    {
+     "name": "sleep_ms",
+     "tparams": [],
+     "params": [
+      {
+       "name": "ms",
+       "type": "i64",
+       "doc": "milliseconds"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "Pauses the thread. Other threads and the collector keep running.",
+     "fallible": false,
+     "returns_doc": "nothing"
+    },
+    {
+     "name": "sleep_secs",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "f64",
+       "doc": "seconds"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "Pauses the thread for a fractional number of seconds.",
+     "fallible": false,
+     "returns_doc": "nothing"
+    },
+    {
+     "name": "is_leap_year",
+     "tparams": [],
+     "params": [
+      {
+       "name": "y",
+       "type": "i32",
+       "doc": "the year"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "True for a leap year in the Gregorian calendar.",
+     "fallible": false,
+     "returns_doc": "`bool`"
+    },
+    {
+     "name": "days_in_month",
+     "tparams": [],
+     "params": [
+      {
+       "name": "y",
+       "type": "i32",
+       "doc": "the year"
+      },
+      {
+       "name": "m",
+       "type": "i32",
+       "doc": "the month, 1..=12"
+      }
+     ],
+     "returns": "i32",
+     "receiver": null,
+     "doc": "Days in a month, leap years included.",
+     "fallible": false,
+     "returns_doc": "`i32`"
+    },
+    {
+     "name": "days_from_civil",
+     "tparams": [],
+     "params": [
+      {
+       "name": "year",
+       "type": "i32"
+      },
+      {
+       "name": "month",
+       "type": "i32"
+      },
+      {
+       "name": "day",
+       "type": "i32"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "days since 1970-01-01 of a calendar date (Howard Hinnant's algorithm)",
+     "fallible": false
+    },
+    {
+     "name": "unix_from",
+     "tparams": [],
+     "params": [
+      {
+       "name": "year",
+       "type": "i32"
+      },
+      {
+       "name": "month",
+       "type": "i32"
+      },
+      {
+       "name": "day",
+       "type": "i32"
+      },
+      {
+       "name": "hour",
+       "type": "i32"
+      },
+      {
+       "name": "minute",
+       "type": "i32"
+      },
+      {
+       "name": "second",
+       "type": "i32"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "seconds since the epoch of a UTC date and time",
+     "fallible": false
+    },
+    {
+     "name": "from_unix",
+     "tparams": [],
+     "params": [
+      {
+       "name": "secs",
+       "type": "i64"
+      }
+     ],
+     "returns": "DateTime",
+     "receiver": null,
+     "doc": "the UTC date and time of a unix timestamp",
+     "fallible": false
+    },
+    {
+     "name": "now_utc",
+     "tparams": [],
+     "params": [],
+     "returns": "DateTime",
+     "receiver": null,
+     "doc": "The current date and time in UTC.",
+     "fallible": false,
+     "returns_doc": "a `DateTime`"
+    },
+    {
+     "name": "now_local",
+     "tparams": [],
+     "params": [],
+     "returns": "DateTime",
+     "receiver": null,
+     "doc": "the date and time in the machine's time zone",
+     "fallible": false
+    },
+    {
+     "name": "local",
+     "tparams": [],
+     "params": [
+      {
+       "name": "secs",
+       "type": "i64",
+       "doc": "seconds since 1970-01-01 UTC"
+      }
+     ],
+     "returns": "DateTime",
+     "receiver": null,
+     "doc": "Converts a Unix timestamp to local time.",
+     "fallible": false,
+     "returns_doc": "a `DateTime`"
+    },
+    {
+     "name": "utc_offset",
+     "tparams": [],
+     "params": [],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "seconds east of UTC for the machine's time zone right now",
+     "fallible": false
+    }
+   ]
+  },
+  {
+   "id": "net",
+   "name": "net",
+   "import": "std.net",
+   "summary": "TCP sockets (POSIX sockets through FFI, IPv4 and IPv6).",
+   "description": "A Socket closes itself at the end of its scope (or with `close()`). Calls that wait for the network are\ncollector safepoints, so other threads keep running and collecting while one is blocked.",
+   "example": "import std.net;\n\nlet s = net.Socket.connect(\"example.org\", 80).catch(|e| { panic(\"no connection: {e}\"); });\ns.send(\"GET / HTTP/1.0\\r\\n\\r\\n\").catch(|e| {});\nlet reply = s.read_all().catch(|e| string_new());\nprintln(\"{}\", reply.len);",
+   "errors": [
+    {
+     "name": "ResolveFailed",
+     "doc": "the host name could not be resolved"
+    },
+    {
+     "name": "ConnectFailed",
+     "doc": "nobody accepted the connection"
+    },
+    {
+     "name": "BindFailed",
+     "doc": "the address or port is unavailable"
+    },
+    {
+     "name": "AcceptFailed",
+     "doc": "`accept` failed (the server socket was closed or the system ran out of descriptors)"
+    },
+    {
+     "name": "SendFailed",
+     "doc": "the connection broke while sending"
+    },
+    {
+     "name": "RecvFailed",
+     "doc": "the connection broke while receiving"
+    },
+    {
+     "name": "Timeout",
+     "doc": "a send or receive waited longer than `set_timeout_ms`"
+    }
+   ],
+   "consts": [],
+   "types": [
+    {
+     "name": "Socket",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "A TCP socket. Closes itself at the end of its scope.",
+     "fields": [
+      {
+       "name": "fd",
+       "type": "i32"
+      }
+     ],
+     "methods": [
+      {
+       "name": "connect",
+       "tparams": [],
+       "params": [
+        {
+         "name": "host",
+         "type": "str"
+        },
+        {
+         "name": "port",
+         "type": "i64"
+        }
+       ],
+       "returns": "Socket!",
+       "receiver": null,
+       "doc": "opens a TCP connection to host:port (a name or an address)",
+       "fallible": true
+      },
+      {
+       "name": "listen",
+       "tparams": [],
+       "params": [
+        {
+         "name": "host",
+         "type": "str"
+        },
+        {
+         "name": "port",
+         "type": "i64"
+        }
+       ],
+       "returns": "Socket!",
+       "receiver": null,
+       "doc": "starts listening on host:port; an empty host means every interface, port 0 any free port",
+       "fallible": true
+      },
+      {
+       "name": "accept",
+       "tparams": [],
+       "params": [],
+       "returns": "Socket!",
+       "receiver": "self",
+       "doc": "waits for the next client",
+       "fallible": true
+      },
+      {
+       "name": "local_port",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "the port this socket is bound to (useful after `listen(host, 0)`)",
+       "fallible": false
+      },
+      {
+       "name": "send",
+       "tparams": [],
+       "params": [
+        {
+         "name": "data",
+         "type": "str"
+        }
+       ],
+       "returns": "void!",
+       "receiver": "self",
+       "doc": "sends every byte of `data`",
+       "fallible": true
+      },
+      {
+       "name": "recv",
+       "tparams": [],
+       "params": [
+        {
+         "name": "buf",
+         "type": "[]u8"
+        }
+       ],
+       "returns": "i64!",
+       "receiver": "self",
+       "doc": "receives up to buf.len bytes; 0 means the other side closed the connection",
+       "fallible": true
+      },
+      {
+       "name": "read_all",
+       "tparams": [],
+       "params": [],
+       "returns": "String!",
+       "receiver": "self",
+       "doc": "everything until the other side closes the connection",
+       "fallible": true
+      },
+      {
+       "name": "read_exact",
+       "tparams": [],
+       "params": [
+        {
+         "name": "n",
+         "type": "i64"
+        }
+       ],
+       "returns": "String!",
+       "receiver": "self",
+       "doc": "exactly n bytes (fewer only if the connection closes first)",
+       "fallible": true
+      },
+      {
+       "name": "read_line",
+       "tparams": [],
+       "params": [],
+       "returns": "String!",
+       "receiver": "self",
+       "doc": "one line without its terminator (\"\\n\" or \"\\r\\n\"); what was read so far when the connection closes",
+       "fallible": true
+      },
+      {
+       "name": "set_timeout_ms",
+       "tparams": [],
+       "params": [
+        {
+         "name": "ms",
+         "type": "i64"
+        }
+       ],
+       "returns": "",
+       "receiver": "self",
+       "doc": "sends and receives give up with `Timeout` after this long (0 waits forever)",
+       "fallible": false
+      },
+      {
+       "name": "shutdown",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "self",
+       "doc": "stops sending and receiving without waiting for the scope to end",
+       "fallible": false
+      },
+      {
+       "name": "close",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Closes the connection now (it also closes at the end of the scope).",
+       "fallible": false,
+       "returns_doc": "nothing"
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": []
+  },
+  {
+   "id": "http",
+   "name": "http",
+   "import": "std.http",
+   "summary": "a small HTTP/1.1 client over std.net (plain `http://` only; there is no TLS).",
+   "description": "`headers` is text with one `Name: value` per line. Every request sends `Connection: close`, so the\nanswer is complete when the server closes the connection. Responses with `Content-Length` and\n`Transfer-Encoding: chunked` bodies are understood. Failures: BadUrl, Unsupported (an `https://` URL),\nBadResponse, and the std.net errors (ResolveFailed, ConnectFailed, Timeout, ...).",
+   "example": "import std.http;\n\nlet r = http.get(\"http://example.org/\").catch(|e| { panic(\"request failed: {e}\"); });\nprintln(\"{} {} ok={}\", r.status, r.reason, r.ok());\nprintln(\"{}\", r.header(\"content-type\") ?? \"unknown\");\nprintln(\"{}\", r.body);",
+   "errors": [
+    {
+     "name": "BadUrl",
+     "doc": "the URL is not `http://host[:port][/path]`"
+    },
+    {
+     "name": "Unsupported",
+     "doc": "`https://` needs TLS, which std.http does not have"
+    },
+    {
+     "name": "BadResponse",
+     "doc": "the server's answer is not valid HTTP"
+    }
+   ],
+   "consts": [],
+   "types": [
+    {
+     "name": "Header",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "One response header.",
+     "fields": [
+      {
+       "name": "name",
+       "type": "String"
+      },
+      {
+       "name": "value",
+       "type": "String"
+      }
+     ],
+     "methods": [],
+     "show_fields": true
+    },
+    {
+     "name": "Response",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "An HTTP answer.",
+     "fields": [
+      {
+       "name": "status",
+       "type": "i32",
+       "doc": "the status code, such as 200"
+      },
+      {
+       "name": "reason",
+       "type": "String",
+       "doc": "the reason phrase, such as `OK`"
+      },
+      {
+       "name": "headers",
+       "type": "List<Header>",
+       "doc": "every header the server sent"
+      },
+      {
+       "name": "body",
+       "type": "String",
+       "doc": "the response body as text"
+      }
+     ],
+     "methods": [
+      {
+       "name": "ok",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "true for 2xx statuses",
+       "fallible": false
+      },
+      {
+       "name": "header",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        }
+       ],
+       "returns": "str?",
+       "receiver": "self",
+       "doc": "the value of a header (the name is matched ignoring case), or null",
+       "fallible": false
+      }
+     ],
+     "show_fields": true
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "request",
+     "tparams": [],
+     "params": [
+      {
+       "name": "method",
+       "type": "str"
+      },
+      {
+       "name": "url",
+       "type": "str"
+      },
+      {
+       "name": "body",
+       "type": "str",
+       "default": "\"\""
+      },
+      {
+       "name": "headers",
+       "type": "str",
+       "default": "\"\""
+      },
+      {
+       "name": "timeout_ms",
+       "type": "i64",
+       "default": "10000"
+      }
+     ],
+     "returns": "Response!",
+     "receiver": null,
+     "doc": "sends one request and reads the whole answer. `headers` holds one `Name: value` per line.",
+     "fallible": true
+    },
+    {
+     "name": "get",
+     "tparams": [],
+     "params": [
+      {
+       "name": "url",
+       "type": "str",
+       "doc": "an `http://` URL"
+      },
+      {
+       "name": "headers",
+       "type": "str",
+       "default": "\"\"",
+       "doc": "extra headers, one `Name: value` per line"
+      },
+      {
+       "name": "timeout_ms",
+       "type": "i64",
+       "default": "10000",
+       "doc": "how long a send or receive may wait"
+      }
+     ],
+     "returns": "Response!",
+     "receiver": null,
+     "doc": "Sends an HTTP GET request.",
+     "fallible": true,
+     "returns_doc": "a `Response`, or an error (`BadUrl`, `Unsupported`, `BadResponse` or a `std.net` error)"
+    },
+    {
+     "name": "delete",
+     "tparams": [],
+     "params": [
+      {
+       "name": "url",
+       "type": "str",
+       "doc": "an `http://` URL"
+      },
+      {
+       "name": "headers",
+       "type": "str",
+       "default": "\"\"",
+       "doc": "extra headers, one `Name: value` per line"
+      },
+      {
+       "name": "timeout_ms",
+       "type": "i64",
+       "default": "10000",
+       "doc": "how long a send or receive may wait"
+      }
+     ],
+     "returns": "Response!",
+     "receiver": null,
+     "doc": "Sends an HTTP DELETE request.",
+     "fallible": true,
+     "returns_doc": "a `Response`, or an error"
+    },
+    {
+     "name": "post",
+     "tparams": [],
+     "params": [
+      {
+       "name": "url",
+       "type": "str",
+       "doc": "an `http://` URL"
+      },
+      {
+       "name": "body",
+       "type": "str",
+       "doc": "the request body"
+      },
+      {
+       "name": "headers",
+       "type": "str",
+       "default": "\"\"",
+       "doc": "extra headers, one `Name: value` per line"
+      },
+      {
+       "name": "timeout_ms",
+       "type": "i64",
+       "default": "10000",
+       "doc": "how long a send or receive may wait"
+      }
+     ],
+     "returns": "Response!",
+     "receiver": null,
+     "doc": "Sends an HTTP POST request with a body.",
+     "fallible": true,
+     "returns_doc": "a `Response`, or an error"
+    },
+    {
+     "name": "put",
+     "tparams": [],
+     "params": [
+      {
+       "name": "url",
+       "type": "str",
+       "doc": "an `http://` URL"
+      },
+      {
+       "name": "body",
+       "type": "str",
+       "doc": "the request body"
+      },
+      {
+       "name": "headers",
+       "type": "str",
+       "default": "\"\"",
+       "doc": "extra headers, one `Name: value` per line"
+      },
+      {
+       "name": "timeout_ms",
+       "type": "i64",
+       "default": "10000",
+       "doc": "how long a send or receive may wait"
+      }
+     ],
+     "returns": "Response!",
+     "receiver": null,
+     "doc": "Sends an HTTP PUT request with a body.",
+     "fallible": true,
+     "returns_doc": "a `Response`, or an error"
+    }
+   ]
+  },
+  {
+   "id": "thread",
+   "name": "thread",
+   "import": "std.thread",
+   "summary": "OS threads, mutexes, condition variables, channels (pthread through FFI).",
+   "description": "Threads share the garbage-collected heap. The collector parks every thread at its next allocation or\nblocking call; Mutex.lock, Condvar.wait, Thread.join and thread.sleep_ms tell it that they are blocking.\nA thread that computes for a long time without allocating only delays collections, it never breaks them.",
+   "example": "import std.thread;\n\nfn worker() { println(\"hello from a thread\"); }\n\nfn main() {\n    let mut t = thread.spawn_fn(worker).catch(|e| { panic(\"spawn failed\"); });\n    t.join();\n}",
+   "errors": [
+    {
+     "name": "SpawnFailed",
+     "doc": "the operating system could not start a thread"
+    },
+    {
+     "name": "Closed",
+     "doc": "the channel was closed"
+    }
+   ],
+   "consts": [],
+   "types": [
+    {
+     "name": "Thread",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "A running OS thread. Call `join` once.",
+     "fields": [
+      {
+       "name": "id",
+       "type": "u64"
+      },
+      {
+       "name": "start",
+       "type": "*Start"
+      },
+      {
+       "name": "joined",
+       "type": "bool"
+      }
+     ],
+     "methods": [
+      {
+       "name": "join",
+       "tparams": [],
+       "params": [],
+       "returns": "*void",
+       "receiver": "mut self",
+       "doc": "wait for the thread to finish; returns what its function returned",
+       "fallible": false
+      }
+     ]
+    },
+    {
+     "name": "Mutex",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "Make one with Mutex.new() and share the pointer between threads.",
+     "fields": [
+      {
+       "name": "raw",
+       "type": "[]u8"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [],
+       "returns": "*Mutex",
+       "receiver": null,
+       "doc": "Creates an unlocked mutex.",
+       "fallible": false,
+       "returns_doc": "a `*Mutex`"
+      },
+      {
+       "name": "lock",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "self",
+       "doc": "Waits until the mutex is free, then takes it. Waiting is a collector safepoint.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "try_lock",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "true if the lock was taken",
+       "fallible": false
+      },
+      {
+       "name": "unlock",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "self",
+       "doc": "Releases the mutex.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      }
+     ]
+    },
+    {
+     "name": "Condvar",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "A condition variable, used together with a `Mutex`.",
+     "fields": [
+      {
+       "name": "raw",
+       "type": "[]u8"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [],
+       "returns": "*Condvar",
+       "receiver": null,
+       "doc": "Creates a condition variable.",
+       "fallible": false,
+       "returns_doc": "a `*Condvar`"
+      },
+      {
+       "name": "wait",
+       "tparams": [],
+       "params": [
+        {
+         "name": "m",
+         "type": "*Mutex"
+        }
+       ],
+       "returns": "",
+       "receiver": "self",
+       "doc": "atomically unlocks m and sleeps; m is locked again when this returns (re-check your condition in a loop)",
+       "fallible": false
+      },
+      {
+       "name": "signal",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "self",
+       "doc": "Wakes one waiting thread.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "broadcast",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "self",
+       "doc": "Wakes every waiting thread.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      }
+     ]
+    },
+    {
+     "name": "AtomicI64",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "An integer that can be read and written safely from several threads.",
+     "fields": [
+      {
+       "name": "lock",
+       "type": "*Mutex"
+      },
+      {
+       "name": "value",
+       "type": "i64"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [
+        {
+         "name": "v",
+         "type": "i64",
+         "doc": "the starting value"
+        }
+       ],
+       "returns": "*AtomicI64",
+       "receiver": null,
+       "doc": "Creates an atomic integer.",
+       "fallible": false,
+       "returns_doc": "a `*AtomicI64`"
+      },
+      {
+       "name": "load",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Reads the value.",
+       "fallible": false,
+       "returns_doc": "`i64`"
+      },
+      {
+       "name": "store",
+       "tparams": [],
+       "params": [
+        {
+         "name": "v",
+         "type": "i64",
+         "doc": "the new value"
+        }
+       ],
+       "returns": "",
+       "receiver": "self",
+       "doc": "Writes the value.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "add",
+       "tparams": [],
+       "params": [
+        {
+         "name": "d",
+         "type": "i64"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "adds d and returns the new value",
+       "fallible": false
+      }
+     ]
+    },
+    {
+     "name": "Channel",
+     "kind": "struct",
+     "tparams": [
+      "T"
+     ],
+     "doc": "An unbounded multi-producer, multi-consumer queue. Create with `thread.channel<T>()`.",
+     "fields": [
+      {
+       "name": "lock",
+       "type": "*Mutex"
+      },
+      {
+       "name": "ready",
+       "type": "*Condvar"
+      },
+      {
+       "name": "items",
+       "type": "List<T>"
+      },
+      {
+       "name": "head",
+       "type": "i64"
+      },
+      {
+       "name": "closed",
+       "type": "bool"
+      }
+     ],
+     "methods": [
+      {
+       "name": "send",
+       "tparams": [],
+       "params": [
+        {
+         "name": "v",
+         "type": "T"
+        }
+       ],
+       "returns": "void!",
+       "receiver": "self",
+       "doc": "queue a value (fails with thread.Closed after close())",
+       "fallible": true,
+       "impl_tparams": [
+        "T"
+       ]
+      },
+      {
+       "name": "recv",
+       "tparams": [],
+       "params": [],
+       "returns": "T!",
+       "receiver": "self",
+       "doc": "wait for a value; fails with thread.Closed once the channel is closed and drained",
+       "fallible": true,
+       "impl_tparams": [
+        "T"
+       ]
+      },
+      {
+       "name": "close",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "self",
+       "doc": "Closes the channel. Values already queued can still be received; after that `recv` fails with `Closed`, and `send` fails with `Closed` right away.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "spawn",
+     "tparams": [],
+     "params": [
+      {
+       "name": "f",
+       "type": "fn(*void) -> *void"
+      },
+      {
+       "name": "arg",
+       "type": "*void"
+      }
+     ],
+     "returns": "Thread!",
+     "receiver": null,
+     "doc": "Start a thread running f(arg). The memory arg points to must stay valid (and be reachable) while it runs.",
+     "fallible": true
+    },
+    {
+     "name": "spawn_fn",
+     "tparams": [],
+     "params": [
+      {
+       "name": "f",
+       "type": "fn()"
+      }
+     ],
+     "returns": "Thread!",
+     "receiver": null,
+     "doc": "Start a thread running a function without arguments.",
+     "fallible": true
+    },
+    {
+     "name": "current_id",
+     "tparams": [],
+     "params": [],
+     "returns": "u64",
+     "receiver": null,
+     "doc": "Identifier of the calling thread.",
+     "fallible": false,
+     "returns_doc": "`u64`"
+    },
+    {
+     "name": "yield_now",
+     "tparams": [],
+     "params": [],
+     "returns": "",
+     "receiver": null,
+     "doc": "Lets another thread run.",
+     "fallible": false,
+     "returns_doc": "nothing"
+    },
+    {
+     "name": "cpu_count",
+     "tparams": [],
+     "params": [],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "Number of processors that are online.",
+     "fallible": false,
+     "returns_doc": "`i64`"
+    },
+    {
+     "name": "sleep_ms",
+     "tparams": [],
+     "params": [
+      {
+       "name": "ms",
+       "type": "i64",
+       "doc": "milliseconds"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "Pauses the calling thread.",
+     "fallible": false,
+     "returns_doc": "nothing"
+    },
+    {
+     "name": "channel",
+     "tparams": [
+      "T"
+     ],
+     "params": [],
+     "returns": "*Channel<T>",
+     "receiver": null,
+     "doc": "Creates an unbounded channel for passing `T` values between threads.",
+     "fallible": false,
+     "returns_doc": "a `*Channel<T>`"
+    }
+   ]
+  },
+  {
+   "id": "async",
+   "name": "async",
+   "import": "std.async",
+   "summary": "`async fn` and `await`, built on OS threads (std.thread).",
+   "description": "Calling an async function returns a task (a pointer to a Task, TryTask, Job or TryJob, below). `await task`\nis the same as `task.wait()`: it blocks the calling thread until the task is done and gives back its\nvalue (or its error). Await every task exactly once: the result is moved out, and an awaited thread is\nthe one that gets cleaned up. Tasks share the garbage-collected heap, so pass them data, not stack\npointers. Async functions cannot be generic and cannot take `self`.",
+   "example": "async fn square(n: i32) -> i32 { return n * n; }\n\nfn main() {\n    let a = square(6);          // starts right away, on its own thread\n    let b = square(7);\n    println(\"{}\", await a + await b);   // 85\n}",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "Task",
+     "kind": "struct",
+     "tparams": [
+      "T"
+     ],
+     "doc": "a task that produces a `T`",
+     "fields": [
+      {
+       "name": "thread",
+       "type": "thread.Thread"
+      },
+      {
+       "name": "value",
+       "type": "T"
+      },
+      {
+       "name": "joined",
+       "type": "bool"
+      }
+     ],
+     "methods": [
+      {
+       "name": "start",
+       "tparams": [],
+       "params": [
+        {
+         "name": "f",
+         "type": "fn(*void) -> *void",
+         "doc": "the thread entry point"
+        },
+        {
+         "name": "arg",
+         "type": "*void",
+         "doc": "its argument"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Starts the task's thread. Called by the generated code of an `async fn`.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "wait",
+       "tparams": [],
+       "params": [],
+       "returns": "T",
+       "receiver": "mut self",
+       "doc": "Waits for the task to finish (`await task` is the same). Call it once.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the value the function returned"
+      }
+     ]
+    },
+    {
+     "name": "TryTask",
+     "kind": "struct",
+     "tparams": [
+      "T"
+     ],
+     "doc": "a task whose function returns `T!`",
+     "fields": [
+      {
+       "name": "thread",
+       "type": "thread.Thread"
+      },
+      {
+       "name": "value",
+       "type": "T"
+      },
+      {
+       "name": "failed",
+       "type": "bool"
+      },
+      {
+       "name": "err",
+       "type": "error"
+      },
+      {
+       "name": "joined",
+       "type": "bool"
+      }
+     ],
+     "methods": [
+      {
+       "name": "start",
+       "tparams": [],
+       "params": [
+        {
+         "name": "f",
+         "type": "fn(*void) -> *void",
+         "doc": "the thread entry point"
+        },
+        {
+         "name": "arg",
+         "type": "*void",
+         "doc": "its argument"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Starts the task's thread. Called by the generated code of an `async fn`.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "wait",
+       "tparams": [],
+       "params": [],
+       "returns": "T!",
+       "receiver": "mut self",
+       "doc": "Waits for the task to finish (`await task` is the same). Call it once.",
+       "fallible": true,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the value, or the error the function threw"
+      }
+     ]
+    },
+    {
+     "name": "Job",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "a task whose function returns nothing",
+     "fields": [
+      {
+       "name": "thread",
+       "type": "thread.Thread"
+      },
+      {
+       "name": "joined",
+       "type": "bool"
+      }
+     ],
+     "methods": [
+      {
+       "name": "start",
+       "tparams": [],
+       "params": [
+        {
+         "name": "f",
+         "type": "fn(*void) -> *void",
+         "doc": "the thread entry point"
+        },
+        {
+         "name": "arg",
+         "type": "*void",
+         "doc": "its argument"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Starts the task's thread. Called by the generated code of an `async fn`.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "wait",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Waits for the task to finish (`await task` is the same). Call it once.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      }
+     ]
+    },
+    {
+     "name": "TryJob",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "a task whose function returns `void!`",
+     "fields": [
+      {
+       "name": "thread",
+       "type": "thread.Thread"
+      },
+      {
+       "name": "failed",
+       "type": "bool"
+      },
+      {
+       "name": "err",
+       "type": "error"
+      },
+      {
+       "name": "joined",
+       "type": "bool"
+      }
+     ],
+     "methods": [
+      {
+       "name": "start",
+       "tparams": [],
+       "params": [
+        {
+         "name": "f",
+         "type": "fn(*void) -> *void",
+         "doc": "the thread entry point"
+        },
+        {
+         "name": "arg",
+         "type": "*void",
+         "doc": "its argument"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Starts the task's thread. Called by the generated code of an `async fn`.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "wait",
+       "tparams": [],
+       "params": [],
+       "returns": "void!",
+       "receiver": "mut self",
+       "doc": "Waits for the task to finish (`await task` is the same). Call it once.",
+       "fallible": true,
+       "returns_doc": "nothing, or the error the function threw"
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "new_task",
+     "tparams": [
+      "T"
+     ],
+     "params": [],
+     "returns": "*Task<T>",
+     "receiver": null,
+     "doc": "Allocates the task object for an `async fn` that returns `T`. The compiler calls this for you.",
+     "fallible": false,
+     "returns_doc": "a `*Task<T>`"
+    },
+    {
+     "name": "new_try_task",
+     "tparams": [
+      "T"
+     ],
+     "params": [],
+     "returns": "*TryTask<T>",
+     "receiver": null,
+     "doc": "Allocates the task object for an `async fn` that returns `T!`. The compiler calls this for you.",
+     "fallible": false,
+     "returns_doc": "a `*TryTask<T>`"
+    },
+    {
+     "name": "new_job",
+     "tparams": [],
+     "params": [],
+     "returns": "*Job",
+     "receiver": null,
+     "doc": "Allocates the task object for an `async fn` that returns nothing. The compiler calls this for you.",
+     "fallible": false,
+     "returns_doc": "a `*Job`"
+    },
+    {
+     "name": "new_try_job",
+     "tparams": [],
+     "params": [],
+     "returns": "*TryJob",
+     "receiver": null,
+     "doc": "Allocates the task object for an `async fn` that returns `void!`. The compiler calls this for you.",
+     "fallible": false,
+     "returns_doc": "a `*TryJob`"
+    }
+   ]
+  }
+ ]
+}

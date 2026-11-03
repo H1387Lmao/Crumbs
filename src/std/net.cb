@@ -1,0 +1,239 @@
+// std.net: TCP sockets (POSIX sockets through FFI, IPv4 and IPv6).
+//
+//   import std.net;
+//
+//   // client
+//   let s = net.Socket.connect("example.org", 80) catch |e| { panic("no connection"); };
+//   s.send("GET / HTTP/1.0\r\n\r\n") catch |e| { return; };
+//   let reply = s.read_all() catch string_new();
+//
+//   // server (port 0 lets the system pick a free port; ask for it with local_port)
+//   let listener = net.Socket.listen("127.0.0.1", 8080) catch |e| { panic("port busy"); };
+//   let client = listener.accept() catch |e| { return; };
+//   let line = client.read_line() catch string_new();
+//   client.send("hello\n") catch |e| { return; };
+//
+// A Socket closes itself at the end of its scope (or with `close()`). Calls that wait for the network are
+// collector safepoints, so other threads keep running and collecting while one is blocked.
+
+include "sys/socket.h";
+include "netdb.h";
+include "unistd.h";
+include "errno.h";
+
+pub error ResolveFailed;       // the host name could not be resolved
+pub error ConnectFailed;       // nobody accepted the connection
+pub error BindFailed;          // the address or port is unavailable
+pub error AcceptFailed;
+pub error SendFailed;          // the connection broke while sending
+pub error RecvFailed;          // the connection broke while receiving
+pub error Timeout;             // a send or receive waited longer than `set_timeout_ms`
+
+extern struct AddrInfo { flags: i32, family: i32, socktype: i32, protocol: i32, addrlen: u32,
+                         addr: *void, canonname: *u8, next: *AddrInfo }
+extern struct Timeval { sec: i64, usec: i64 }
+extern const AF_UNSPEC: i32;
+extern const SOCK_STREAM: i32;
+extern const SOL_SOCKET: i32;
+extern const SO_REUSEADDR: i32;
+extern const SO_RCVTIMEO: i32;
+extern const SO_SNDTIMEO: i32;
+extern const AI_PASSIVE: i32;
+extern const MSG_NOSIGNAL: i32;
+extern const SHUT_RDWR: i32;
+extern const EINTR: i32;
+extern const EAGAIN: i32;
+extern const EWOULDBLOCK: i32;
+extern fn getaddrinfo(node: *u8, service: *u8, hints: *AddrInfo, res: * *AddrInfo) -> i32;
+extern fn freeaddrinfo(res: *AddrInfo);
+extern "socket" fn c_socket(domain: i32, kind: i32, protocol: i32) -> i32;
+extern "connect" fn c_connect(fd: i32, addr: *void, len: u32) -> i32;
+extern "bind" fn c_bind(fd: i32, addr: *void, len: u32) -> i32;
+extern "listen" fn c_listen(fd: i32, backlog: i32) -> i32;
+extern "accept" fn c_accept(fd: i32, addr: *void, len: *u32) -> i32;
+extern "send" fn c_send(fd: i32, buf: *void, n: i64, flags: i32) -> i64;
+extern "recv" fn c_recv(fd: i32, buf: *void, n: i64, flags: i32) -> i64;
+extern "close" fn c_close(fd: i32) -> i32;
+extern "shutdown" fn c_shutdown(fd: i32, how: i32) -> i32;
+extern fn setsockopt(fd: i32, level: i32, name: i32, val: *void, len: u32) -> i32;
+extern fn getsockname(fd: i32, addr: *void, len: *u32) -> i32;
+extern fn cb_gc_blocking_begin();
+extern fn cb_gc_blocking_end();
+extern "__errno_location" fn errno_ptr() -> *i32;
+
+fn hints(flags: i32) -> AddrInfo {
+    return AddrInfo { flags: flags, family: AF_UNSPEC, socktype: SOCK_STREAM, protocol: 0, addrlen: 0,
+                      addr: null, canonname: null, next: null };
+}
+
+fn dial(host: str, port: i64) -> i32! {
+    let mut h = hints(0);
+    let mut res: *AddrInfo = null;
+    if getaddrinfo(cstr(host), cstr(to_str(port)), &h, &res) != 0 || res == null { throw ResolveFailed; }
+    let mut p = res;
+    let mut fd = -1;
+    while p != null {
+        let s = c_socket(p.family, p.socktype, p.protocol);
+        if s >= 0 {
+            cb_gc_blocking_begin();
+            let r = c_connect(s, p.addr, p.addrlen);
+            cb_gc_blocking_end();
+            if r == 0 { fd = s; break; }
+            c_close(s);
+        }
+        p = p.next;
+    }
+    freeaddrinfo(res);
+    if fd < 0 { throw ConnectFailed; }
+    return fd;
+}
+
+fn open_listener(host: str, port: i64, backlog: i32) -> i32! {
+    let mut h = hints(AI_PASSIVE);
+    let mut res: *AddrInfo = null;
+    let node = host.len == 0 ? null as *u8 : cstr(host);
+    if getaddrinfo(node, cstr(to_str(port)), &h, &res) != 0 || res == null { throw ResolveFailed; }
+    let mut p = res;
+    let mut fd = -1;
+    while p != null {
+        let s = c_socket(p.family, p.socktype, p.protocol);
+        if s >= 0 {
+            let mut one: i32 = 1;
+            setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, 4);
+            if c_bind(s, p.addr, p.addrlen) == 0 && c_listen(s, backlog) == 0 { fd = s; break; }
+            c_close(s);
+        }
+        p = p.next;
+    }
+    freeaddrinfo(res);
+    if fd < 0 { throw BindFailed; }
+    return fd;
+}
+
+pub struct Socket { fd: i32 }
+
+drop Socket(self) {
+    if self.fd >= 0 { c_close(self.fd); self.fd = -1; }
+}
+
+impl Socket {
+    // opens a TCP connection to host:port (a name or an address)
+    pub fn connect(host: str, port: i64) -> Socket! {
+        let fd = try dial(host, port);
+        return Socket { fd: fd };
+    }
+
+    // starts listening on host:port; an empty host means every interface, port 0 any free port
+    pub fn listen(host: str, port: i64) -> Socket! {
+        let fd = try open_listener(host, port, 64);
+        return Socket { fd: fd };
+    }
+
+    // waits for the next client
+    pub fn accept(self) -> Socket! {
+        while true {
+            cb_gc_blocking_begin();
+            let fd = c_accept(self.fd, null, null);
+            cb_gc_blocking_end();
+            if fd >= 0 { return Socket { fd: fd }; }
+            if *errno_ptr() != EINTR { throw AcceptFailed; }
+        }
+    }
+
+    // the port this socket is bound to (useful after `listen(host, 0)`)
+    pub fn local_port(self) -> i64 {
+        let buf = alloc(u8, 128);
+        let mut len: u32 = 128;
+        let mut port: i64 = 0;
+        if getsockname(self.fd, buf.ptr as *void, &len) == 0 { port = (buf[2] as i64) * 256 + (buf[3] as i64); }
+        free(buf);
+        return port;
+    }
+
+    // sends every byte of `data`
+    pub fn send(self, data: str) -> void! {
+        let mut sent: i64 = 0;
+        while sent < data.len {
+            let rest = data[sent..data.len];
+            cb_gc_blocking_begin();
+            let n = c_send(self.fd, rest.ptr as *void, rest.len, MSG_NOSIGNAL);
+            cb_gc_blocking_end();
+            if n < 0 {
+                let e = *errno_ptr();
+                if e == EINTR { continue; }
+                if e == EAGAIN || e == EWOULDBLOCK { throw Timeout; }
+                throw SendFailed;
+            }
+            sent += n;
+        }
+    }
+
+    // receives up to buf.len bytes; 0 means the other side closed the connection
+    pub fn recv(self, buf: []u8) -> i64! {
+        while true {
+            cb_gc_blocking_begin();
+            let n = c_recv(self.fd, buf.ptr as *void, buf.len, 0);
+            cb_gc_blocking_end();
+            if n >= 0 { return n; }
+            let e = *errno_ptr();
+            if e == EINTR { continue; }
+            if e == EAGAIN || e == EWOULDBLOCK { throw Timeout; }
+            throw RecvFailed;
+        }
+    }
+
+    // everything until the other side closes the connection
+    pub fn read_all(self) -> String! {
+        let buf = alloc(u8, 4096);
+        let mut out = string_new();
+        while true {
+            let n = try self.recv(buf);
+            if n == 0 { break; }
+            for i in 0..n { out += buf[i]; }
+        }
+        free(buf);
+        return out;
+    }
+
+    // exactly n bytes (fewer only if the connection closes first)
+    pub fn read_exact(self, n: i64) -> String! {
+        let buf = alloc(u8, 1);
+        let mut out = string_new();
+        while out.len < n {
+            let got = try self.recv(buf);
+            if got == 0 { break; }
+            out += buf[0];
+        }
+        free(buf);
+        return out;
+    }
+
+    // one line without its terminator ("\n" or "\r\n"); what was read so far when the connection closes
+    pub fn read_line(self) -> String! {
+        let buf = alloc(u8, 1);
+        let mut out = string_new();
+        while true {
+            let got = try self.recv(buf);
+            if got == 0 { break; }
+            if buf[0] == '\n' { break; }
+            out += buf[0];
+        }
+        free(buf);
+        if out.len > 0 && out[out.len - 1] == '\r' { out = string_from(out[0..out.len - 1]); }
+        return out;
+    }
+
+    // sends and receives give up with `Timeout` after this long (0 waits forever)
+    pub fn set_timeout_ms(self, ms: i64) {
+        let mut tv = Timeval { sec: ms / 1000, usec: (ms % 1000) * 1000 };
+        setsockopt(self.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, 16);
+        setsockopt(self.fd, SOL_SOCKET, SO_SNDTIMEO, &tv, 16);
+    }
+
+    // stops sending and receiving without waiting for the scope to end
+    pub fn shutdown(self) { c_shutdown(self.fd, SHUT_RDWR); }
+
+    pub fn close(mut self) {
+        if self.fd >= 0 { c_close(self.fd); self.fd = -1; }
+    }
+}

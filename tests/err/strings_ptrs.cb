@@ -1,5 +1,5 @@
 fn main() {
-    let b = null;                            // ERROR: cannot infer the pointer type of `null`
+    let b = null;                            // ERROR: cannot infer the type of `null`
     let null = 5;                            // ERROR: `null` is a reserved name
     let s = string_new();
     s += "x";                                // ERROR: cannot assign to an immutable place

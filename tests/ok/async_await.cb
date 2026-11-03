@@ -1,0 +1,41 @@
+error Boom;
+
+async fn square(n: i32) -> i32 { return n * n; }
+async fn greet(name: String, times: i32) -> String {
+    let mut out = string_new();
+    for i in 0..times { out += "hi "; }
+    out += name;
+    return out;
+}
+async fn check(n: i32) -> i32! {
+    if n < 0 { throw Boom; }
+    return n * 2;
+}
+async fn flag(n: i32) -> void! {
+    if n == 0 { throw Boom; }
+}
+async fn shout(msg: str) {
+    println("job says ", msg);
+}
+
+fn main() {
+    run().catch(|e| { println("run failed"); });
+}
+
+fn run() -> void! {
+    shout("hello").wait();
+    let a = square(6);
+    let b = square(7);
+    println("{}", await a + await b);
+    let g = greet(string_from("bob"), 2);
+    println(await g);
+    println("{}", try await check(4));
+    let bad = check(-1);
+    println("{}", await bad catch -1);
+    let v = (await check(5)).catch(|e| 0);
+    println(v);
+    await flag(1) catch |e| { println("unexpected"); return; };
+    let f0 = flag(0);
+    await f0 catch |e| { println("flag failed"); return; };
+    println("not reached");
+}

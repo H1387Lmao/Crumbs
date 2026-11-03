@@ -126,3 +126,50 @@ def check_for(spec, kind):
     if ty == "c" and (spec.sign or spec.zero or spec.group):
         return ("the `c` type shows a single character, so sign, `0` and grouping do not apply", None)
     return None
+
+
+def parse_template(b):
+    """Split a Rust-style format string into pieces. `{{` and `}}` are literal braces; `{arg:spec}` is a placeholder whose
+    arg is empty (the next positional argument), an index (`{0}`), or a name / dotted path (`{total}`, `{p.pos.x}`).
+    Returns a list of ("lit", bytes) and ("arg", ref, spec) where ref is None, an int or a str. Raises SpecError."""
+    out, buf, i, n = [], bytearray(), 0, len(b)
+    while i < n:
+        c = b[i]
+        if c == 123:                                   # {
+            if b[i + 1:i + 2] == b"{":
+                buf.append(123)
+                i += 2
+                continue
+            j = b.find(b"}", i)
+            if j == -1:
+                raise SpecError("unclosed `{` in the format string", "close it with `}`, or write `{{` for a literal brace")
+            inner = b[i + 1:j].decode("utf-8", "replace")
+            ref, _, spec = inner.partition(":")
+            ref = ref.strip()
+            if buf:
+                out.append(("lit", bytes(buf)))
+                buf = bytearray()
+            if ref == "":
+                r = None
+            elif ref.isdigit():
+                r = int(ref)
+            elif all(p.isidentifier() for p in ref.split(".")):
+                r = ref
+            else:
+                raise SpecError(f"`{{{inner}}}` is not a valid placeholder",
+                                "a placeholder holds nothing, an argument number, or a name: `{}`, `{0}`, `{total}`; "
+                                "put expressions in the argument list: `println(\"{}\", a + b)`")
+            out.append(("arg", r, spec))
+            i = j + 1
+            continue
+        if c == 125:                                   # }
+            if b[i + 1:i + 2] == b"}":
+                buf.append(125)
+                i += 2
+                continue
+            raise SpecError("single `}` in the format string", "write `}}` for a literal brace")
+        buf.append(c)
+        i += 1
+    if buf:
+        out.append(("lit", bytes(buf)))
+    return out

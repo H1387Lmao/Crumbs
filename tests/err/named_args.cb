@@ -1,0 +1,14 @@
+// Named and default arguments: mistakes are reported at the argument.
+fn connect(host: str, port: i32 = 80) -> i32 { return port; }
+fn calc(x: i32 = 1 + 2) {} // ERROR: a default value must be a literal
+fn main() {
+    connect(); // ERROR: is missing the argument `host`
+    connect("a", prt = 1); // ERROR: has no parameter named `prt`
+    connect("a", port = 1, port = 2); // ERROR: is given twice
+    connect(port = 1, "a"); // ERROR: a positional argument cannot follow a named argument
+    connect("a", host = "b"); // ERROR: is given twice
+    let f = connect;
+    f("a", port = 2); // ERROR: named arguments only work
+    calc();
+    println(connect("a", 1, 2)); // ERROR: takes 2 arguments but 3 were supplied
+}

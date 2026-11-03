@@ -9,9 +9,9 @@ from .timing import TIMINGS
 from .diag import suggest
 from .parser import N, Parser
 from .types import (INTS, PRIMS, Ty, I8, I16, I32, I64, U8, U16, U32, U64, F32, F64, BOOL, STR, VOID,
-                    ERR, POISON, STRING, REGION, ptr, arr, slc, eu, fnty, same)
+                    ERR, POISON, STRING, REGION, ptr, arr, slc, eu, opt, fnty, same)
 
-BUILTINS = {"print", "println", "panic", "assert", "alloc", "free", "exit", "to_str",
+BUILTINS = {"print", "println", "format", "panic", "assert", "alloc", "free", "exit", "to_str",
             "string_new", "string_from", "string_clear",
             "cstr", "from_cstr", "slice_of", "size_of", "drop", "drop_at", "write_at", "read_at",
             "gc_collect", "gc_bytes", "gc_collections", "alloc_in",
@@ -399,6 +399,8 @@ class Checker:
             return f"[{getattr(tn.size, 'value', '?')}]" + self.canon(tn.inner, m, selfc)
         if k == "TErrUnion":
             return self.canon(tn.inner, m, selfc) + "!"
+        if k == "TOpt":
+            return self.canon(tn.inner, m, selfc) + "?"
         if k == "TFn":
             ret = self.canon(tn.ret, m, selfc) if tn.ret is not None else "void"
             return "fn(" + ",".join(self.canon(x, m, selfc) for x in tn.params) + ")->" + ret
@@ -416,6 +418,8 @@ class Checker:
             return f"[{getattr(tn.size, 'value', '..')}]" + self.tn_text(tn.inner)
         if k == "TErrUnion":
             return self.tn_text(tn.inner) + "!"
+        if k == "TOpt":
+            return self.tn_text(tn.inner) + "?"
         if k == "TFn":
             return f"fn({', '.join(self.tn_text(x) for x in tn.params)})" + (f" -> {self.tn_text(tn.ret)}" if tn.ret is not None else "")
         return "?"
@@ -720,6 +724,15 @@ class Checker:
             if inner.poison or not self.sized(inner, tn.span):
                 return POISON
             return arr(inner, n)
+        if k == "TOpt":
+            inner = self.resolve_type(tn.inner, m)
+            if inner.poison:
+                return POISON
+            if inner.kind in ("eu", "opt"):
+                self.d.error(tn.span, f"`{inner}?` is not allowed: optional and error types cannot be stacked",
+                             help="use one of them, or wrap one in a struct")
+                return POISON
+            return opt(inner)
         if k == "TErrUnion":
             inner = self.resolve_type(tn.inner, m, allow_void=True)
             if inner.poison:
@@ -1281,7 +1294,7 @@ class Checker:
         k = t.kind
         if t == STRING:
             return True                 # an owned String frees its buffer when it goes out of scope
-        if k == "arr":
+        if k in ("arr", "opt"):
             return self.has_glue(t.inner)
         if k != "struct":
             return False
@@ -1307,7 +1320,7 @@ class Checker:
             e.move = True
             self.moved[e.local] = e.span
             return
-        if k in ("Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch"):
+        if k in ("Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch", "Ternary"):
             e.owned = True              # a temporary whose ownership passes to the receiver
             return
         what = None
@@ -1396,7 +1409,19 @@ class Checker:
 
     def expect(self, e, exp, eu_ok=False):
         t = self.check(e, exp, eu=eu_ok)
+        return self.coerce(e, t, exp)
+
+    def coerce(self, e, t, exp):
+        """Convert the checked expression `e` (of type `t`) implicitly to `exp`, or report a mismatch."""
         e.conv = None
+        e.wrap_opt = None
+        if exp.kind == "opt" and not same(t, exp):
+            if t.poison:
+                return POISON
+            if self.coerce(e, t, exp.inner).poison:
+                return POISON
+            e.wrap_opt = exp                                 # a plain value becomes `Some(value)`
+            return exp
         if exp == STR and t == STRING:
             e.coerce = True
             return exp
@@ -1422,8 +1447,12 @@ class Checker:
             return self.untyped(e.l) and self.untyped(e.r)
         return False
 
+    def is_null(self, e):
+        return e.kind == "Ident" and e.name == "null" and not self.lookup("null")
+
     def check(self, e, exp=None, eu=False):
-        t = getattr(self, "ex_" + e.kind)(e, exp)
+        hint = exp.inner if (exp is not None and exp.kind == "opt" and not self.is_null(e) and e.kind != "Ternary") else exp
+        t = getattr(self, "ex_" + e.kind)(e, hint)
         e.ty = t
         if t.kind == "eu" and not eu and self.fn is not None and self.fn.try_stack and e.kind == "Call":
             return self.auto_try(e, t)
@@ -1502,6 +1531,124 @@ class Checker:
     def ex_Str(self, e, exp):
         return STR
 
+    # ----------------------------------------------- optionals, ternary
+    def ex_Coalesce(self, e, exp):
+        """`a ?? b`: `a` if it holds a value (or is a non-null pointer), else `b`."""
+        lt = self.check(e.l, None)
+        if lt.poison:
+            self.check(e.r)
+            return POISON
+        if lt.kind == "opt":
+            T, e.cmode = lt.inner, "opt"
+        elif lt.kind == "ptr":
+            T, e.cmode = lt, "ptr"
+        else:
+            self.d.error(e.l.span, f"the left side of `??` must be optional or a pointer, found `{lt}`",
+                         label="this can never be empty",
+                         help="declare it as `T?`, e.g. `let name: str? = null;`")
+            self.check(e.r)
+            return POISON
+        e.l.conv = None
+        rt = self.check(e.r, T)
+        if e.cmode == "opt" and rt.kind == "opt" and same(rt.inner, T):
+            e.r.conv = None
+            e.chain = True
+            return rt                                              # `a ?? b` with an optional `b` stays optional
+        e.chain = False
+        if self.coerce(e.r, rt, T).poison:
+            return POISON
+        self.consume(e.l)
+        return T
+
+    def ex_Ternary(self, e, exp):
+        self.expect(e.cond, BOOL)
+        r = self.ternary_arms(e, exp)
+        if not r.poison:
+            self.consume(e.a)               # the chosen arm's value is the result: an owned arm moves into it
+            self.consume(e.b)
+        return r
+
+    def ternary_arms(self, e, exp):
+        if exp is not None and exp.kind == "opt":
+            self.expect(e.a, exp)
+            self.expect(e.b, exp)
+            return exp
+        if self.untyped(e.a) and not self.untyped(e.b):
+            tb = self.check(e.b, exp)
+            if tb.poison:
+                self.check(e.a)
+                return POISON
+            self.expect(e.a, tb)
+            e.b.conv = None
+            return tb
+        ta = self.check(e.a, exp)
+        if ta.poison:
+            self.check(e.b)
+            return POISON
+        e.a.conv = None
+        if self.expect(e.b, ta).poison:
+            return POISON
+        return ta
+
+    def ex_OptPayload(self, e, exp):
+        return e.ty
+
+    def ex_OptChain(self, e, exp):
+        """`a?.b` / `a?.f(x)`: the field or call result, or nothing when `a` is empty (or a null pointer)."""
+        ot = self.check(e.obj, None)
+        args = e.args or []
+        if ot.poison:
+            for a in args:
+                self.check(a)
+            return POISON
+        if ot.kind == "opt":
+            pt, e.cmode = ot.inner, "opt"
+        elif ot.kind == "ptr" and ot.inner != VOID:
+            pt, e.cmode = ot, "ptr"
+        else:
+            self.d.error(e.obj.span, f"`?.` needs an optional value or a pointer, found `{ot}`",
+                         label="this is never empty", help="use `.` for values that are always present")
+            for a in args:
+                self.check(a)
+            return POISON
+        self.push()
+        loc = self.declare_local("$opt", pt, True, e.span)
+        loc.used = True
+        e.payload_local = loc
+        base = N("Ident", e.span, name="$opt")
+        node = N("Field", e.span, obj=base, name=e.name, name_span=e.name_span)
+        if e.args is not None:
+            node = N("Call", e.span, callee=node, args=list(e.args), targ=None, targs=None)
+        e.inner = node
+        it = self.check(node, None)
+        self.pop()
+        if it.poison:
+            return POISON
+        if it == VOID:
+            self.d.error(e.span, "`?.` needs a result: this call returns nothing", help="use `if x != null { x.f(); }` instead")
+            return POISON
+        e.flat = it.kind == "opt"
+        return it if e.flat else opt(it)
+
+    OPT_METHODS = ("is_some", "is_none", "unwrap", "unwrap_or")
+
+    def opt_method(self, e):
+        c = e.callee
+        t = c.obj.ty.inner
+        n = c.name
+        want = 1 if n == "unwrap_or" else 0
+        if len(e.args) != want:
+            self.d.error(e.span, f"`{n}` takes {want} argument{'s' if want != 1 else ''} but {len(e.args)} were supplied")
+            for a in e.args:
+                self.check(a)
+            return POISON
+        e.opt_method = n
+        if n in ("is_some", "is_none"):
+            return BOOL
+        if n == "unwrap_or":
+            self.expect(e.args[0], t)
+        return t
+
     # ------------------------------------------------------- Display / interpolation
     def display_impl(self, t):
         """The `to_string` method of `impl Display for T`, or None."""
@@ -1522,8 +1669,10 @@ class Checker:
         return call if not ty.poison else None
 
     def display_help(self, t):
+        if t.kind == "opt":
+            return "unwrap it first (`x ?? default`, `x.unwrap()`), or show it with `{x:?}`"
         if t.kind in ("struct", "enum", "arr", "slice"):
-            return "implement `Display` for it (`impl Display for T { fn to_string(self) -> String { .. } }`), or use `f\"{x:?}\"` for the automatic representation"
+            return "implement `Display` for it (`impl Display for T { fn to_string(self) -> String { .. } }`), or use `{x:?}` for the automatic representation"
         return None
 
     DEBUG_KINDS = ("struct", "enum", "arr", "slice", "ptr", "fn")
@@ -1532,7 +1681,7 @@ class Checker:
         """Can the automatic `{:?}` representation show a value of type `t`? Returns the offending type or None."""
         if t.poison or t.is_numeric or t in (BOOL, STR, STRING, ERR) or t.kind in ("enum", "ptr", "fn"):
             return None
-        if t.kind in ("arr", "slice"):
+        if t.kind in ("arr", "slice", "opt"):
             return self.debuggable(t.inner)
         if t.kind == "struct":
             seen = seen or set()
@@ -1545,6 +1694,100 @@ class Checker:
                     return bad
             return None
         return t
+
+    FMT_BUILTINS = ("print", "println", "format", "panic", "assert")
+
+    def fmt_args(self, e, name):
+        """Rust-style format strings: the template literal (first argument; second for `assert`) is turned into an FStr
+        node. `{}` takes the next positional argument, `{0}` a numbered one, `{name}` a named argument (`name = value`)
+        or else the variable of that name; `{x:spec}` formats. print/println/panic/assert keep working with plain text
+        and extra values, as before, when the literal has no braces."""
+        from .fmtspec import parse_template, SpecError
+        args = e.args
+        tidx = 1 if name == "assert" else 0
+        if len(args) <= tidx:
+            return True
+        t = args[tidx]
+        if t.kind == "FStr":
+            return True                                           # a re-check
+        if t.kind != "Str":
+            if name == "format":
+                self.d.error(t.span, "the first argument of `format` must be a string literal", label="expected a literal",
+                             help="the literal is the template: `format(\"{} of {}\", a, b)`")
+                return False
+            return True
+        if name != "format" and b"{" not in t.value and b"}" not in t.value:
+            return True
+        try:
+            items = parse_template(t.value)
+        except SpecError as err:
+            self.d.error(t.span, err.msg, label="in this format string", help=err.help)
+            return False
+        extras = args[tidx + 1:]
+        pos, named, ok, seen_named = [], {}, True, False
+        for a in extras:
+            if a.kind == "NamedArg":
+                seen_named = True
+                if a.name in named:
+                    self.d.error(a.name_span, f"the argument `{a.name}` is given twice")
+                    ok = False
+                named[a.name] = a
+            elif seen_named:
+                self.d.error(a.span, "a positional argument cannot follow a named argument", help="put the `name = value` arguments last")
+                ok = False
+            else:
+                pos.append(a)
+        if not ok:
+            return False
+        uses = {}                                                 # id(expression) -> times used
+        parts, nxt = [], 0
+        for it in items:
+            if it[0] == "lit":
+                parts.append(N("FPart", t.span, lit=it[1], expr=None, spec="", spec_span=None))
+                continue
+            _, ref, spec = it
+            if ref is None:
+                ref, nxt = nxt, nxt + 1
+            if isinstance(ref, int):
+                if ref >= len(pos):
+                    self.d.error(t.span, f"the format string uses argument {ref} but only {len(pos)} {'was' if len(pos) == 1 else 'were'} given",
+                                 label="in this format string",
+                                 help="add the value after the string, or name it: `{total}` with `total = ...`" if not pos else None)
+                    return False
+                ex = pos[ref]
+            elif ref in named:
+                ex = named[ref].expr
+            else:                                                 # the variable (or field path) of that name
+                segs = ref.split(".")
+                ex = N("Ident", t.span, name=segs[0])
+                for sname in segs[1:]:
+                    ex = N("Field", t.span, obj=ex, name=sname, name_span=t.span)
+                uses[id(ex)] = 1
+            uses[id(ex)] = uses.get(id(ex), 0) + 1
+            part = N("FPart", t.span, lit=None, expr=ex, spec=spec, spec_span=t.span)
+            parts.append(part)
+        for a in pos:
+            if id(a) not in uses:
+                self.d.error(a.span, "this argument is never used by the format string", label="unused argument",
+                             help="add a `{}` for it")
+                ok = False
+            elif uses[id(a)] > 1 and a.kind not in ("Ident", "Int", "Float", "Str", "Bool", "Field"):
+                self.d.error(a.span, "an argument used more than once must be a simple value",
+                             help="bind it to a variable first, then use `{name}`")
+                ok = False
+        for a in named.values():
+            if id(a.expr) not in uses:
+                self.d.error(a.name_span, f"the argument `{a.name}` is never used by the format string", label="unused argument",
+                             help=f"add `{{{a.name}}}` to the string")
+                ok = False
+            elif uses[id(a.expr)] > 1 and a.expr.kind not in ("Ident", "Int", "Float", "Str", "Bool", "Field"):
+                self.d.error(a.expr.span, "an argument used more than once must be a simple value",
+                             help="bind it to a variable first, then use `{name}`")
+                ok = False
+        if not ok:
+            return False
+        args[tidx:] = [N("FStr", t.span, parts=parts)]
+        return True
 
     def ex_FStr(self, e, exp):
         from .fmtspec import parse_spec, check_for, SpecError
@@ -1614,12 +1857,12 @@ class Checker:
     def ex_Ident(self, e, exp):
         if e.name == "null" and not self.lookup("null"):
             e.is_null = True
-            if exp is not None and exp.kind in ("ptr", "fn"):
+            if exp is not None and exp.kind in ("ptr", "fn", "opt"):
                 return exp
             if exp is not None and exp.poison:
                 return POISON
-            self.d.error(e.span, "cannot infer the pointer type of `null`",
-                         help="write `null as *T`, or give the variable a pointer type, e.g. `let p: *i32 = null;`")
+            self.d.error(e.span, "cannot infer the type of `null`",
+                         help="write `null as *T`, or give the variable a pointer or optional type, e.g. `let p: *i32 = null;` or `let n: i32? = null;`")
             return POISON
         loc = self.lookup(e.name)
         if loc:
@@ -1832,7 +2075,7 @@ class Checker:
             if t.poison:
                 return t
             if not self.is_place(e.expr) and getattr(e, "auto_ref", False) and e.expr.kind in (
-                    "Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch", "Cast", "Field", "Index"):
+                    "Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch", "Ternary", "Cast", "Field", "Index"):
                 e.temp = True                   # `make().method()`: the receiver is a temporary that lives for the statement
                 return ptr(t)
             if not self.is_place(e.expr):
@@ -1897,6 +2140,8 @@ class Checker:
                                  help="compare explicitly, e.g. `x != 0`" if t.is_numeric else None)
                     return BOOL
             return BOOL
+        if op == "??":
+            return self.ex_Coalesce(e, exp)
         arith_like = op in ARITH or op in BITWISE
         if op in SHIFT:
             lt = self.check(l, exp if exp is not None and exp.is_int else None)
@@ -1911,13 +2156,21 @@ class Checker:
         hint = exp if (arith_like and exp is not None and exp.is_numeric) else None
         if self.untyped(l) and not self.untyped(r):
             rt = self.check(r, None)
-            lt = self.check(l, rt if (rt.is_numeric or rt.kind in ("ptr", "fn")) else None)
+            lt = self.check(l, rt if (rt.is_numeric or rt.kind in ("ptr", "fn", "opt")) else None)
         else:
             lt = self.check(l, hint)
-            rt = self.check(r, lt if (lt.is_numeric or lt.kind in ("ptr", "fn")) else None)
+            rt = self.check(r, lt if (lt.is_numeric or lt.kind in ("ptr", "fn", "opt")) else None)
         e.opty = lt
         if lt.poison or rt.poison:
             return BOOL if op in CMP else POISON
+        if op in ("==", "!=") and lt.kind == "opt" and rt.kind == "opt" and (self.is_null(l) or self.is_null(r)):
+            if self.is_null(l) and self.is_null(r):
+                return BOOL
+            e.opt_null = True                                        # `x == null` / `x != null` on an optional
+            e.opt_side = "r" if self.is_null(l) else "l"
+            for side in (l, r):
+                side.conv = None
+            return BOOL
         if lt in (STR, STRING) and rt in (STR, STRING) and op in ("+", "==", "!="):
             if op == "+":
                 if self.nostd:
@@ -2301,6 +2554,96 @@ class Checker:
             return True
         return self.lookup(root.name) is not None
 
+    LITERAL_DEFAULTS = ("Int", "Float", "Bool", "Str")
+
+    def default_ok(self, d):
+        if d.kind in self.LITERAL_DEFAULTS or (d.kind == "Ident" and d.name == "null"):
+            return True
+        return d.kind == "Unary" and d.op == "-" and d.expr.kind in ("Int", "Float")
+
+    def normalize_args(self, e, sym):
+        """Match the written arguments to the parameters: positional first, then `name = value`, then defaults.
+        Leaves `e.args` as a plain positional list (the receiver, if any, first). False after an error."""
+        params = getattr(sym.node, "params", None)
+        if params is None:
+            return True
+        has_named = any(a.kind == "NamedArg" for a in e.args)
+        n_pos = sum(1 for a in e.args if a.kind != "NamedArg")
+        if not has_named and (n_pos >= len(params) or not any(getattr(p, "default", None) is not None for p in params)):
+            return True                                         # the common case: nothing to do
+        off = 1 if getattr(e, "method_recv", False) else 0
+        fname = f"function `{sym.name}`"
+        slots = [None] * len(params)
+        ok, seen_named, extra = True, False, []
+        for a in e.args:
+            if a.kind == "NamedArg":
+                seen_named = True
+                names = [p.name for p in params]
+                if a.name not in names or names.index(a.name) < off or getattr(params[names.index(a.name)], "self_param", False):
+                    sg = suggest(a.name, [p.name for p in params[off:]])
+                    self.d.error(a.name_span, f"{fname} has no parameter named `{a.name}`",
+                                 label="no such parameter", help=f"did you mean `{sg}`?" if sg else
+                                 "parameters: " + ", ".join(p.name for p in params[off:]) if params[off:] else None)
+                    self.check(a.expr)
+                    ok = False
+                    continue
+                i = names.index(a.name)
+                if slots[i] is not None:
+                    self.d.error(a.name_span, f"the argument `{a.name}` is given twice", label="already supplied")
+                    self.check(a.expr)
+                    ok = False
+                    continue
+                slots[i] = a.expr
+            else:
+                if seen_named:
+                    self.d.error(a.span, "a positional argument cannot follow a named argument",
+                                 help="put the `name = value` arguments last")
+                    self.check(a)
+                    ok = False
+                    continue
+                pos = sum(1 for x in e.args[:e.args.index(a)] if x.kind != "NamedArg")
+                if pos < len(params):
+                    slots[pos] = a
+                else:
+                    extra.append(a)
+        if not ok:
+            for v in slots + extra:
+                if v is not None and not hasattr(v, "ty"):
+                    self.check(v)
+            return False
+        missing = []
+        for i, p in enumerate(params):
+            if slots[i] is None:
+                d = getattr(p, "default", None)
+                if d is None:
+                    missing.append(p.name)
+                    continue
+                if not self.default_ok(d):
+                    if not getattr(d, "_reported", False):
+                        d._reported = True
+                        self.d.error(d.span, "a default value must be a literal", label="not a literal",
+                                     help="use a number, string, `true` / `false` or `null`")
+                    return False
+                slots[i] = self.clone(d)
+        if missing:
+            plural = "s" if len(missing) > 1 else ""
+            self.d.error(e.span, f"{fname} is missing the argument{plural} {', '.join(f'`{m}`' for m in missing)}",
+                         label="missing argument" + plural,
+                         notes=["signature: fn " + sym.name + "(" + ", ".join(
+                             p.name + ("=.." if getattr(p, "default", None) is not None else "") for p in params[off:]) + ")"])
+            for v in slots + extra:
+                if v is not None:
+                    self.check(v)
+            return False
+        e.args = slots + extra
+        return True
+
+    def ex_NamedArg(self, e, exp):
+        self.d.error(e.span, "named arguments only work when calling a function that is declared with `fn`",
+                     label="not allowed here", help="pass the value positionally")
+        self.check(e.expr)
+        return POISON
+
     def check_args(self, e, params, name, sig=None, variadic=False):
         n = len(params)
         bad = len(e.args) < n or (len(e.args) > n and not variadic)
@@ -2360,6 +2703,8 @@ class Checker:
             hit = self.find_method(e)
             if hit == "bad":
                 return POISON
+            if hit == "opt":
+                return self.opt_method(e)
             if hit is not None:
                 ent = ("sym", hit)
         if ent is None or ent[0] != "sym" or ent[1].kind != "fn":
@@ -2383,6 +2728,8 @@ class Checker:
                 self.check(a)
             return POISON
         sym = ent[1]
+        if not self.normalize_args(e, sym):
+            return POISON
         if sym.tparams:
             sym = self.instantiate_call(e, sym, exp)
             if sym is None:
@@ -2435,6 +2782,8 @@ class Checker:
             for a in e.args:
                 self.check(a)
             return "bad"
+        if ot.kind == "opt" and c.name in self.OPT_METHODS:
+            return "opt"
         base = ot.inner if (ot.kind == "ptr" and ot.inner != VOID) else ot
         if base.kind == "struct" and c.name in base.sym.field_map:
             return None
@@ -2495,7 +2844,7 @@ class Checker:
     PRINTABLE_KINDS = ("enum", "ptr", "fn")
 
     NOSTD_BANNED = {"print", "println", "alloc", "free", "exit", "to_str", "string_new", "string_from",
-                    "string_clear", "cstr", "gc_collect", "gc_bytes", "gc_collections", "alloc_in",
+                    "string_clear", "cstr", "format", "gc_collect", "gc_bytes", "gc_collections", "alloc_in",
                     "gc_collect_gen", "gc_gen_bytes", "gc_gen_collections"}
 
     def need_std(self, span, what):
@@ -2520,6 +2869,19 @@ class Checker:
             for a in args:
                 self.check(a)
             return POISON
+
+        if name in self.FMT_BUILTINS:
+            if not self.fmt_args(e, name):
+                for a in e.args:
+                    self.check(a.expr if a.kind == "NamedArg" else a)
+                return POISON
+            args = e.args
+        if name == "format":
+            if not args:
+                self.d.error(e.span, "`format` takes a format string: `format(\"{} items\", n)`")
+                return POISON
+            self.check(args[0], None)
+            return STRING
 
         def arity(n_min, n_max=None):
             n_max = n_min if n_max is None else n_max
@@ -2757,12 +3119,19 @@ class Checker:
                              help="end the block with `return`, `throw`, `break`, `continue` or `panic(...)`, "
                                   "or use `catch <default value>`")
         else:
+            e.binder_local = None
+            self.push()
+            if e.binder:
+                loc = self.declare_local(e.binder, ERR, False, e.binder_span)
+                loc.used = True
+                e.binder_local = loc
             if T == VOID:
                 self.d.error(h.span, "a default value makes no sense here: the call yields no value",
                              help="use `catch { ... }` or `catch |e| { ... }`")
                 self.check(h)
             else:
                 self.expect(h, T)
+            self.pop()
         return T
 
     def check_handler_loosely(self, e):
@@ -2810,7 +3179,9 @@ class Checker:
             t = STR
         s.init.conv = None
         if ann is not None:
-            if ann.is_numeric and t.is_numeric and t != ann:
+            if ann.kind == "opt" and not same(t, ann):
+                self.coerce(s.init, t, ann)
+            elif ann.is_numeric and t.is_numeric and t != ann:
                 self.implicit_conv(s.init, t, ann)
             elif self.ptr_ok(ann, t):
                 pass

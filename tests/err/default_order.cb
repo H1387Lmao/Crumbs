@@ -1,0 +1,2 @@
+fn bad(a: i32 = 1, b: i32) {} // ERROR: has no default, but the one before it does
+fn main() {}

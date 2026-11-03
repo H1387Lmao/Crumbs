@@ -1,4 +1,6 @@
-hello world! 255 7 {braces}
+hello world! 7 {braces}
+1 + 2 = 3
+255 world 255 named 255
 ff FF 0xff 0b11111111 377 0o377 11111111 A
 [   255] [255   ] [ 255  ] [**255**] [+255] [-00255] [+00255] [ 255]
 1,234,567 -1,234,567 0xdead_beef 1_000_000_000_000
@@ -12,6 +14,7 @@ p = (3, -4), padded [   (3, -4)] [(3, -4)***]
 green! / Green
 <(3, -4)><red!><42>
 (3, -4) has 7 bytes
+fields 3 and -4
 Shape { corner: Point { x: 3, y: -4 }, label: "a \"quoted\"\tlabel", sides: [1, 2], color: Green, solid: true, weight: 0.5 }
 Point { x: 3, y: -4 } [1, 2, 3] "world" 255 3.14159265
 Pair<i32> { a: 1, b: 2 }
@@ -20,4 +23,5 @@ b 2   509 world 256
 nested ff and    "world"
 1.500s 2m05.000s
 00,01,02,
-
+done 9
+{}

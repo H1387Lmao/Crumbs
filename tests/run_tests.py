@@ -124,6 +124,21 @@ def build_fixtures():
         subprocess.run(args, check=True)
 
 
+def test_docs_fresh():
+    """docs/stdlib.json is generated from src/std/*.cb: it must match what the generator produces now."""
+    out = os.path.join(HERE, "..", "docs", "stdlib.json")
+    before = open(out).read()
+    r = subprocess.run([sys.executable, os.path.join(HERE, "..", "tools", "gen_stdlib_docs.py"), "--missing"],
+                       capture_output=True, text=True)
+    after = open(out).read()
+    missing = [l for l in r.stdout.splitlines()[2:] if l.strip()]
+    ok = r.returncode == 0 and before == after and not missing
+    why = "run `python3 tools/gen_stdlib_docs.py` and commit docs/stdlib.json" if before != after else ""
+    if missing:
+        why += " undocumented: " + ", ".join(missing[:8])
+    report("docs/stdlib.json is up to date", ok, why or r.stderr)
+
+
 def main():
     only = sys.argv[1:]
     build_fixtures()
@@ -153,6 +168,9 @@ def main():
         sys.path.insert(0, HERE)
         import test_cookie
         test_cookie.run_all(lambda name, ok, detail="": report(name, ok, detail))
+    if not only or "docs" in " ".join(only):
+        print("== documentation")
+        test_docs_fresh()
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
 

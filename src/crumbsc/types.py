@@ -27,6 +27,8 @@ class Ty:
             self.key = "[]" + inner.key
         elif kind == "eu":
             self.key = inner.key + "!"
+        elif kind == "opt":
+            self.key = inner.key + "?"
         elif kind == "fn":
             self.key = "fn(" + ",".join(p.key for p in params) + ")->" + inner.key
         elif kind in ("struct", "enum"):
@@ -52,6 +54,8 @@ class Ty:
             return f"[]{self.inner}"
         if k == "eu":
             return f"{self.inner}!"
+        if k == "opt":
+            return f"{self.inner}?"
         if k == "fn":
             ret = "" if self.inner.kind == "prim" and self.inner.name == "void" else f" -> {self.inner}"
             return f"fn({', '.join(str(p) for p in self.params)}){ret}"
@@ -124,6 +128,10 @@ def fnty(params, ret):
 
 def eu(t):
     return Ty("eu", inner=t)
+
+
+def opt(t):
+    return Ty("opt", inner=t)
 
 
 def same(a, b):
