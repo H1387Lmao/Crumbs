@@ -227,9 +227,6 @@ class CodeGen:
                 c = f"cb_cvt_{dst.name}((__int128)({c}), {self.loc(e.span)})"
             else:
                 c = f"(({self.ctype(dst)})({c}))"
-        wrap = getattr(e, "wrap_opt", None)
-        if wrap is not None:                  # a plain value where an optional is expected
-            c = f"(({self.ctype(wrap)}){{1, {c}}})"
         if (self.stmt_temps is not None and e.kind in ("Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch", "Ternary")
                 and not getattr(e, "owned", False) and e.ty is not None and not e.ty.poison and e.ty.kind != "eu"
                 and self.ck.has_glue(e.ty)):
@@ -242,7 +239,10 @@ class CodeGen:
         if getattr(e, "auto_try", False):     # a failing call inside `try { }`
             c = self.try_wrap(c, e.eu_ty)
         if getattr(e, "coerce", False):       # String -> str view
-            return f"cb_string_view({c})"
+            c = f"cb_string_view({c})"
+        wrap = getattr(e, "wrap_opt", None)
+        if wrap is not None:                  # a plain value where an optional is expected
+            c = f"(({self.ctype(wrap)}){{1, {c}}})"
         return c
 
     def sv(self, e):
@@ -482,7 +482,8 @@ class CodeGen:
                     collect(n.r)
                 else:
                     parts.append(self.sv(n))
-            collect(e)
+            collect(e.l)                       # (not `e` itself: it may carry `coerce` when a String is passed as a `str`)
+            collect(e.r)
             fn = "cb_string_catv" if e.strk == "String" else "cb_str_catv"
             return f"{fn}((cb_str[]){{{', '.join(parts)}}}, {len(parts)}, {self.loc(e.op_span)})"
         if e.opty == STR and e.op in ("==", "!="):

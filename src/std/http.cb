@@ -1,0 +1,177 @@
+// std.http: a small HTTP/1.1 client over std.net (plain `http://` only; there is no TLS).
+//
+//   import std.http;
+//
+//   let r = http.get("http://example.org/") catch |e| { panic("request failed: {e}"); };
+//   println("{} {}", r.status, r.reason);
+//   println(r.header("content-type") ?? "unknown type");
+//   println(r.body);
+//
+//   let p = http.post("http://localhost:8080/items", "{\"id\":1}", headers = "Content-Type: application/json");
+//
+// `headers` is text with one `Name: value` per line. Every request sends `Connection: close`, so the
+// answer is complete when the server closes the connection. Responses with `Content-Length` and
+// `Transfer-Encoding: chunked` bodies are understood. Failures: BadUrl, Unsupported (an `https://` URL),
+// BadResponse, and the std.net errors (ResolveFailed, ConnectFailed, Timeout, ...).
+import std.net;
+import std.conv;
+
+pub error BadUrl;              // the URL is not `http://host[:port][/path]`
+pub error Unsupported;         // `https://` needs TLS, which std.http does not have
+pub error BadResponse;         // the server's answer is not valid HTTP
+
+pub struct Header { name: String, value: String }
+
+pub struct Response {
+    status: i32,
+    reason: String,
+    headers: List<Header>,
+    body: String,
+}
+
+impl Response {
+    // true for 2xx statuses
+    pub fn ok(self) -> bool { return self.status >= 200 && self.status < 300; }
+
+    // the value of a header (the name is matched ignoring case), or null
+    pub fn header(self, name: str) -> str? {
+        for i in 0..self.headers.len {
+            let h = self.headers.at(i);
+            if h.name.eq_ignore_case(name) { return h.value; }
+        }
+        return null;
+    }
+}
+
+struct Url { host: String, port: i64, path: String }
+
+fn parse_url(url: str) -> Url! {
+    if url.starts_with("https://") { throw Unsupported; }
+    let mut rest = url;
+    if url.starts_with("http://") { rest = url[7..url.len]; }
+    let slash = rest.find("/");
+    let hostport = slash < 0 ? rest : rest[0..slash];
+    let path = slash < 0 ? "/" : rest[slash..rest.len];
+    if hostport.len == 0 { throw BadUrl; }
+    let mut host = hostport;
+    let mut port: i64 = 80;
+    let colon = hostport.rfind(":");
+    if colon >= 0 && !hostport.contains("]") {
+        host = hostport[0..colon];
+        port = conv.parse_i64(hostport[colon + 1..hostport.len]).catch(|e| -1);
+        if port < 1 || port > 65535 { throw BadUrl; }
+    }
+    if host.len == 0 { throw BadUrl; }
+    return Url { host: string_from(host), port: port, path: string_from(path) };
+}
+
+fn hex_value(c: u8) -> i64 {
+    if c >= '0' && c <= '9' { return (c - '0') as i64; }
+    if c >= 'a' && c <= 'f' { return (c - 'a') as i64 + 10; }
+    if c >= 'A' && c <= 'F' { return (c - 'A') as i64 + 10; }
+    return -1;
+}
+
+// the body of a `Transfer-Encoding: chunked` message
+fn dechunk(raw: str) -> String! {
+    let mut out = string_new();
+    let mut pos: i64 = 0;
+    while pos < raw.len {
+        let rest = raw[pos..raw.len];
+        let eol = rest.find("\r\n");
+        if eol < 0 { throw BadResponse; }
+        let mut size: i64 = 0;
+        for i in 0..eol {
+            if rest[i] == ';' { break; }
+            let d = hex_value(rest[i]);
+            if d < 0 { throw BadResponse; }
+            size = size * 16 + d;
+        }
+        pos += eol + 2;
+        if size == 0 { break; }
+        if pos + size > raw.len { throw BadResponse; }
+        out += raw[pos..pos + size];
+        pos += size + 2;
+    }
+    return out;
+}
+
+fn parse_response(raw: str) -> Response! {
+    let split = raw.find("\r\n\r\n");
+    if split < 0 { throw BadResponse; }
+    let head = raw[0..split];
+    let payload = raw[split + 4..raw.len];
+    let lines = head.split("\r\n");
+    let status_line = lines.get(0);
+    let sp1 = status_line.find(" ");
+    if sp1 < 0 || !status_line.starts_with("HTTP/") { throw BadResponse; }
+    let after = status_line[sp1 + 1..status_line.len];
+    let sp2 = after.find(" ");
+    let code_text = sp2 < 0 ? after : after[0..sp2];
+    let status = conv.parse_i32(code_text).catch(|e| -1);
+    if status < 100 || status > 999 { throw BadResponse; }
+    let mut res = Response {
+        status: status,
+        reason: string_from(sp2 < 0 ? "" : after[sp2 + 1..after.len]),
+        headers: List.new(),
+        body: string_new(),
+    };
+    for i in 1..lines.len {
+        let line = lines.get(i);
+        let colon = line.find(":");
+        if colon <= 0 { continue; }
+        res.headers.push(Header { name: string_from(line[0..colon].trim()), value: string_from(line[colon + 1..line.len].trim()) });
+    }
+    let te = res.header("transfer-encoding") ?? "";
+    if te.contains("chunked") {
+        res.body = try dechunk(payload);
+    } else {
+        let cl = res.header("content-length");
+        let want = conv.parse_i64(cl ?? "").catch(|e| -1);
+        res.body = string_from(want >= 0 && want <= payload.len ? payload[0..want] : payload);
+    }
+    return res;
+}
+
+// sends one request and reads the whole answer. `headers` holds one `Name: value` per line.
+pub fn request(method: str, url: str, body: str = "", headers: str = "", timeout_ms: i64 = 10000) -> Response! {
+    let u = try parse_url(url);
+    let mut req = string_from(method);
+    req += " ";
+    req += u.path;
+    req += " HTTP/1.1\r\nHost: ";
+    req += u.host;
+    if u.port != 80 { req += format(":{}", u.port); }
+    req += "\r\nUser-Agent: crumbs\r\nAccept: */*\r\nConnection: close\r\n";
+    let extra = headers.split("\n");
+    for i in 0..extra.len {
+        let line = extra.get(i).trim();
+        if line.len > 0 { req += line; req += "\r\n"; }
+    }
+    if body.len > 0 || method == "POST" || method == "PUT" {
+        req += format("Content-Length: {}\r\n", body.len);
+    }
+    req += "\r\n";
+    req += body;
+    let sock = try net.Socket.connect(u.host, u.port);
+    if timeout_ms > 0 { sock.set_timeout_ms(timeout_ms); }
+    try sock.send(req);
+    let raw = try sock.read_all();
+    return try parse_response(raw);
+}
+
+pub fn get(url: str, headers: str = "", timeout_ms: i64 = 10000) -> Response! {
+    return try request("GET", url, headers = headers, timeout_ms = timeout_ms);
+}
+
+pub fn delete(url: str, headers: str = "", timeout_ms: i64 = 10000) -> Response! {
+    return try request("DELETE", url, headers = headers, timeout_ms = timeout_ms);
+}
+
+pub fn post(url: str, body: str, headers: str = "", timeout_ms: i64 = 10000) -> Response! {
+    return try request("POST", url, body, headers, timeout_ms);
+}
+
+pub fn put(url: str, body: str, headers: str = "", timeout_ms: i64 = 10000) -> Response! {
+    return try request("PUT", url, body, headers, timeout_ms);
+}

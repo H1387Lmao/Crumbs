@@ -1,0 +1,55 @@
+// std.http: a GET (Content-Length), a chunked GET, a POST with headers and a 404, against a tiny std.net server.
+import std.net;
+import std.http;
+import std.thread;
+import std.conv;
+
+// a tiny server: answers three requests, then stops
+fn handle(c: *net.Socket) {
+    let request_line = c.read_line() catch string_new();
+    let mut length: i64 = 0;
+    while true {
+        let line = c.read_line() catch string_new();
+        if line.len == 0 { break; }
+        if line.starts_with("Content-Length:") { length = conv.parse_i64(line[15..line.len].trim()) catch 0; }
+    }
+    let body = c.read_exact(length) catch string_new();
+    if request_line.starts_with("GET /hello") {
+        c.send("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello") catch |e| { return; };
+    } else if request_line.starts_with("GET /chunked") {
+        c.send("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n7\r\n, world\r\n0\r\n\r\n") catch |e| { return; };
+    } else if request_line.starts_with("POST /echo") {
+        let reply = format("HTTP/1.1 201 Created\r\nX-Seen: {}\r\nContent-Length: {}\r\n\r\n{}", request_line, body.len, body);
+        c.send(reply) catch |e| { return; };
+    } else {
+        c.send("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n") catch |e| { return; };
+    }
+}
+
+fn serve(arg: *void) -> *void {
+    let l = arg as *net.Socket;
+    for i in 0..4 {
+        let mut c = l.accept() catch |e| { return null; };
+        handle(&c);
+    }
+    return null;
+}
+
+fn main() {
+    let mut l = net.Socket.listen("127.0.0.1", 0) catch |e| { panic("listen failed"); };
+    let base = format("http://127.0.0.1:{}", l.local_port());
+    let mut t = thread.spawn(serve, &l as *void) catch |e| { panic("spawn"); };
+
+    let r1 = http.get(base + "/hello").catch(|e| { panic("get failed: {e}"); });
+    println("{} {} ok={} body={} type={}", r1.status, r1.reason, r1.ok(), r1.body, r1.header("CONTENT-TYPE") ?? "?");
+    let r2 = http.get(base + "/chunked").catch(|e| { panic("chunked failed: {e}"); });
+    println("{} body={}", r2.status, r2.body);
+    let r3 = http.post(base + "/echo", "name=crumbs", headers = "X-Test: 1").catch(|e| { panic("post failed: {e}"); });
+    println("{} {} seen={} body={}", r3.status, r3.reason, r3.header("x-seen") ?? "?", r3.body);
+    let r4 = http.get(base + "/missing").catch(|e| { panic("404 failed: {e}"); });
+    println("{} ok={} header={:?}", r4.status, r4.ok(), r4.header("x-none"));
+    t.join();
+
+    let _e1 = http.get("https://example.org/").catch(|e| { println("https: {e}"); return; });
+    println("unreachable");
+}

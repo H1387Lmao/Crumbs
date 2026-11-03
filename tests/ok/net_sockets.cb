@@ -1,0 +1,26 @@
+// std.net: a TCP echo server on a thread and a client; connecting to a closed port fails.
+import std.net;
+import std.thread;
+
+fn serve(arg: *void) -> *void {
+    let l = arg as *net.Socket;
+    let c = l.accept() catch |e| { return null; };
+    let line = c.read_line() catch string_new();
+    c.send("echo: ") catch |e| { return null; };
+    c.send(line) catch |e| { return null; };
+    c.send("\n") catch |e| { return null; };
+    return null;
+}
+
+fn main() {
+    let mut l = net.Socket.listen("127.0.0.1", 0) catch |e| { panic("listen failed"); };
+    let port = l.local_port();
+    println("port ok: ", port > 0);
+    let mut t = thread.spawn(serve, &l as *void) catch |e| { panic("spawn"); };
+    let c = net.Socket.connect("127.0.0.1", port) catch |e| { panic("connect failed"); };
+    c.send("hello net\r\n") catch |e| { panic("send"); };
+    let reply = c.read_all() catch string_from("failed");
+    print(reply);
+    t.join();
+    let _bad = net.Socket.connect("127.0.0.1", 1) catch |e| { println("refused: ", e); return; };
+}
