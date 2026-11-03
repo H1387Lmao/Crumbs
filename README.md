@@ -483,6 +483,18 @@ helpers: they bind libc and pthread with plain `extern fn` / `extern struct` / `
 | `crumbsc/diag.py` | rustc-style diagnostics with "did you mean" suggestions |
 | `driver.py` | build pipeline, link plan (`link`/`--link`/`--pkg`), command line |
 
+## Documentation
+
+`docs/index.html` is a single page with two halves, switched by the tabs at the top: the **Guide** (written in `docs/features.json`) and the
+**Standard library** reference (`docs/stdlib.json`). The search box in the sidebar looks inside both: it finds individual features of the guide
+and individual functions, types and errors of the library, and a click jumps straight to them.
+
+`docs/stdlib.json` is generated: `python3 tools/gen_stdlib_docs.py` reads every `pub` item of `src/std/*.cb` and uses the `//` comment block above
+it as the description. To document a function, put a comment above it. `tools/stdlib_notes.txt` adds parameter and return descriptions
+(`module.Type.method :: description :: returns :: param=note; param=note`), `tools/stdlib_meta.json` holds module summaries, examples and
+type notes, and `docs/stdlib_builtins.json` describes the prelude functions that live in the compiler. The test suite fails when
+`docs/stdlib.json` is out of date or an item has no description; `python3 tools/check_stdlib_examples.py` compiles every example.
+
 ## Preprocessor
 
 Source text goes through a preprocessor before lexing. Directives start with `#` at the beginning of a line:

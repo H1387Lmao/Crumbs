@@ -1,0 +1,481 @@
+{
+ "modules": [
+  {
+   "id": "prelude",
+   "name": "prelude",
+   "import": "(built in)",
+   "summary": "Functions that need no import",
+   "description": "These names are always available. `String`, `str`, `List<T>` and the `Display` trait need no import either. Types, `null`, `?` optionals and error unions are part of the language itself: see the guide.",
+   "example": "let name = string_from(\"world\");\nprintln(\"hello, {name}!\");\nlet buf = alloc(i64, 4);\nbuf[0] = 7;\nprintln(\"{} {}\", buf[0], size_of(i64));\nfree(buf);",
+   "errors": [],
+   "consts": [],
+   "types": [],
+   "traits": [],
+   "functions": [
+    {
+     "name": "print",
+     "tparams": [],
+     "params": [
+      {
+       "name": "template",
+       "type": "str",
+       "doc": "a format string; `{}` and `{name}` insert values (see Format strings)"
+      },
+      {
+       "name": "args",
+       "type": "...",
+       "doc": "the values to insert"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Writes formatted text to standard output with no newline.",
+     "fallible": false
+    },
+    {
+     "name": "println",
+     "tparams": [],
+     "params": [
+      {
+       "name": "template",
+       "type": "str",
+       "doc": "a format string, or any single value"
+      },
+      {
+       "name": "args",
+       "type": "...",
+       "doc": "the values to insert"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Like `print`, then a newline. `println(x)` prints any `Display` value.",
+     "fallible": false
+    },
+    {
+     "name": "format",
+     "tparams": [],
+     "params": [
+      {
+       "name": "template",
+       "type": "str",
+       "doc": "a format string"
+      },
+      {
+       "name": "args",
+       "type": "...",
+       "doc": "the values to insert"
+      }
+     ],
+     "returns": "String",
+     "returns_doc": "a new `String`",
+     "receiver": null,
+     "doc": "Builds text the way `print` would write it.",
+     "fallible": false
+    },
+    {
+     "name": "panic",
+     "tparams": [],
+     "params": [
+      {
+       "name": "template",
+       "type": "str",
+       "doc": "a format string describing what went wrong"
+      },
+      {
+       "name": "args",
+       "type": "...",
+       "doc": "the values to insert"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Prints the message with its source location to standard error and stops the program with exit status 1. Destructors do not run.",
+     "fallible": false
+    },
+    {
+     "name": "assert",
+     "tparams": [],
+     "params": [
+      {
+       "name": "condition",
+       "type": "bool",
+       "doc": "must be true"
+      },
+      {
+       "name": "template",
+       "type": "str",
+       "doc": "optional message (a format string)"
+      },
+      {
+       "name": "args",
+       "type": "...",
+       "doc": "the values to insert"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Panics with `assertion failed` (or your message) when `condition` is false.",
+     "fallible": false
+    },
+    {
+     "name": "exit",
+     "tparams": [],
+     "params": [
+      {
+       "name": "code",
+       "type": "i32",
+       "doc": "the process exit status"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Ends the program immediately. Destructors do not run.",
+     "fallible": false
+    },
+    {
+     "name": "to_str",
+     "tparams": [],
+     "params": [
+      {
+       "name": "value",
+       "type": "any",
+       "doc": "a number, `bool`, `u8` or pointer"
+      }
+     ],
+     "returns": "String",
+     "returns_doc": "a new `String`",
+     "receiver": null,
+     "doc": "Converts a value to its text form. Use `\"{x}\"` for any `Display` type.",
+     "fallible": false
+    },
+    {
+     "name": "string_new",
+     "tparams": [],
+     "params": [],
+     "returns": "String",
+     "returns_doc": "a new `String`",
+     "receiver": null,
+     "doc": "Creates an empty `String`.",
+     "fallible": false
+    },
+    {
+     "name": "string_from",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text to copy"
+      }
+     ],
+     "returns": "String",
+     "returns_doc": "a new `String`",
+     "receiver": null,
+     "doc": "Creates an owned `String` holding a copy of `s`.",
+     "fallible": false
+    },
+    {
+     "name": "string_clear",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "String",
+       "doc": "the string to empty"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Empties a `String` but keeps its buffer.",
+     "fallible": false
+    },
+    {
+     "name": "alloc",
+     "tparams": [],
+     "params": [
+      {
+       "name": "T",
+       "type": "type",
+       "doc": "the element type"
+      },
+      {
+       "name": "n",
+       "type": "i64",
+       "doc": "how many elements"
+      }
+     ],
+     "returns": "[]T",
+     "returns_doc": "a heap slice of length `n`",
+     "receiver": null,
+     "doc": "Allocates `n` zeroed elements on the garbage-collected heap: `let buf = alloc(i64, 100);`.",
+     "fallible": false
+    },
+    {
+     "name": "alloc_in",
+     "tparams": [],
+     "params": [
+      {
+       "name": "T",
+       "type": "type",
+       "doc": "the element type"
+      },
+      {
+       "name": "n",
+       "type": "i64",
+       "doc": "how many elements"
+      },
+      {
+       "name": "r",
+       "type": "region",
+       "doc": "the region that owns the memory"
+      }
+     ],
+     "returns": "[]T",
+     "returns_doc": "a slice that lives as long as the region",
+     "receiver": null,
+     "doc": "Allocates `n` zeroed elements inside a `region` block. They are released when the region ends.",
+     "fallible": false
+    },
+    {
+     "name": "free",
+     "tparams": [],
+     "params": [
+      {
+       "name": "buf",
+       "type": "[]T or String",
+       "doc": "a slice from `alloc`, or a `String`"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Releases the memory now instead of waiting for the collector.",
+     "fallible": false
+    },
+    {
+     "name": "slice_of",
+     "tparams": [],
+     "params": [
+      {
+       "name": "p",
+       "type": "*T",
+       "doc": "a pointer to the first element"
+      },
+      {
+       "name": "n",
+       "type": "i64",
+       "doc": "the number of elements"
+      }
+     ],
+     "returns": "[]T",
+     "returns_doc": "a slice of length `n`",
+     "receiver": null,
+     "doc": "Wraps C memory (or any pointer) as a slice. Nothing is copied.",
+     "fallible": false
+    },
+    {
+     "name": "size_of",
+     "tparams": [],
+     "params": [
+      {
+       "name": "T",
+       "type": "type",
+       "doc": "any type"
+      }
+     ],
+     "returns": "i64",
+     "returns_doc": "`i64`",
+     "receiver": null,
+     "doc": "The size of a type in bytes, like C's `sizeof`.",
+     "fallible": false
+    },
+    {
+     "name": "cstr",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str or String",
+       "doc": "the text"
+      }
+     ],
+     "returns": "*u8",
+     "returns_doc": "a pointer to the copy",
+     "receiver": null,
+     "doc": "Makes a NUL-terminated copy for passing to C functions.",
+     "fallible": false
+    },
+    {
+     "name": "from_cstr",
+     "tparams": [],
+     "params": [
+      {
+       "name": "p",
+       "type": "*u8",
+       "doc": "a NUL-terminated C string"
+      }
+     ],
+     "returns": "str",
+     "returns_doc": "a `str` over the same memory",
+     "receiver": null,
+     "doc": "Views a C string as a `str`. Nothing is copied.",
+     "fallible": false
+    },
+    {
+     "name": "drop",
+     "tparams": [],
+     "params": [
+      {
+       "name": "value",
+       "type": "any",
+       "doc": "the value to destroy"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Destroys a value early, running its destructor. The value cannot be used afterwards.",
+     "fallible": false
+    },
+    {
+     "name": "drop_at",
+     "tparams": [],
+     "params": [
+      {
+       "name": "p",
+       "type": "*T",
+       "doc": "the location to destroy"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Runs the destructor of the value `p` points to. For container authors.",
+     "fallible": false
+    },
+    {
+     "name": "write_at",
+     "tparams": [],
+     "params": [
+      {
+       "name": "p",
+       "type": "*T",
+       "doc": "where to store"
+      },
+      {
+       "name": "v",
+       "type": "T",
+       "doc": "the value to store"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Stores `v` without destroying whatever was there before. For container authors.",
+     "fallible": false
+    },
+    {
+     "name": "read_at",
+     "tparams": [],
+     "params": [
+      {
+       "name": "p",
+       "type": "*T",
+       "doc": "where to read from"
+      }
+     ],
+     "returns": "T",
+     "returns_doc": "the value",
+     "receiver": null,
+     "doc": "Takes ownership of the value `p` points to (a move out of raw storage). For container authors.",
+     "fallible": false
+    },
+    {
+     "name": "gc_collect",
+     "tparams": [],
+     "params": [],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Forces a major collection (every generation) in every GC mode.",
+     "fallible": false
+    },
+    {
+     "name": "gc_collect_gen",
+     "tparams": [],
+     "params": [
+      {
+       "name": "g",
+       "type": "i32",
+       "doc": "the oldest generation to collect: 0, 1 or 2"
+      }
+     ],
+     "returns": "",
+     "returns_doc": "",
+     "receiver": null,
+     "doc": "Collects generations `0..g`. Only available with `--gc-mode=manual`.",
+     "fallible": false
+    },
+    {
+     "name": "gc_bytes",
+     "tparams": [],
+     "params": [],
+     "returns": "i64",
+     "returns_doc": "`i64`",
+     "receiver": null,
+     "doc": "Bytes currently held by the collector.",
+     "fallible": false
+    },
+    {
+     "name": "gc_collections",
+     "tparams": [],
+     "params": [],
+     "returns": "i64",
+     "returns_doc": "`i64`",
+     "receiver": null,
+     "doc": "Number of collections so far, all generations together.",
+     "fallible": false
+    },
+    {
+     "name": "gc_gen_bytes",
+     "tparams": [],
+     "params": [
+      {
+       "name": "g",
+       "type": "i32",
+       "doc": "generation 0, 1 or 2"
+      }
+     ],
+     "returns": "i64",
+     "returns_doc": "`i64`",
+     "receiver": null,
+     "doc": "Bytes held by one generation.",
+     "fallible": false
+    },
+    {
+     "name": "gc_gen_collections",
+     "tparams": [],
+     "params": [
+      {
+       "name": "g",
+       "type": "i32",
+       "doc": "generation 0, 1 or 2"
+      }
+     ],
+     "returns": "i64",
+     "returns_doc": "`i64`",
+     "receiver": null,
+     "doc": "Number of collections of one generation.",
+     "fallible": false
+    }
+   ]
+  }
+ ]
+}

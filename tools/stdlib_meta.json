@@ -1,0 +1,179 @@
+{
+ "str": {
+  "example": "let s = string_from(\"  Hello, Crumbs  \");\nlet t = s.trim();                         // \"Hello, Crumbs\" (a view, no copy)\nprintln(\"{}\", t.upper());                 // HELLO, CRUMBS\nprintln(\"{}\", t.find(\"Crumbs\"));          // 7\nlet mut parts = \"a,b,c\".split(\",\");\nprintln(\"{}\", str.join(parts.view(), \"-\"));   // a-b-c\nparts.release();",
+  "types": {
+   "str": "A borrowed view of text (pointer and length). String literals are `str`. These are the methods you can call on one: `s.find(\"x\")`.",
+   "String": "An owned, growable string. Appending: `s += \"text\"`. Methods below work on `String` too (a `String` converts to `str`)."
+  }
+ },
+ "conv": {
+  "description": "Both functions accept an optional sign and decimal digits only. Whitespace, `1e3` and `0x10` are rejected with `InvalidDigit`.",
+  "example": "import std.conv;\n\nlet n = conv.parse_i32(\"42\").catch(|e| 0);          // 42\nlet bad = conv.parse_i32(\"4x\").catch(|e| -1);       // -1: InvalidDigit\nprintln(\"{} {}\", n, bad);",
+  "errors": {
+   "Empty": "the text is empty (or only a sign)",
+   "InvalidDigit": "a character is not a decimal digit",
+   "Overflow": "the number does not fit the result type"
+  }
+ },
+ "math": {
+  "description": "`sqrt`, `sin`, `cos`, `tan`, `atan2`, `exp`, `log`, `pow`, `floor`, `ceil` and `fabs` are the libm functions of the same name (all `f64`). The `_i32`, `_i64` and `_f64` helpers exist because plain `min`/`max` live in `std.mem` and are generic.",
+  "example": "import std.math;\n\nprintln(\"{:.4}\", math.sqrt(2.0));        // 1.4142\nprintln(\"{}\", math.gcd(48, 18));          // 6\nprintln(\"{}\", math.max_i32(3, 9));        // 9\nprintln(\"{:.5}\", math.PI);                // 3.14159",
+  "consts": {
+   "PI": "the ratio of a circle's circumference to its diameter",
+   "E": "Euler's number"
+  }
+ },
+ "rand": {
+  "summary": "pseudo-random numbers (xorshift64)",
+  "description": "`Rng` is a small, fast generator. It is not cryptographically secure. Seed it with `Rng.from_seed(n)` for repeatable sequences (tests, games with replays) or `Rng.new()` to seed it from the clock.",
+  "example": "import std.rand;\n\nlet mut rng = rand.Rng.from_seed(42);\nprintln(\"{}\", rng.below(6) + 1);       // a dice roll\nprintln(\"{}\", rng.between(10, 20));     // 10..=20\nprintln(\"{:.3}\", rng.float());          // 0.0 <= x < 1.0",
+  "types": {
+   "Rng": "A pseudo-random number generator. Methods that draw numbers need a `let mut` variable."
+  }
+ },
+ "list": {
+  "example": "import std.list;\n\nfn by_value(a: *i32, b: *i32) -> i32 { return *a - *b; }\n\nfn main() {\n    let mut xs: list.List<i32> = list.List.new();\n    xs.push(3);\n    xs.push(1);\n    xs.push(2);\n    xs.sort_by(by_value);\n    for i in 0..xs.len { println(\"{}\", xs.get(i)); }   // 1 2 3\n}",
+  "errors": {
+   "Empty": "`pop` was called on an empty list",
+   "NotFound": "`find_by` found no matching element"
+  },
+  "types": {
+   "List": "A growable array that owns its elements. Fields: `len` (the number of elements) and the buffer. Destroyed automatically at the end of its scope."
+  }
+ },
+ "stack": {
+  "types": {
+   "Stack": "A last-in, first-out stack that owns its elements."
+  }
+ },
+ "queue": {
+  "types": {
+   "Queue": "A first-in, first-out queue (a ring buffer) that owns its elements."
+  }
+ },
+ "map": {
+  "types": {
+   "HashMap": "A hash map from `String` keys to values of type `V`. It owns its keys and values."
+  }
+ },
+ "tree": {
+  "types": {
+   "Tree": "An ordered set in a binary search tree. `T` must implement `Ord` (a method `cmp`).",
+   "Node": "A tree node. An implementation detail; use `Tree`."
+  },
+  "hide_types": [
+   "Node"
+  ],
+  "example": "import std.tree;\n\nstruct Score { points: i32 }\n\nimpl tree.Ord for Score {\n    fn cmp(self, other: *Score) -> i32 { return self.points - other.points; }\n}\n\nfn main() {\n    let mut t: tree.Tree<Score> = tree.Tree.new();\n    t.insert(Score { points: 30 });\n    t.insert(Score { points: 10 });\n    t.insert(Score { points: 20 });\n    println(\"{}\", t.min().points);   // 10\n    println(\"{}\", t.len());          // 3\n}"
+ },
+ "mem": {
+  "summary": "small generic helpers",
+  "example": "import std.mem;\n\nlet mut a = 1;\nlet mut b = 2;\nmem.swap(&a, &b);                 // a == 2, b == 1\nprintln(\"{}\", mem.max(a, b));     // 2\nlet mut xs = [5, 3, 9, 1];\nmem.sort(xs[0..4]);               // 1 3 5 9"
+ },
+ "io": {
+  "example": "import std.io;\n\nlet line = io.get_line().catch(|e| string_new());\nprintln(\"you typed: {line}\");\nio.putc('!');\nprintln(\"\");",
+  "errors": {
+   "Eof": "input ended before anything could be read"
+  }
+ },
+ "fs": {
+  "example": "import std.fs;\n\nfn main() {\n    fs.write(\"hello.txt\", \"hi\\n\").catch(|e| { panic(\"cannot write\"); });\n    let text = fs.read_to_string(\"hello.txt\").catch(|e| string_new());\n    println(\"{}\", text);\n    fs.remove(\"hello.txt\").catch(|e| { println(\"could not remove it\"); });\n}",
+  "errors": {
+   "NotFound": "the file or directory does not exist",
+   "IoError": "the operation failed (permissions, disk, ...)"
+  }
+ },
+ "env": {
+  "example": "import std.env;\n\nprintln(\"{} arguments\", env.arg_count());\nlet home = env.get(\"HOME\").catch(|e| string_new());\nprintln(\"home = {home}\");",
+  "errors": {
+   "NotSet": "the environment variable is not set"
+  }
+ },
+ "time": {
+  "example": "import std.time;\n\nlet sw = time.Stopwatch.start();\ntime.sleep_ms(50);\nprintln(\"took {} ms\", sw.elapsed_ms());\nlet now = time.now_utc();\nprintln(\"{}\", now.iso());",
+  "consts": {
+   "NS_PER_US": "nanoseconds in a microsecond",
+   "NS_PER_MS": "nanoseconds in a millisecond",
+   "NS_PER_SEC": "nanoseconds in a second"
+  },
+  "types": {
+   "DateTime": {
+    "doc": "A calendar date and time (proleptic Gregorian calendar).",
+    "show_fields": true,
+    "fields": {
+     "year": "the year",
+     "month": "1..=12",
+     "day": "1..=31",
+     "hour": "0..=23",
+     "minute": "0..=59",
+     "second": "0..=59",
+     "weekday": "0 = Sunday .. 6 = Saturday",
+     "yearday": "1..=366",
+     "unix": "seconds since 1970-01-01 UTC this value was made from"
+    }
+   },
+   "Duration": "A span of time with nanosecond resolution.",
+   "Stopwatch": "A monotonic stopwatch."
+  }
+ },
+ "net": {
+  "example": "import std.net;\n\nlet s = net.Socket.connect(\"example.org\", 80).catch(|e| { panic(\"no connection: {e}\"); });\ns.send(\"GET / HTTP/1.0\\r\\n\\r\\n\").catch(|e| {});\nlet reply = s.read_all().catch(|e| string_new());\nprintln(\"{}\", reply.len);",
+  "errors": {
+   "AcceptFailed": "`accept` failed (the server socket was closed or the system ran out of descriptors)"
+  },
+  "types": {
+   "Socket": "A TCP socket. Closes itself at the end of its scope."
+  }
+ },
+ "http": {
+  "example": "import std.http;\n\nlet r = http.get(\"http://example.org/\").catch(|e| { panic(\"request failed: {e}\"); });\nprintln(\"{} {} ok={}\", r.status, r.reason, r.ok());\nprintln(\"{}\", r.header(\"content-type\") ?? \"unknown\");\nprintln(\"{}\", r.body);",
+  "types": {
+   "Header": {
+    "doc": "One response header.",
+    "show_fields": true
+   },
+   "Response": {
+    "doc": "An HTTP answer.",
+    "show_fields": true,
+    "fields": {
+     "status": "the status code, such as 200",
+     "reason": "the reason phrase, such as `OK`",
+     "headers": "every header the server sent",
+     "body": "the response body as text"
+    }
+   }
+  }
+ },
+ "thread": {
+  "example": "import std.thread;\n\nfn worker() { println(\"hello from a thread\"); }\n\nfn main() {\n    let mut t = thread.spawn_fn(worker).catch(|e| { panic(\"spawn failed\"); });\n    t.join();\n}",
+  "errors": {
+   "SpawnFailed": "the operating system could not start a thread",
+   "Closed": "the channel was closed"
+  },
+  "types": {
+   "Thread": "A running OS thread. Call `join` once.",
+   "Mutex": "A mutual-exclusion lock. Create with `Mutex.new()`.",
+   "Condvar": "A condition variable, used together with a `Mutex`.",
+   "AtomicI64": "An integer that can be read and written safely from several threads.",
+   "Channel": "An unbounded multi-producer, multi-consumer queue. Create with `thread.channel<T>()`."
+  }
+ },
+ "async": {
+  "example": "async fn square(n: i32) -> i32 { return n * n; }\n\nfn main() {\n    let a = square(6);          // starts right away, on its own thread\n    let b = square(7);\n    println(\"{}\", await a + await b);   // 85\n}"
+ },
+ "fmt": {
+  "example": "struct Point { x: i32, y: i32 }\n\nimpl Display for Point {\n    fn to_string(self) -> String { return format(\"({}, {})\", self.x, self.y); }\n}\n\nfn main() {\n    let p = Point { x: 1, y: 2 };\n    println(p);                // (1, 2)\n    println(\"at {p:>10}\");     // at     (1, 2)\n    println(\"{p:?}\");          // Point { x: 1, y: 2 }\n}",
+  "summary": "how values turn into text",
+  "traits": {
+   "Display": {
+    "doc": "The trait behind `println(x)`, `to_str(x)`, `x.to_string()` and `\"{x}\"`. Implement it for your own types and they print the way you wrote. It is part of the prelude, so no import is needed. All built-in number types and `bool` implement it already, so `T: Display` bounds accept them.",
+    "methods": {
+     "to_string": "Builds the text for this value. A format such as `{p:>10}` applies to the text this returns."
+    },
+    "returns": {
+     "to_string": "a new `String`"
+    }
+   }
+  }
+ }
+}

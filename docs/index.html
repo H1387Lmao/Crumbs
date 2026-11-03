@@ -141,17 +141,32 @@
       top: var(--header-height);
       align-self: start;
       height: calc(100vh - var(--header-height));
-      overflow: auto;
-      overscroll-behavior: contain;
-      padding: 25px 17px 36px 19px;
+      height: calc(100dvh - var(--header-height));
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
       background: var(--sidebar);
       border-right: 1px solid var(--line);
     }
+    .sidebar-top { flex: 0 0 auto; padding: 18px 17px 4px 19px; }
+    .sidebar-scroll {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-y;
+      padding: 6px 12px 36px 19px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--line-strong) transparent;
+    }
+    .sidebar-scroll::-webkit-scrollbar { width: 8px; }
+    .sidebar-scroll::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 8px; border: 2px solid var(--sidebar); }
     .sidebar-heading {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin: 0 9px 12px;
+      margin: 4px 9px 10px;
       color: var(--subtle);
       font-size: 10px;
       font-weight: 800;
@@ -163,9 +178,9 @@
       font: 10px "DM Mono", monospace;
       letter-spacing: 0;
     }
-    .search-wrap { position: relative; margin: 0 0 23px; }
+    .search-wrap { position: relative; margin: 0 0 12px; }
     .search-wrap svg {
-      position: absolute; top: 11px; left: 11px;
+      position: absolute; top: 12px; left: 11px; pointer-events: none;
       width: 15px; height: 15px; fill: none;
       stroke: var(--subtle); stroke-width: 1.8;
       transition: stroke .2s ease;
@@ -503,6 +518,134 @@
     }
     .footer a { color: var(--muted); transition: color .15s ease; }
     .footer a:hover { color: var(--accent); }
+    /* Mode tabs (Guide / Standard library) */
+    .mode-tabs { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+    .mode-tab {
+      padding: 5px 13px; border: 0; border-radius: 5px; background: transparent;
+      color: var(--muted); font-size: 12px; font-weight: 700; cursor: pointer;
+      transition: background .15s ease, color .15s ease;
+    }
+    .mode-tab:hover { color: var(--ink); }
+    .mode-tab[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); }
+    .sidebar .mode-tabs { display: none; width: 100%; margin: 0 0 12px; }
+    .sidebar .mode-tab { flex: 1; }
+    .topbar-mid { display: flex; align-items: center; }
+
+    /* Navigation: pages (level 2) and anchors inside them (level 3) */
+    .nav-group-label {
+      margin: 14px 9px 4px; color: var(--subtle); font-size: 10px; font-weight: 800;
+      letter-spacing: .12em; text-transform: uppercase;
+    }
+    .nav-group-label:first-child { margin-top: 2px; }
+    .nav-page { margin: 0; }
+    .nav-page-link {
+      display: flex; align-items: center; gap: 6px; padding: 5px 8px; margin: 1px 0; border-radius: 5px;
+      border-left: 2px solid transparent; color: var(--muted); font-size: 12px; font-weight: 650; line-height: 1.4;
+      cursor: pointer; transition: background .15s ease, color .15s ease;
+    }
+    .nav-page-link:hover { color: var(--ink); background: var(--surface-raised); }
+    .nav-page-link.active { color: var(--accent); background: var(--accent-soft); border-left-color: var(--accent); font-weight: 750; }
+    .nav-page-link .mono { font-family: "DM Mono", monospace; font-size: 11.5px; }
+    .nav-page-link .tag { margin-left: auto; color: var(--subtle); font: 10px "DM Mono", monospace; flex: none; }
+    .nav-anchors { margin: 1px 0 6px 13px; padding-left: 8px; border-left: 1px solid var(--line); }
+    .nav-anchor {
+      display: flex; align-items: baseline; gap: 6px; padding: 3px 7px; border-radius: 4px;
+      color: var(--subtle); font-size: 11px; line-height: 1.4; cursor: pointer;
+      transition: background .15s ease, color .15s ease;
+    }
+    .nav-anchor:hover { color: var(--ink); background: var(--surface-raised); }
+    .nav-anchor .mono { font-family: "DM Mono", monospace; font-size: 10.5px; overflow-wrap: anywhere; }
+    .nav-anchor .kind { flex: none; width: 12px; color: var(--accent); font: 10px "DM Mono", monospace; opacity: .85; }
+    .nav-more { margin: 2px 0 2px 7px; padding: 3px 7px; border: 0; background: none; color: var(--accent); font-size: 11px; font-weight: 700; cursor: pointer; }
+    .nav-page-hits { margin-top: -2px; }
+    mark { background: var(--accent-soft); color: var(--accent); border-radius: 2px; padding: 0 1px; }
+    .nav-cross {
+      display: block; width: 100%; margin: 14px 0 0; padding: 9px 11px; border: 1px dashed var(--line-strong);
+      border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; text-align: left; cursor: pointer;
+    }
+    .nav-cross:hover { border-color: var(--accent); color: var(--accent); }
+    .nav-empty { padding: 4px 9px; }
+    .nav-clear { position: absolute; top: 7px; right: 7px; display: none; width: 24px; height: 24px; border: 0; border-radius: 4px; background: transparent; color: var(--subtle); cursor: pointer; font-size: 16px; line-height: 1; }
+    .nav-clear:hover { color: var(--ink); background: var(--surface-raised); }
+    .search-wrap.has-text .nav-clear { display: block; }
+    #doc-search::-webkit-search-cancel-button { display: none; }
+    #doc-search { padding-right: 32px; }
+
+    .flash { animation: flash 1.6s ease-out; }
+    @keyframes flash { 0% { background: var(--accent-soft); box-shadow: 0 0 0 6px var(--accent-soft); } 100% { background: transparent; box-shadow: 0 0 0 6px transparent; } }
+    [id^="a-"], .feature-card[id] { scroll-margin-top: calc(var(--header-height) + 18px); }
+
+    /* Standard library reference */
+    .api-lead { margin: 14px 0 0; max-width: 760px; color: var(--muted); font-size: 15px; line-height: 1.75; }
+    .api-import {
+      display: inline-flex; align-items: center; gap: 10px; margin: 16px 0 0; padding: 7px 8px 7px 13px;
+      border: 1px solid var(--line); border-radius: 7px; background: var(--code); color: #e8e8dd;
+      font: 12.5px "DM Mono", monospace; max-width: 100%;
+    }
+    .api-import .tok-keyword { color: #e0b0eb; }
+    .api-import button { border: 1px solid var(--line-strong); border-radius: 4px; background: transparent; color: #b0b0a5; font-size: 11px; padding: 2px 8px; cursor: pointer; }
+    .api-import button:hover { color: var(--accent); border-color: var(--accent); }
+    .api-prose p { margin: 12px 0 0; max-width: 760px; color: var(--muted); font-size: 14px; line-height: 1.8; }
+    .api-toc { display: flex; flex-wrap: wrap; gap: 6px; margin: 22px 0 0; }
+    .api-toc a {
+      padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+      color: var(--muted); font: 11.5px "DM Mono", monospace; cursor: pointer; transition: all .15s ease;
+    }
+    .api-toc a:hover { border-color: var(--accent); color: var(--accent); }
+    .api-h2 { margin: 44px 0 14px; padding-bottom: 9px; border-bottom: 1px solid var(--line); font-size: 19px; letter-spacing: -.03em; font-weight: 800; display: flex; align-items: baseline; gap: 9px; }
+    .api-h2 small { color: var(--subtle); font: 11px "DM Mono", monospace; letter-spacing: 0; font-weight: 400; }
+    .api-fn {
+      margin: 0 0 14px; padding: 16px 18px 15px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface);
+      min-width: 0;
+    }
+    .api-fn-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 9px; }
+    .api-fn-name { margin: 0; font: 600 15px "DM Mono", monospace; letter-spacing: -.01em; overflow-wrap: anywhere; }
+    .api-fn-name .owner { color: var(--subtle); font-weight: 400; }
+    .badge { padding: 1px 7px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
+    .badge.fail { color: #e8a07a; border-color: rgba(232,160,122,.5); }
+    .badge.mut { color: var(--accent); border-color: rgba(239,207,75,.45); }
+    .api-sig {
+      margin: 0 0 11px; padding: 10px 13px; border-radius: 6px; background: var(--code); color: #e8e8dd;
+      font: 12.5px/1.7 "DM Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal;
+    }
+    .api-desc { margin: 0 0 4px; color: var(--ink); font-size: 14px; line-height: 1.7; }
+    .api-table { width: 100%; margin: 12px 0 0; border-collapse: collapse; font-size: 13px; }
+    .api-table caption { text-align: left; margin-bottom: 4px; color: var(--subtle); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .api-table th, .api-table td { padding: 7px 10px 7px 0; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .api-table th { color: var(--subtle); font-weight: 600; }
+    .api-table td:first-child { font: 600 12.5px "DM Mono", monospace; white-space: nowrap; }
+    .api-table td.ty { font: 12px "DM Mono", monospace; color: #8bcbd8; overflow-wrap: anywhere; }
+    .api-table td.d { color: var(--muted); }
+    .api-returns { margin: 12px 0 0; padding-top: 8px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+    .api-returns b { margin-right: 8px; color: var(--subtle); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+    .api-type { margin: 0 0 26px; }
+    .api-type-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin: 0 0 6px; }
+    .api-type-head h3 { margin: 0; font: 700 18px "DM Mono", monospace; letter-spacing: -.02em; }
+    .api-type-head .kw { color: var(--subtle); font: 12px "DM Mono", monospace; }
+    .api-methods { margin: 14px 0 0 0; padding-left: 14px; border-left: 2px solid var(--line); }
+    .api-implements { margin: 8px 0 0; color: var(--subtle); font-size: 12px; }
+    .api-implements code { font-family: "DM Mono", monospace; color: var(--muted); }
+    .std-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; margin: 14px 0 0; }
+    .std-card {
+      display: block; padding: 13px 15px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface);
+      cursor: pointer; transition: border-color .15s ease, transform .15s ease;
+    }
+    .std-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+    .std-card b { display: block; font: 600 14px "DM Mono", monospace; color: var(--accent); }
+    .std-card span { display: block; margin-top: 4px; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+    .std-card small { display: block; margin-top: 8px; color: var(--subtle); font: 10.5px "DM Mono", monospace; }
+    .std-group-title { margin: 32px 0 0; color: var(--subtle); font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .guide-ref-link { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 24px; padding: 13px 16px; border: 1px solid var(--accent); border-radius: 9px; background: var(--accent-soft); color: var(--ink); font-size: 13.5px; cursor: pointer; }
+    .guide-ref-link b { color: var(--accent); white-space: nowrap; }
+    @media (max-width: 600px) {
+      .api-fn { padding: 13px 13px 12px; }
+      .api-table td:first-child { white-space: normal; }
+      .api-table th:nth-child(3), .api-table td.d { display: block; border-top: 0; padding-top: 0; }
+      .api-table tr { display: block; border-top: 1px solid var(--line); padding: 6px 0; }
+      .api-table td, .api-table th { display: inline-block; border-top: 0; padding: 2px 10px 2px 0; }
+      .api-table thead { display: none; }
+      .api-table td.d { display: block; }
+    }
     .sidebar-backdrop { display: none; }
     [hidden] { display: none !important; }
 
@@ -512,23 +655,26 @@
     }
     @media (max-width: 820px) {
       :root { --header-height: 60px; }
+      .sidebar .mode-tabs { display: flex; }
       .topbar { padding: 0 17px; gap: 10px; }
       .topbar-right { gap: 10px; }
-      .topbar-right .top-link { display: none; }
+      .topbar-right .top-link, .topbar .mode-tabs { display: none; }
       .menu-toggle { display: grid; }
       .brand-context, .brand-divider { display: none; }
       .layout { display: block; min-height: calc(100vh - var(--header-height)); }
       .sidebar {
         position: fixed; z-index: 81;
         top: var(--header-height); bottom: 0; left: 0;
-        width: min(88vw, 330px); height: auto;
-        padding: 22px 19px 40px;
+        width: min(88vw, 340px);
+        height: calc(100vh - var(--header-height));
+        height: calc(100dvh - var(--header-height));
         border-right: 1px solid var(--line);
         box-shadow: var(--shadow);
         transform: translateX(-105%);
         visibility: hidden;
         transition: transform .25s var(--ease-out-cubic), visibility .25s var(--ease-out-cubic);
       }
+      .sidebar-scroll { padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px)); }
       .sidebar.open { transform: translateX(0); visibility: visible; }
       .sidebar-backdrop {
         position: fixed; z-index: 80;
@@ -594,8 +740,13 @@
       <span class="brand-divider" aria-hidden="true"></span>
       <span class="brand-context">Documentation</span>
     </div>
+    <div class="topbar-mid">
+      <div class="mode-tabs" role="tablist" aria-label="Documentation section">
+        <button class="mode-tab" role="tab" data-mode="guide" type="button">Guide</button>
+        <button class="mode-tab" role="tab" data-mode="std" type="button">Standard library</button>
+      </div>
+    </div>
     <nav class="topbar-right" aria-label="Main links">
-      <a class="top-link" id="nav-overview-top">Overview</a>
       <a class="repo-link" id="repository-link" href="https://github.com/H1387Lmao/crumbs" target="_blank" rel="noreferrer">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .9a11.1 11.1 0 0 0-3.51 21.63c.55.1.76-.24.76-.53v-2.08c-3.1.67-3.76-1.32-3.76-1.32-.5-1.28-1.24-1.62-1.24-1.62-1.01-.69.08-.68.08-.68 1.12.08 1.71 1.15 1.71 1.15.99 1.7 2.6 1.21 3.23.93.1-.72.39-1.21.7-1.49-2.47-.28-5.07-1.24-5.07-5.5 0-1.22.44-2.21 1.15-2.99-.12-.28-.5-1.42.11-2.95 0 0 .94-.3 3.05 1.14a10.6 10.6 0 0 1 5.55 0c2.11-1.44 3.05-1.14 3.05-1.14.61 1.53.23 2.67.11 2.95.72.78 1.15 1.77 1.15 2.99 0 4.27-2.6 5.21-5.08 5.49.4.35.75 1.02.75 2.06V22c0 .29.2.64.77.53A11.1 11.1 0 0 0 12 .9Z"/></svg>
         Repository
@@ -610,19 +761,23 @@
 
   <div class="layout" id="top">
     <aside class="sidebar" id="sidebar" aria-label="Documentation navigation">
-      <p class="sidebar-heading"><span>Contents</span><span id="topic-count"></span></p>
-      
-      <button class="nav-overview-btn" id="btn-overview-side" type="button">
-        <svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-        Overview
-      </button>
-
-      <div class="search-wrap">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg>
-        <input id="doc-search" type="search" placeholder="Search topics..." aria-label="Search the documentation">
+      <div class="sidebar-top">
+        <div class="mode-tabs" role="tablist" aria-label="Documentation section">
+          <button class="mode-tab" role="tab" data-mode="guide" type="button">Guide</button>
+          <button class="mode-tab" role="tab" data-mode="std" type="button">Standard library</button>
+        </div>
+        <div class="search-wrap" id="search-wrap">
+          <input id="doc-search" type="search" placeholder="Search..." aria-label="Search the documentation" autocomplete="off" spellcheck="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg>
+          <button class="nav-clear" id="search-clear" type="button" aria-label="Clear search">×</button>
+        </div>
+        <p class="sidebar-heading"><span id="nav-title">Contents</span><span id="topic-count"></span></p>
       </div>
-      <nav id="navigation"></nav>
-      <p class="nav-empty" id="nav-empty">No matching topics.</p>
+      <div class="sidebar-scroll" id="sidebar-scroll">
+        <nav id="navigation"></nav>
+        <p class="nav-empty" id="nav-empty">No matching topics.</p>
+        <div id="nav-cross"></div>
+      </div>
     </aside>
 
     <div class="main-area">
@@ -646,10 +801,16 @@
       "f32", "f64", "bool", "str", "String", "void", "List"
     ]);
     
+    const STD_URL = "stdlib.json";
     let DOC_DATA = null;
+    let STD_DATA = null;
     let SUBSECTION_MAP = new Map();
     let SUBSECTION_ORDER = [];
     let CURRENT_PAGE_ID = "overview";
+    let MODE = "guide";
+    let NAV = { guide: [], std: [] };
+    let STD_MODULES = new Map();
+    let CURRENT_ANCHOR = "";
 
     const $ = id => document.getElementById(id);
     const escapeHTML = value => String(value).replace(/[&<>"']/g, ch => ({
@@ -752,33 +913,285 @@
       return wrapper;
     }
 
-    function navigateTo(pageId, pushState = true) {
-      CURRENT_PAGE_ID = pageId;
-      if (pushState) {
-        const hash = pageId === "overview" ? "" : `#${pageId}`;
-        history.pushState({ pageId }, "", window.location.pathname + hash);
-      }
+    /* ------------------------------------------------------------------ routing */
+    // Hash forms:  ""  overview | "<subsection>"  a guide page | "std"  library index | "std/<module>"  a module page
+    // Any of them may end in "@<anchor>" to jump to a feature or an API item inside the page.
+    const LAST = { guide: "", std: "std" };
+    const featureAnchor = (subId, feature, i) => `f-${subId}-${feature.id || i}`;
 
-      // Update Active Navigation State in Sidebar
-      document.querySelectorAll(".nav-subsection").forEach(el => {
-        el.classList.toggle("active", el.dataset.id === pageId);
-      });
-      $("btn-overview-side").classList.toggle("active", pageId === "overview");
+    function openHash(hash, push = true) {
+      if (push) history.pushState({}, "", window.location.pathname + (hash ? `#${hash}` : ""));
+      route(hash);
+    }
+    function currentHash() { return decodeURIComponent(location.hash.replace(/^#/, "")); }
+
+    function route(hash) {
+      const [path, anchor = ""] = hash.split("@");
+      const mode = path === "std" || path.startsWith("std/") ? "std" : "guide";
+      if (mode !== MODE) setMode(mode, false);
+      LAST[mode] = hash;
+      CURRENT_PAGE_ID = path || "overview";
+      CURRENT_ANCHOR = anchor;
 
       const app = $("app-content");
       app.innerHTML = "";
       const container = make("div", "page-view");
-
-      if (pageId === "overview" || !SUBSECTION_MAP.has(pageId)) {
-        renderOverviewPage(container);
+      if (mode === "std") {
+        const id = path.slice(4);
+        if (id && STD_MODULES.has(id)) renderStdModule(container, STD_MODULES.get(id));
+        else renderStdIndex(container);
+      } else if (path && SUBSECTION_MAP.has(path)) {
+        renderSubsectionPage(container, SUBSECTION_MAP.get(path));
       } else {
-        renderSubsectionPage(container, SUBSECTION_MAP.get(pageId));
+        CURRENT_PAGE_ID = "overview";
+        renderOverviewPage(container);
       }
-
       app.append(container);
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      document.title = pageTitle(mode, path) + " — Crumbs documentation";
+      renderNav();
+      if (anchor && $(anchor)) {
+        const el = $(anchor);
+        requestAnimationFrame(() => {
+          el.scrollIntoView({ block: "start", behavior: "auto" });
+          el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+        });
+      } else {
+        window.scrollTo({ top: 0, behavior: "auto" });
+      }
     }
 
+    function pageTitle(mode, path) {
+      if (mode === "std") return path.length > 4 && STD_MODULES.has(path.slice(4)) ? `std.${path.slice(4)}` : "Standard library";
+      return SUBSECTION_MAP.has(path) ? SUBSECTION_MAP.get(path).subsection.title : "Overview";
+    }
+
+    function setMode(mode, navigate = true) {
+      MODE = mode;
+      document.querySelectorAll(".mode-tab").forEach(b => b.setAttribute("aria-selected", String(b.dataset.mode === mode)));
+      $("doc-search").placeholder = mode === "std" ? "Search functions, types, modules..." : "Search the guide...";
+      $("nav-title").textContent = mode === "std" ? "Reference" : "Contents";
+      if (navigate) openHash(LAST[mode] || (mode === "std" ? "std" : ""));
+      else renderNav();
+    }
+
+    /* ------------------------------------------------------------------ standard library pages */
+    const paragraphs = text => String(text || "").split(/\n\s*\n/).map(p => p.replace(/\s*\n\s*/g, " ").trim()).filter(Boolean);
+    const stdId = (...parts) => "a-" + parts.join("-");
+
+    function proseBlock(text) {
+      const box = make("div", "api-prose");
+      paragraphs(text).forEach(p => { const el = make("p"); el.innerHTML = inlineText(p); box.append(el); });
+      return box;
+    }
+
+    function signature(f) {
+      const tp = f.tparams && f.tparams.length ? `<${f.tparams.join(", ")}>` : "";
+      const ps = [];
+      if (f.receiver) ps.push(f.receiver);
+      (f.params || []).forEach(p => ps.push(`${p.name}: ${p.type}` + (p.default ? ` = ${p.default}` : "")));
+      const ret = f.returns ? ` -> ${f.returns}` : "";
+      const one = `fn ${f.name}${tp}(${ps.join(", ")})${ret}`;
+      if (one.length <= 74 || ps.length < 2) return one;
+      return `fn ${f.name}${tp}(\n${ps.map(p => "    " + p).join(",\n")}\n)${ret}`;
+    }
+
+    function crumbsCrumbs(parts) {            // breadcrumbs: [[label, hash|null], ...]
+      const el = make("div", "breadcrumbs");
+      parts.forEach(([label, hash], i) => {
+        if (i) el.append(make("span", "", "/"));
+        if (hash === null) el.append(make("span", i === parts.length - 1 ? "current" : "", label));
+        else { const a = make("a", "", label); a.addEventListener("click", () => openHash(hash)); el.append(a); }
+      });
+      return el;
+    }
+
+    function apiTable(caption, headers, rows, classes) {
+      const t = make("table", "api-table");
+      t.append(make("caption", "", caption));
+      const head = make("thead"); const hr = make("tr");
+      headers.forEach(h => hr.append(make("th", "", h)));
+      head.append(hr); t.append(head);
+      const body = make("tbody");
+      rows.forEach(cells => {
+        const tr = make("tr");
+        cells.forEach((c, i) => {
+          const td = make("td", classes[i] || "");
+          if (classes[i] === "d") td.innerHTML = inlineText(c);
+          else td.textContent = c;
+          tr.append(td);
+        });
+        body.append(tr);
+      });
+      t.append(body);
+      return t;
+    }
+
+    function fnCard(f, id, owner, kindLabel) {
+      const card = make("article", "api-fn");
+      card.id = id;
+      const head = make("div", "api-fn-head");
+      const name = make("h4", "api-fn-name");
+      if (owner) name.append(make("span", "owner", owner + "."));
+      name.append(document.createTextNode(f.name));
+      head.append(name);
+      if (owner && !f.receiver) head.append(make("span", "badge", "static"));
+      if (f.receiver === "mut self") { const b = make("span", "badge mut", "needs let mut"); b.title = "Call it on a variable declared with `let mut`"; head.append(b); }
+      if (f.fallible) { const b = make("span", "badge fail", "can fail"); b.title = "Returns an error union: use `try` or `catch`"; head.append(b); }
+      if (kindLabel) head.append(make("span", "badge", kindLabel));
+      card.append(head);
+      const sig = make("pre", "api-sig");
+      sig.innerHTML = highlightCrumbs(signature(f));
+      card.append(sig);
+      if (f.doc) { const d = make("p", "api-desc"); d.innerHTML = inlineText(f.doc.replace(/\s*\n\s*/g, " ")); card.append(d); }
+      if (f.params && f.params.length) {
+        card.append(apiTable("Parameters", ["Name", "Type", "Description"],
+          f.params.map(p => [p.name, p.type, (p.doc || "") + (p.default ? ` (default ${"`" + p.default + "`"})` : "")]), ["", "ty", "d"]));
+      }
+      const ret = f.returns ? f.returns : "";
+      const rdoc = f.returns_doc || "";
+      if (ret || rdoc) {
+        const r = make("div", "api-returns");
+        r.append(make("b", "", "Returns"));
+        const span = make("span");
+        span.innerHTML = rdoc ? inlineText(rdoc) : `<code class="inline-code">${escapeHTML(ret)}</code>`;
+        r.append(span);
+        card.append(r);
+      } else {
+        const r = make("div", "api-returns"); r.append(make("b", "", "Returns")); r.append(document.createTextNode("nothing")); card.append(r);
+      }
+      return card;
+    }
+
+    function renderStdIndex(container) {
+      container.append(crumbsCrumbs([["Crumbs", ""], ["Standard library", null]]));
+      const header = make("div", "subsection-page-header");
+      header.append(make("div", "subsection-page-category", "Reference"));
+      header.append(make("h1", "subsection-page-title", "Standard library"));
+      container.append(header);
+      const lead = make("p", "api-lead");
+      lead.innerHTML = "Every function, type and error in the standard library, with its parameters, what it returns and what it does. Import a module with <code class=\"inline-code\">import std.name;</code> and use it as <code class=\"inline-code\">name.function(...)</code>. Names in the <b>prelude</b> need no import.";
+      container.append(lead);
+      STD_DATA.groups.forEach(g => {
+        container.append(make("div", "std-group-title", g.title));
+        const grid = make("div", "std-grid");
+        g.modules.forEach(id => {
+          const m = STD_MODULES.get(id);
+          const card = make("a", "std-card");
+          card.append(make("b", "", m.id === "prelude" ? "prelude" : `std.${m.id}`));
+          card.append(make("span", "", m.summary ? m.summary.charAt(0).toUpperCase() + m.summary.slice(1) : ""));
+          card.append(make("small", "", countLine(m)));
+          card.addEventListener("click", () => openHash(`std/${m.id}`));
+          grid.append(card);
+        });
+        container.append(grid);
+      });
+      appendFooter(container);
+    }
+
+    function countLine(m) {
+      const fns = m.functions.length + m.types.reduce((n, t) => n + t.methods.filter(x => !x.via || x.doc).length, 0);
+      const bits = [];
+      if (m.types.length) bits.push(`${m.types.length} type${m.types.length > 1 ? "s" : ""}`);
+      bits.push(`${fns} function${fns === 1 ? "" : "s"}`);
+      return bits.join(" · ");
+    }
+
+    function renderStdModule(container, m) {
+      const group = STD_DATA.groups.find(g => g.modules.includes(m.id));
+      container.append(crumbsCrumbs([["Crumbs", ""], ["Standard library", "std"], [group ? group.title : "", null], [m.id === "prelude" ? "prelude" : `std.${m.id}`, null]].filter(x => x[0])));
+      const header = make("div", "subsection-page-header");
+      header.append(make("div", "subsection-page-category", group ? group.title : "Standard library"));
+      header.append(make("h1", "subsection-page-title", m.id === "prelude" ? "Prelude" : `std.${m.id}`));
+      container.append(header);
+      if (m.summary) { const lead = make("p", "api-lead"); lead.innerHTML = inlineText(m.summary.replace(/\.$/, "").replace(/^./, c => c.toUpperCase()) + "."); container.append(lead); }
+      if (m.id !== "prelude") {
+        const imp = make("div", "api-import");
+        imp.innerHTML = `<span><span class="tok-keyword">import</span> ${escapeHTML(m.import)};</span>`;
+        const copy = make("button", "", "Copy"); copy.type = "button";
+        copy.addEventListener("click", async () => { try { await navigator.clipboard.writeText(`import ${m.import};`); copy.textContent = "Copied"; setTimeout(() => copy.textContent = "Copy", 1200); } catch {} });
+        imp.append(copy);
+        container.append(imp);
+      }
+      if (m.description) container.append(proseBlock(m.description));
+
+      // quick links
+      const toc = make("nav", "api-toc");
+      toc.setAttribute("aria-label", "In this module");
+      const addToc = (label, id) => { const a = make("a", "", label); a.addEventListener("click", () => openHash(`std/${m.id}@${id}`)); toc.append(a); };
+      m.types.filter(t => !t.ext || t.methods.length).forEach(t => addToc(t.name, stdId(m.id, "type", t.name)));
+      m.traits.forEach(t => addToc(t.name, stdId(m.id, "trait", t.name)));
+      m.functions.forEach(f => addToc(f.name, stdId(m.id, "fn", f.name)));
+      if (toc.childNodes.length) container.append(toc);
+
+      if (m.example) {
+        container.append(make("h2", "api-h2", "Example"));
+        container.append(renderCode(m.example, "crumbs", highlightCrumbs));
+      }
+
+      if (m.types.length) {
+        const h = make("h2", "api-h2", "Types"); h.append(make("small", "", String(m.types.length))); container.append(h);
+        m.types.forEach(t => {
+          const box = make("section", "api-type");
+          box.id = stdId(m.id, "type", t.name);
+          const head = make("div", "api-type-head");
+          const tp = t.tparams && t.tparams.length ? `<${t.tparams.join(", ")}>` : "";
+          head.append(make("span", "kw", t.kind === "builtin" ? "methods on" : t.kind), make("h3", "", t.name + tp));
+          box.append(head);
+          if (t.doc) box.append(proseBlock(t.doc));
+          if (t.show_fields && t.fields.length) {
+            box.append(apiTable("Fields", ["Name", "Type", "Description"], t.fields.map(f => [f.name, f.type || "", f.doc || ""]), ["", "ty", "d"]));
+          }
+          const methods = t.methods.filter(x => !x.via || x.doc);
+          if (methods.length) {
+            const list = make("div", "api-methods");
+            methods.forEach(f => list.append(fnCard(f, stdId(m.id, t.name, f.name), t.name, "")));
+            box.append(list);
+          }
+          container.append(box);
+        });
+      }
+
+      if (m.traits.length) {
+        const h = make("h2", "api-h2", "Traits"); container.append(h);
+        m.traits.forEach(t => {
+          const box = make("section", "api-type");
+          box.id = stdId(m.id, "trait", t.name);
+          const head = make("div", "api-type-head");
+          head.append(make("span", "kw", "trait"), make("h3", "", t.name));
+          box.append(head);
+          if (t.doc) box.append(proseBlock(t.doc));
+          if (t.methods.length) {
+            const list = make("div", "api-methods");
+            t.methods.forEach(f => list.append(fnCard(f, stdId(m.id, t.name, f.name), t.name, "required")));
+            box.append(list);
+          }
+          container.append(box);
+        });
+      }
+
+      if (m.functions.length) {
+        const h = make("h2", "api-h2", "Functions"); h.append(make("small", "", String(m.functions.length))); container.append(h);
+        m.functions.forEach(f => container.append(fnCard(f, stdId(m.id, "fn", f.name), "", "")));
+      }
+
+      if (m.consts.length) {
+        container.append(make("h2", "api-h2", "Constants"));
+        const t = apiTable("", ["Name", "Type", "Description"], m.consts.map(c => [c.name, c.type, (c.doc || "") + (c.value ? ` (= \`${c.value}\`)` : "")]), ["", "ty", "d"]);
+        m.consts.forEach((c, i) => { t.tBodies[0].rows[i].id = stdId(m.id, "const", c.name); });
+        container.append(t);
+      }
+
+      if (m.errors.length) {
+        const h = make("h2", "api-h2", "Errors"); container.append(h);
+        const t = apiTable("", ["Error", "Meaning"], m.errors.map(e => [`${m.id}.${e.name}`, e.doc || ""]), ["", "d"]);
+        m.errors.forEach((e, i) => { t.tBodies[0].rows[i].id = stdId(m.id, "error", e.name); });
+        container.append(t);
+        const note = make("p", "api-desc"); note.style.marginTop = "10px";
+        note.innerHTML = inlineText("Functions marked **can fail** return an error union (`T!`). Handle it with `try`, `catch` or `.catch(|e| ...)`.".replace(/\*\*(.+?)\*\*/g, "$1"));
+        container.append(note);
+      }
+      appendFooter(container);
+    }
     function renderOverviewPage(container) {
       const project = DOC_DATA.project || {};
       const repository = project.repository || "https://github.com/H1387Lmao/crumbs";
@@ -815,16 +1228,16 @@
       const heroActions = make("div", "hero-actions");
       const getStartedBtn = make("button", "button", "Get started →");
       getStartedBtn.addEventListener("click", () => {
-        if (SUBSECTION_ORDER.length > 0) {
-          navigateTo(SUBSECTION_ORDER[0]);
-        }
+        if (SUBSECTION_ORDER.length > 0) openHash(SUBSECTION_ORDER[0]);
       });
       const sourceBtn = make("a", "button secondary", "View source");
       sourceBtn.href = repository;
       sourceBtn.target = "_blank";
       sourceBtn.rel = "noreferrer";
 
-      heroActions.append(getStartedBtn, sourceBtn);
+      const stdBtn = make("button", "button secondary", "Standard library");
+      stdBtn.addEventListener("click", () => openHash("std"));
+      heroActions.append(getStartedBtn, stdBtn, sourceBtn);
       hero.append(heroActions);
       container.append(hero);
 
@@ -862,7 +1275,7 @@
         <span>${escapeHTML(section.title)}</span><span>/</span>
         <span class="current">${escapeHTML(subsection.title)}</span>
       `;
-      crumbs.querySelector("#bc-home").addEventListener("click", () => navigateTo("overview"));
+      crumbs.querySelector("#bc-home").addEventListener("click", () => openHash(""));
       container.append(crumbs);
 
       // Subsection Title & Section Eyebrow Header
@@ -872,8 +1285,15 @@
       container.append(header);
 
       // Render Features for this Subsection
-      (subsection.features || []).forEach(feature => {
+      if (section.id === "standard-library") {
+        const ref = make("div", "guide-ref-link");
+        ref.innerHTML = "<span>Looking for a function? The <b>Standard library reference</b> lists every function with its parameters, return value and description.</span><b>Open reference →</b>";
+        ref.addEventListener("click", () => openHash("std"));
+        container.append(ref);
+      }
+      (subsection.features || []).forEach((feature, fi) => {
         const card = make("div", "feature-card");
+        card.id = featureAnchor(subsection.id, feature, fi);
         const copy = make("div", "feature-copy");
         copy.append(make("h3", "", feature.title || "Untitled"));
         const desc = make("p", "");
@@ -930,7 +1350,7 @@
           icon.innerHTML = '<path d="M5 12h14M12 5l7 7-7 7"/>';
 
           nextBtn.append(btnText, icon);
-          nextBtn.addEventListener("click", () => navigateTo(nextId));
+          nextBtn.addEventListener("click", () => openHash(nextId));
           navFooter.append(nextBtn);
           container.append(navFooter);
         }
@@ -949,67 +1369,6 @@
       repo.rel = "noreferrer";
       footer.append(repo);
       container.append(footer);
-    }
-
-    function buildNavigation(data) {
-      const navigation = $("navigation");
-      navigation.innerHTML = "";
-      SUBSECTION_MAP.clear();
-      SUBSECTION_ORDER = [];
-      let totalSubsections = 0;
-
-      (data.sections || []).forEach(section => {
-        const sectionNav = make("div", "nav-section open");
-        const sectionHead = make("div", "nav-section-head");
-        const sectionLink = make("span", "nav-section-link", section.title);
-        
-        const count = (section.subsections || []).length;
-        totalSubsections += count;
-        sectionLink.append(make("span", "nav-section-count", String(count).padStart(2, "0")));
-        
-        const collapse = make("button", "nav-collapse");
-        collapse.type = "button";
-        collapse.setAttribute("aria-label", `Collapse ${section.title}`);
-        collapse.setAttribute("aria-expanded", "true");
-        collapse.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 6 5 5 5-5"/></svg>';
-        collapse.addEventListener("click", (e) => {
-          e.stopPropagation();
-          const isOpen = sectionNav.classList.toggle("open");
-          collapse.setAttribute("aria-expanded", String(isOpen));
-        });
-
-        sectionHead.append(sectionLink, collapse);
-        
-        const children = make("div", "nav-section-children");
-        const childrenInner = make("div", "nav-section-children-inner");
-        children.append(childrenInner);
-        sectionNav.append(sectionHead, children);
-        navigation.append(sectionNav);
-
-        (section.subsections || []).forEach(subsection => {
-          SUBSECTION_MAP.set(subsection.id, { section, subsection });
-          SUBSECTION_ORDER.push(subsection.id);
-
-          const subLink = make("a", "nav-subsection", subsection.title || "Untitled");
-          subLink.dataset.id = subsection.id;
-          
-          const searchTokens = [
-            subsection.title,
-            ...(subsection.features || []).map(f => `${f.title} ${f.desc} ${f.code} ${f.command}`)
-          ].filter(Boolean).join(" ").toLowerCase();
-          
-          subLink.dataset.search = searchTokens;
-
-          subLink.addEventListener("click", (e) => {
-            e.preventDefault();
-            navigateTo(subsection.id);
-          });
-
-          childrenInner.append(subLink);
-        });
-      });
-
-      $("topic-count").textContent = `${totalSubsections} topics`;
     }
 
     function setupTheme() {
@@ -1033,84 +1392,258 @@
       });
     }
 
-    function setupSearch() {
-      const input = $("doc-search");
-      input.addEventListener("input", () => {
-        const query = input.value.trim().toLowerCase();
-        let visibleCount = 0;
-
-        document.querySelectorAll(".nav-subsection").forEach(link => {
-          const visible = !query || link.dataset.search.includes(query);
-          link.hidden = !visible;
-          if (visible) visibleCount++;
+    /* ------------------------------------------------------------------ navigation model */
+    function buildNavModels() {
+      // Guide: section -> subsection (page) -> feature (anchor)
+      const guide = [{ title: null, pages: [{ id: "", hash: "", title: "Overview", text: "overview home start", items: [] }] }];
+      (DOC_DATA.sections || []).forEach(section => {
+        guide.push({
+          title: section.title,
+          pages: (section.subsections || []).map(sub => ({
+            id: sub.id, hash: sub.id, title: sub.title || "Untitled", text: `${section.title} ${sub.title}`.toLowerCase(),
+            items: (sub.features || []).map((f, i) => {
+              const a = featureAnchor(sub.id, f, i);
+              return { id: a, hash: `${sub.id}@${a}`, title: f.title || "Untitled", kind: "", mono: false,
+                       text: `${f.title} ${f.desc || ""} ${f.code || ""} ${f.command || ""}`.toLowerCase() };
+            })
+          }))
         });
-
-        document.querySelectorAll(".nav-section").forEach(sec => {
-          const hasMatch = [...sec.querySelectorAll(".nav-subsection")].some(link => !link.hidden);
-          sec.hidden = !!query && !hasMatch;
-          if (query && hasMatch) sec.classList.add("open");
-        });
-
-        $("nav-empty").style.display = visibleCount ? "none" : "block";
       });
+      NAV.guide = guide;
+
+      if (!STD_DATA) { NAV.std = []; return; }
+      const std = [{ title: null, pages: [{ id: "std", hash: "std", title: "All modules", text: "standard library reference index", items: [] }] }];
+      STD_DATA.groups.forEach(g => {
+        std.push({
+          title: g.title,
+          pages: g.modules.map(id => {
+            const m = STD_MODULES.get(id);
+            const items = [];
+            const add = (kind, name, anchor, blob, shown) => items.push({ id: anchor, hash: `std/${m.id}@${anchor}`, title: shown || name, name: name.toLowerCase(), kind, mono: true, text: `${shown || name} ${blob}`.toLowerCase() });
+            m.types.forEach(t => {
+              if (t.ext && !t.methods.length) return;
+              add("T", t.name, stdId(m.id, "type", t.name), `${t.doc} type ${t.kind}`);
+              t.methods.filter(x => !x.via || x.doc).forEach(f => add("m", f.name, stdId(m.id, t.name, f.name), `${signature(f)} ${f.doc || ""} ${(f.params || []).map(p => p.doc || "").join(" ")} ${f.returns_doc || ""}`, `${t.name}.${f.name}`));
+            });
+            m.traits.forEach(t => add("T", t.name, stdId(m.id, "trait", t.name), `${t.doc} trait`));
+            m.functions.forEach(f => add("f", f.name, stdId(m.id, "fn", f.name), `${signature(f)} ${f.doc || ""} ${(f.params || []).map(p => p.doc || "").join(" ")} ${f.returns_doc || ""}`));
+            m.consts.forEach(c => add("c", c.name, stdId(m.id, "const", c.name), `${c.doc || ""} constant`));
+            m.errors.forEach(e => add("!", e.name, stdId(m.id, "error", e.name), `${e.doc || ""} error`, `${m.id}.${e.name}`));
+            const label = m.id === "prelude" ? "prelude" : m.id;
+            return { id: `std/${m.id}`, hash: `std/${m.id}`, title: label, mono: true, name: m.id,
+                     text: `${label} std.${m.id} ${m.summary || ""} ${m.description || ""}`.toLowerCase(), items };
+          })
+        });
+      });
+      NAV.std = std;
     }
 
-    function setupMenu() {
-      const button = $("menu-toggle");
-      const sidebar = $("sidebar");
-      const backdrop = $("sidebar-backdrop");
-
-      function setOpen(open) {
-        sidebar.classList.toggle("open", open);
-        backdrop.classList.toggle("open", open);
-        document.body.classList.toggle("menu-open", open);
-        button.setAttribute("aria-expanded", String(open));
+    /* ------------------------------------------------------------------ search + nav rendering */
+    const escapeRe = t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    function markText(text, terms) {
+      if (!terms.length) return escapeHTML(text);
+      const re = new RegExp("(" + terms.map(escapeRe).join("|") + ")", "gi");
+      return text.split(re).map((part, i) => i % 2 ? `<mark>${escapeHTML(part)}</mark>` : escapeHTML(part)).join("");
+    }
+    // 0 = no match; every term must occur. Names count for more than descriptions.
+    function score(target, terms, nameKey) {
+      const name = (target[nameKey] || target.title || "").toLowerCase();
+      const blob = target.text;
+      let total = 0;
+      for (const t of terms) {
+        if (name === t) total += 10;
+        else if (name.startsWith(t)) total += 6;
+        else if (name.includes(t)) total += 4;
+        else if (blob.includes(t)) total += 1;
+        else return 0;
       }
-
-      button.addEventListener("click", () => setOpen(!sidebar.classList.contains("open")));
-      backdrop.addEventListener("click", () => setOpen(false));
-      sidebar.addEventListener("click", event => {
-        if (event.target.closest("a")) setOpen(false);
+      return total;
+    }
+    function searchModel(mode, terms) {
+      const out = [];
+      NAV[mode].forEach(section => {
+        const pages = [];
+        section.pages.forEach(page => {
+          const own = score(page, terms, "name");
+          const hits = page.items.map(it => ({ it, s: score(it, terms, "name") })).filter(x => x.s > 0)
+            .sort((a, b) => b.s - a.s).map(x => x.it);
+          if (own || hits.length) pages.push({ page, own, hits });
+        });
+        if (pages.length) {
+          pages.sort((a, b) => b.own - a.own);                 // pages whose own name matches come first
+          out.push({ title: section.title, pages, best: pages[0].own });
+        }
       });
+      out.sort((a, b) => b.best - a.best);
+      return out;
+    }
+
+    const EXPANDED = new Set();
+    const HIT_LIMIT = 10;
+    const KIND_TITLES = { T: "type", f: "function", m: "method", c: "constant", "!": "error" };
+
+    function renderNav() {
+      const nav = $("navigation");
+      const query = $("doc-search").value.trim().toLowerCase();
+      const terms = query.split(/\s+/).filter(Boolean);
+      $("search-wrap").classList.toggle("has-text", !!query);
+      nav.innerHTML = "";
+      let model, pageCount = 0, itemCount = 0;
+      if (terms.length) model = searchModel(MODE, terms);
+      else model = NAV[MODE].map(sec => ({ title: sec.title, pages: sec.pages.map(page => ({ page, own: 1, hits: [] })) }));
+
+      model.forEach(sec => {
+        const wrap = make("div", "nav-section");
+        if (sec.title) wrap.append(make("div", "nav-group-label", sec.title));
+        sec.pages.forEach(({ page, hits }) => {
+          pageCount++;
+          const isActive = page.hash.split("@")[0] === (CURRENT_PAGE_ID === "overview" ? "" : CURRENT_PAGE_ID);
+          const holder = make("div", "nav-page");
+          const link = make("a", "nav-page-link" + (isActive ? " active" : ""));
+          link.href = "#" + page.hash.split("@")[0];
+          const label = make("span", page.mono ? "mono" : "");
+          label.innerHTML = markText(page.title, terms);
+          link.append(label);
+          if (!terms.length && page.items.length && MODE === "std") link.append(make("span", "tag", String(page.items.length)));
+          link.addEventListener("click", e => { e.preventDefault(); openHash(page.hash.split("@")[0]); closeMenu(); });
+          holder.append(link);
+
+          // anchors: every item of the open page, or the matches while searching
+          let list = [];
+          if (terms.length) list = hits;
+          else if (isActive) list = page.items;
+          if (list.length) {
+            itemCount += terms.length ? list.length : 0;
+            const key = page.hash + "|" + query;
+            const showAll = EXPANDED.has(key) || !terms.length || list.length <= HIT_LIMIT + 2;
+            const shown = showAll ? list : list.slice(0, HIT_LIMIT);
+            const box = make("div", "nav-anchors" + (terms.length ? " nav-page-hits" : ""));
+            shown.forEach(it => {
+              const a = make("a", "nav-anchor");
+              a.href = "#" + it.hash;
+              if (it.kind) { const k = make("span", "kind", it.kind); k.title = KIND_TITLES[it.kind] || ""; a.append(k); }
+              const t = make("span", it.mono ? "mono" : "");
+              t.innerHTML = markText(it.title, terms);
+              a.append(t);
+              a.addEventListener("click", e => { e.preventDefault(); openHash(it.hash); closeMenu(); });
+              box.append(a);
+            });
+            if (!showAll) {
+              const more = make("button", "nav-more", `Show ${list.length - HIT_LIMIT} more`);
+              more.type = "button";
+              more.addEventListener("click", () => { EXPANDED.add(key); renderNav(); });
+              box.append(more);
+            }
+            holder.append(box);
+          }
+          wrap.append(holder);
+        });
+        nav.append(wrap);
+      });
+
+      $("nav-empty").style.display = pageCount ? "none" : "block";
+      $("nav-empty").textContent = terms.length ? `Nothing matches "${$("doc-search").value.trim()}".` : "No topics.";
+      $("topic-count").textContent = terms.length ? `${itemCount} match${itemCount === 1 ? "" : "es"}`
+        : MODE === "std" ? `${STD_MODULES.size} modules` : `${SUBSECTION_ORDER.length} topics`;
+
+      // a hint when the other half of the docs has results
+      const cross = $("nav-cross");
+      cross.innerHTML = "";
+      if (terms.length) {
+        const other = MODE === "guide" ? "std" : "guide";
+        const found = searchModel(other, terms);
+        const n = found.reduce((a, s) => a + s.pages.reduce((b, p) => b + Math.max(p.hits.length, 1), 0), 0);
+        if (n) {
+          const b = make("button", "nav-cross", `${n} result${n === 1 ? "" : "s"} for "${$("doc-search").value.trim()}" in ${other === "std" ? "the Standard library" : "the Guide"} →`);
+          b.type = "button";
+          b.addEventListener("click", () => setMode(other, true));
+          cross.append(b);
+        }
+      }
+      scrollActiveIntoView();
+    }
+
+    function scrollActiveIntoView() {
+      if ($("doc-search").value.trim()) return;
+      const el = document.querySelector(".nav-page-link.active");
+      if (!el) return;
+      const box = $("sidebar-scroll");
+      const r = el.getBoundingClientRect(), b = box.getBoundingClientRect();
+      if (r.top < b.top + 8 || r.bottom > b.bottom - 8) box.scrollTop += r.top - b.top - 80;
+    }
+
+    function setupSearch() {
+      const input = $("doc-search");
+      let timer = 0;
+      input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(renderNav, 60); });
+      input.addEventListener("keydown", e => {
+        if (e.key === "Enter") {
+          const first = document.querySelector(".nav-anchor") || document.querySelector(".nav-page-link");
+          if (first) first.click();
+        } else if (e.key === "Escape") {
+          if (input.value) { input.value = ""; renderNav(); } else input.blur();
+        }
+      });
+      $("search-clear").addEventListener("click", () => { input.value = ""; renderNav(); input.focus(); });
+    }
+
+    /* ------------------------------------------------------------------ mobile menu */
+    function setMenu(open) {
+      $("sidebar").classList.toggle("open", open);
+      $("sidebar-backdrop").classList.toggle("open", open);
+      document.body.classList.toggle("menu-open", open);
+      $("menu-toggle").setAttribute("aria-expanded", String(open));
+    }
+    function closeMenu() { if ($("sidebar").classList.contains("open")) setMenu(false); }
+
+    function setupMenu() {
+      $("menu-toggle").addEventListener("click", () => setMenu(!$("sidebar").classList.contains("open")));
+      $("sidebar-backdrop").addEventListener("click", () => setMenu(false));
       document.addEventListener("keydown", event => {
-        if (event.key === "Escape") setOpen(false);
-        if (event.key === "/" && !["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) {
+        const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName);
+        if (event.key === "Escape") closeMenu();
+        if (event.key === "/" && !typing) {
           event.preventDefault();
-          if (window.innerWidth <= 820) setOpen(true);
+          if (window.innerWidth <= 820) setMenu(true);
           $("doc-search").focus();
         }
       });
+      window.addEventListener("resize", () => { if (window.innerWidth > 820) closeMenu(); });
     }
 
-    // Global navigation event handlers
-    $("brand-home").addEventListener("click", () => navigateTo("overview"));
-    $("btn-overview-side").addEventListener("click", () => navigateTo("overview"));
-    $("nav-overview-top").addEventListener("click", () => navigateTo("overview"));
-
-    window.addEventListener("popstate", (e) => {
-      const pageId = e.state?.pageId || (location.hash ? location.hash.substring(1) : "overview");
-      navigateTo(pageId, false);
-    });
+    /* ------------------------------------------------------------------ start */
+    $("brand-home").addEventListener("click", () => { setMode("guide", false); openHash(""); });
+    document.querySelectorAll(".mode-tab").forEach(b => b.addEventListener("click", () => {
+      if (b.dataset.mode !== MODE) setMode(b.dataset.mode, true);
+    }));
+    window.addEventListener("popstate", () => route(currentHash()));
 
     setupTheme();
     setupMenu();
     setupSearch();
 
-    fetch(DATA_URL)
-      .then(response => {
-        if (!response.ok) throw new Error(`Could not load ${DATA_URL}`);
-        return response.json();
-      })
-      .then(data => {
-        DOC_DATA = data;
-        buildNavigation(data);
-        const initialPage = location.hash ? location.hash.substring(1) : "overview";
-        navigateTo(initialPage, false);
-      })
-      .catch(error => {
-        $("app-content").textContent = "The documentation could not be loaded. Check that features.json is available beside index.html.";
-        console.error(error);
-      });
+    const fetchJSON = url => fetch(url).then(r => { if (!r.ok) throw new Error(`Could not load ${url}`); return r.json(); });
+    Promise.all([
+      fetchJSON(DATA_URL),
+      fetchJSON(STD_URL).catch(error => { console.error(error); return null; })
+    ]).then(([guide, std]) => {
+      DOC_DATA = guide;
+      STD_DATA = std;
+      SUBSECTION_MAP.clear(); SUBSECTION_ORDER = [];
+      (guide.sections || []).forEach(section => (section.subsections || []).forEach(subsection => {
+        SUBSECTION_MAP.set(subsection.id, { section, subsection });
+        SUBSECTION_ORDER.push(subsection.id);
+      }));
+      if (std) std.modules.forEach(m => STD_MODULES.set(m.id, m));
+      buildNavModels();
+      MODE = "";
+      const hash = currentHash();
+      setMode(hash === "std" || hash.startsWith("std/") ? "std" : "guide", false);
+      route(hash);
+    }).catch(error => {
+      $("app-content").textContent = "The documentation could not be loaded. Check that features.json and stdlib.json are available beside index.html.";
+      console.error(error);
+    });
   </script>
 </body>
 </html>
