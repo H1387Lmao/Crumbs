@@ -1,0 +1,29 @@
+struct Node { left: *Node, right: *Node }
+
+fn make(d: i32) -> *Node {
+    let n = alloc(Node, 1);
+    if d > 0 {
+        n[0].left = make(d - 1);
+        n[0].right = make(d - 1);
+    }
+    return &n[0];
+}
+
+fn check(t: *Node) -> i64 {
+    if t->left == null { return 1; }
+    return 1 + check(t->left) + check(t->right);
+}
+
+fn main() {
+    let max_depth = 16;
+    let mut total: i64 = check(make(max_depth + 1));
+    let long_lived = make(max_depth);
+    let mut d = 4;
+    while d <= max_depth {
+        let iters = 1 << (max_depth - d + 4);
+        for _ in 0..iters { total += check(make(d)); }
+        d += 2;
+    }
+    total += check(long_lived);
+    println("{}", total);
+}

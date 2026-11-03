@@ -1,0 +1,23 @@
+fn main() {
+    let n: i64 = 600;
+    let a = alloc(f64, n * n);
+    let b = alloc(f64, n * n);
+    let c = alloc(f64, n * n);
+    for i in 0..n {
+        for j in 0..n {
+            a[i * n + j] = ((i + j) % 10) as f64;
+            b[i * n + j] = ((i * 3 + j) % 10) as f64;
+        }
+    }
+    for i in 0..n {
+        for k in 0..n {
+            let aik = a[i * n + k];
+            for j in 0..n {
+                c[i * n + j] += aik * b[k * n + j];
+            }
+        }
+    }
+    let mut trace = 0.0;
+    for i in 0..n { trace += c[i * n + i]; }
+    println("{}", trace as i64);
+}

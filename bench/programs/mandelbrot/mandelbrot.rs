@@ -1,0 +1,17 @@
+fn main() {
+    let n: i32 = 2000;
+    let mut inside: i64 = 0;
+    for py in 0..n {
+        let ci = 2.0 * (py as f64) / (n as f64) - 1.0;
+        for px in 0..n {
+            let cr = 2.0 * (px as f64) / (n as f64) - 1.5;
+            let (mut zr, mut zi, mut k) = (0.0f64, 0.0f64, 0);
+            while k < 50 && zr * zr + zi * zi <= 4.0 {
+                let t = zr * zr - zi * zi + cr;
+                zi = 2.0 * zr * zi + ci; zr = t; k += 1;
+            }
+            if k == 50 { inside += 1; }
+        }
+    }
+    println!("{}", inside);
+}

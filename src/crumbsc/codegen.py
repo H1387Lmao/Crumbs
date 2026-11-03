@@ -40,6 +40,10 @@ def c_string(b):
     return '"' + "".join(out) + '"'
 
 
+MATH_BUILTINS = {"sqrt", "sin", "cos", "tan", "atan", "atan2", "exp", "exp2", "log", "log2", "log10", "pow",
+                 "floor", "ceil", "trunc", "round", "fabs", "fmod", "fmin", "fmax", "cbrt", "hypot"}
+
+
 class Tmp:
     """A compiler temporary that holds a value with a destructor (behaves like a glue local)."""
 
@@ -1317,6 +1321,10 @@ class CodeGen:
                 ps = [self.ctype(t) for t in s.params] + (["..."] if s.variadic else [])
                 ret = self.ctype(s.ret) if s.ret != VOID else "void"
                 protos.append(f"extern {ret} {s.cname}({', '.join(ps) or 'void'}) CB_ASM({c_string(s.csym.encode())});")
+                if s.csym in MATH_BUILTINS and ret == "double" and all(p == "double" for p in ps):
+                    # the asm-label alias hides the function from the optimizer: bind the well-known libm
+                    # functions to the compiler's own builtins so `sqrt` becomes one instruction, `floor` an inline round, ...
+                    protos.append(f"#define {s.cname} __builtin_{s.csym}")
         consts = [self.const_def(s) for s in ck.consts if not s.extern]
         # make sure every struct field type is registered
         for s in ck.structs:
