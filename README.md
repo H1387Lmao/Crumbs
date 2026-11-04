@@ -496,11 +496,12 @@ freeing without a borrow checker and without `free()`.
 * Borrowing is not proved, it is *checked when used*: every block carries a generation number that changes when the block is freed, and
   `owner.ref()` makes a `Ref<T>` that remembers it. `r.get()` panics with `use of a freed value` if the owner is gone, so a dangling reference
   is a clean panic, not corruption. `owner.at()` is the unchecked fast borrow.
-* `own.shared(v)` gives an `Rc<T>` for values with several owners (counted, freed when the last one goes; cycles leak, not thread-safe).
+* `own.shared(v)` gives an `Rc<T>` for values with several owners (atomic counts, so owners can live on different threads; freed when the last
+  one goes). A `Weak<T>` (`rc.downgrade()`, `weak.upgrade()` gives `Rc<T>?`) points back without keeping the value alive, so parent/child cycles are freed.
+* Owners work inside `List` and `HashMap`: removing or clearing destroys the value right there.
 
 Binary trees written this way (`bench/programs/bintrees/bintrees_own.cb`, built with `--no-gc`) take 0.23 s (14 MiB), against 2.0 s (108 MiB) with the collector and
-0.22 s for C, with no `free` calls in the source. Still to do: a static check for the common dangling cases, atomic counts, returning freed blocks
-to the system, and `Own` inside the standard collections.
+0.22 s for C, with no `free` calls in the source. Still to do: a static check for the common dangling cases and returning freed blocks to the system.
 
 ## Compiler layout
 

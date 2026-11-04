@@ -1330,5 +1330,16 @@ void cb_own_free(void *p) {
 #endif
 }
 uint64_t cb_own_gen(void *p) { return p ? ((cb_OwnHdr *)p - 1)->gen : 0; }
+/* atomic counters for std.own's Rc/Weak (the pointer is an i64 inside a heap block) */
+int64_t cb_atomic_add(int64_t *p, int64_t n) { return __atomic_fetch_add(p, n, __ATOMIC_ACQ_REL); }
+int64_t cb_atomic_load(int64_t *p) { return __atomic_load_n(p, __ATOMIC_ACQUIRE); }
+/* raises *p by one unless it is zero; true when it did (a Weak turning into an Rc) */
+int cb_atomic_inc_nonzero(int64_t *p) {
+    int64_t n = __atomic_load_n(p, __ATOMIC_ACQUIRE);
+    while (n != 0) {
+        if (__atomic_compare_exchange_n(p, &n, n + 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return 1;
+    }
+    return 0;
+}
 #endif
 /* ---- end runtime ----------------------------------------------------- */

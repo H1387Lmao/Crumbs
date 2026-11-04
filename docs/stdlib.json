@@ -4428,8 +4428,8 @@
    "name": "own",
    "import": "std.own",
    "summary": "std.own (EXPERIMENTAL): memory with an owner. No collector, no borrow checker, and no manual free().",
-   "description": "An `Own<T>` is the single owner of one heap value. It is moved like a `String` (`let b = a;` leaves `a` unusable), and when the\nowner goes out of scope the value is destroyed and its memory is freed on the spot, so allocation costs what `malloc` costs and\nnothing ever pauses. What `Own` does NOT do is stop you from keeping a pointer past that point. Instead of proving it away\n(borrowing rules) it makes it detectable: every block carries a generation number that changes when the block is freed, and a\n`Ref<T>` remembers the number it was made with. `r.get()` compares them and panics with \"use of a freed value\" if they differ,\nso a dangling `Ref` is a clean panic, never silent corruption. `Own.at()` is the fast, unchecked borrow for code that\nalready holds the owner. When ownership really is shared, `Rc<T>` counts its owners and frees the value when the last one goes.\n\nLimits: `Rc` counts are not atomic (do not share an `Rc` between threads), `Rc` cycles leak, freed blocks are recycled but never\nreturned to the system, and a raw `*T` taken from `at()` is as unchecked as any pointer.",
-   "example": "import std.own;\n\nstruct Node { value: i32, next: own.Own<Node> }\n\nfn main() {\n    let list = own.new(Node { value: 1, next: own.new(Node { value: 2, next: own.none() }) });\n    println(\"{}\", list.at().value);          // 1: `at` borrows the value\n    let r = list.ref();                        // a checked handle that can outlive borrows\n    println(\"{}\", r.get().value);              // 1\n    let shared = own.shared(5);\n    let again = shared.clone();\n    println(\"{}\", again.count());               // 2: freed when the last owner goes\n}\n// at the end of main the whole list is freed, in order, right there",
+   "description": "An `Own<T>` is the single owner of one heap value. It is moved like a `String` (`let b = a;` leaves `a` unusable), and when the\nowner goes out of scope the value is destroyed and its memory is freed on the spot, so allocation costs what `malloc` costs and\nnothing ever pauses. What `Own` does NOT do is stop you from keeping a pointer past that point. Instead of proving it away\n(borrowing rules) it makes it detectable: every block carries a generation number that changes when the block is freed, and a\n`Ref<T>` remembers the number it was made with. `r.get()` compares them and panics with \"use of a freed value\" if they differ,\nso a dangling `Ref` is a clean panic, never silent corruption. `Own.at()` is the fast, unchecked borrow for code that\nalready holds the owner. When ownership really is shared, `Rc<T>` counts its owners and frees the value when the last one goes.\n\n`Rc` counts are atomic, so an `Rc` can be cloned and dropped on different threads (the value itself is not locked: share it\nread-only, or put a `thread.Mutex` inside). A `Weak<T>` does not keep the value alive, so back-pointers and caches no longer make cycles leak.\n\nLimits: freed blocks are recycled but never returned to the system, and a raw `*T` taken from `at()` is as unchecked as any pointer.",
+   "example": "import std.own;\n\nstruct Node { value: i32, next: own.Own<Node> }\n\nfn main() {\n    let list = own.new(Node { value: 1, next: own.new(Node { value: 2, next: own.none() }) });\n    println(\"{}\", list.at().value);          // 1: `at` borrows the value\n    let r = list.ref();                        // a checked handle that can outlive borrows\n    println(\"{}\", r.get().value);              // 1\n    let shared = own.shared(5);\n    let again = shared.clone();\n    println(\"{}\", again.count());               // 2: freed when the last owner goes\n    let weak = shared.downgrade();              // does not keep it alive\n    println(\"{}\", weak.upgrade().is_some());    // true\n}\n// at the end of main the whole list is freed, in order, right there",
    "errors": [],
    "consts": [],
    "types": [
@@ -4598,7 +4598,7 @@
      "tparams": [
       "T"
      ],
-     "doc": "Shared ownership by reference counting: `clone` adds an owner, the last owner to go frees the value. Counts are not atomic (keep an `Rc` on one thread) and cycles leak.",
+     "doc": "Shared ownership by reference counting: `clone` adds an owner, the last owner to go frees the value. Counts are atomic, so owners can live on different threads (the value itself is not locked). Use `Weak` for back-pointers so cycles do not leak.",
      "fields": [
       {
        "name": "b",
@@ -4644,6 +4644,74 @@
         "T"
        ],
        "returns_doc": "`i64`"
+      },
+      {
+       "name": "downgrade",
+       "tparams": [],
+       "params": [],
+       "returns": "Weak<T>",
+       "receiver": "self",
+       "doc": "a handle that does not keep the value alive (use it for back-pointers and caches, so cycles can be freed)",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a `Weak<T>`"
+      },
+      {
+       "name": "weak_count",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "how many Weak handles point at the value",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`i64`"
+      }
+     ]
+    },
+    {
+     "name": "Weak",
+     "kind": "struct",
+     "tparams": [
+      "T"
+     ],
+     "doc": "a non-owning handle to an Rc value: it does not keep the value alive, `upgrade` tells whether it still is",
+     "fields": [
+      {
+       "name": "b",
+       "type": "*RcBox<T>"
+      }
+     ],
+     "methods": [
+      {
+       "name": "upgrade",
+       "tparams": [],
+       "params": [],
+       "returns": "Rc<T>?",
+       "receiver": "self",
+       "doc": "a new owner when the value is still alive, null when every owner is gone",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "an `Rc<T>`, or `null` when every owner is gone"
+      },
+      {
+       "name": "clone",
+       "tparams": [],
+       "params": [],
+       "returns": "Weak<T>",
+       "receiver": "self",
+       "doc": "Makes another `Weak` handle to the same value.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a `Weak<T>`"
       }
      ]
     }
@@ -4697,6 +4765,18 @@
      "doc": "moves `v` to the heap under shared ownership (count 1)",
      "fallible": false,
      "returns_doc": "an `Rc<T>`"
+    },
+    {
+     "name": "none_weak",
+     "tparams": [
+      "T"
+     ],
+     "params": [],
+     "returns": "Weak<T>",
+     "receiver": null,
+     "doc": "a Weak that points at nothing (a parent link that has no parent yet); `upgrade` on it gives null",
+     "fallible": false,
+     "returns_doc": "an empty `Weak<T>`"
     },
     {
      "name": "release",

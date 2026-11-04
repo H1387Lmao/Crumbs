@@ -488,9 +488,9 @@
             },
             {
               "id": "own-rc",
-              "title": "Rc<T>: shared ownership",
-              "desc": "When ownership really is shared, `own.shared(v)` gives an `Rc<T>`: `clone()` adds an owner, each owner that goes out of scope removes one, and the value is freed when the last one goes. `count()` tells how many there are. Counts are not atomic (keep an `Rc` on one thread) and cycles leak. Limits of the whole module: it is experimental, freed blocks are recycled but never returned to the system, and a raw `*T` taken from `at()` is as unchecked as any pointer.",
-              "code": "let a = own.shared(string_from(\"shared\"));\n{\n    let b = a.clone();\n    println(\"{}\", a.count());   // 2\n}\nprintln(\"{}\", a.count());       // 1: freed when `a` goes"
+              "title": "Rc<T> and Weak<T>: shared ownership",
+              "desc": "When ownership really is shared, `own.shared(v)` gives an `Rc<T>`: `clone()` adds an owner, each owner that goes out of scope removes one, and the value is freed when the last one goes. `count()` tells how many there are. The counts are atomic, so owners can live on different threads (for example one per `async fn` task); the value itself is not locked. `downgrade()` makes a `Weak<T>` that does not keep the value alive: `upgrade()` gives an owner while one exists and `null` afterwards, so a child can point back at its parent without a leak. Owners also work inside `List` and `HashMap`: removing an element or clearing destroys it right there. Limits of the module: it is experimental, freed blocks are recycled but never returned to the system, and a raw `*T` taken from `at()` is as unchecked as any pointer.",
+              "code": "let a = own.shared(string_from(\"shared\"));\nlet weak = a.downgrade();\n{\n    let b = a.clone();\n    println(\"{}\", a.count());           // 2\n}\nprintln(\"{}\", a.count());               // 1: freed when `a` goes\nprintln(\"{}\", weak.upgrade().is_some()); // true, while `a` lives"
             }
           ]
         }

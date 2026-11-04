@@ -253,3 +253,8 @@ own.Ref.get :: Borrows the value, after checking its generation. Panics with "us
 own.Rc.clone :: Makes another owner of the same value and raises the count. :: an `Rc<T>` ::
 own.Rc.get :: Borrows the shared value. :: a `*T` ::
 own.Rc.count :: How many owners the value has right now. :: `i64` ::
+own.none_weak :: A `Weak` that points at nothing, for a parent link that has no parent yet. Its `upgrade` gives null. :: an empty `Weak<T>` ::
+own.Rc.downgrade :: Makes a handle that does not keep the value alive. Use it for back-pointers and caches so cycles can be freed. :: a `Weak<T>` ::
+own.Rc.weak_count :: How many `Weak` handles point at the value right now. :: `i64` ::
+own.Weak.upgrade :: Turns the handle back into an owner when the value is still alive. Safe to call while other threads drop their owners. :: an `Rc<T>`, or `null` when every owner is gone ::
+own.Weak.clone :: Makes another `Weak` handle to the same value. :: a `Weak<T>` ::

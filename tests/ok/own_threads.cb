@@ -1,0 +1,23 @@
+// Rc counts are atomic: owners can be cloned and dropped on different threads, and the value is freed exactly once.
+import std.own;
+
+struct Data { total: i64 }
+drop Data(self) { println("data freed"); }
+
+async fn work(d: own.Rc<Data>, k: i64) -> i64 {
+    let mut sum: i64 = 0;
+    for i in 0..200000 { sum += (i % 7) * k + d.get().total; }
+    return sum;
+}
+
+fn main() {
+    let shared = own.shared(Data { total: 1 });
+    let a = work(shared.clone(), 1);
+    let b = work(shared.clone(), 2);
+    let c = work(shared.clone(), 3);
+    let d = work(shared.clone(), 4);
+    println("{}", await a + await b + await c + await d);
+    println("owners left: {}", shared.count());
+    let weak = shared.downgrade();
+    println("weak alive: {}", weak.upgrade().is_some());
+}

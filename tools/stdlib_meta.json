@@ -178,11 +178,12 @@
  },
  "own": {
   "summary": "EXPERIMENTAL: values with an owner, freed at the end of the scope (no collector, no free())",
-  "example": "import std.own;\n\nstruct Node { value: i32, next: own.Own<Node> }\n\nfn main() {\n    let list = own.new(Node { value: 1, next: own.new(Node { value: 2, next: own.none() }) });\n    println(\"{}\", list.at().value);          // 1: `at` borrows the value\n    let r = list.ref();                        // a checked handle that can outlive borrows\n    println(\"{}\", r.get().value);              // 1\n    let shared = own.shared(5);\n    let again = shared.clone();\n    println(\"{}\", again.count());               // 2: freed when the last owner goes\n}\n// at the end of main the whole list is freed, in order, right there",
+  "example": "import std.own;\n\nstruct Node { value: i32, next: own.Own<Node> }\n\nfn main() {\n    let list = own.new(Node { value: 1, next: own.new(Node { value: 2, next: own.none() }) });\n    println(\"{}\", list.at().value);          // 1: `at` borrows the value\n    let r = list.ref();                        // a checked handle that can outlive borrows\n    println(\"{}\", r.get().value);              // 1\n    let shared = own.shared(5);\n    let again = shared.clone();\n    println(\"{}\", again.count());               // 2: freed when the last owner goes\n    let weak = shared.downgrade();              // does not keep it alive\n    println(\"{}\", weak.upgrade().is_some());    // true\n}\n// at the end of main the whole list is freed, in order, right there",
   "types": {
    "Own": "The single owner of one heap value. Moved like a `String`: `let b = a;` leaves `a` unusable. When the owner goes out of scope the value is destroyed and its memory freed on the spot.",
    "Ref": "A copyable handle to a value somebody else owns. It remembers the block's generation number, so using it after the value was freed panics instead of reading garbage.",
-   "Rc": "Shared ownership by reference counting: `clone` adds an owner, the last owner to go frees the value. Counts are not atomic (keep an `Rc` on one thread) and cycles leak."
+   "Rc": "Shared ownership by reference counting: `clone` adds an owner, the last owner to go frees the value. Counts are atomic, so owners can live on different threads (the value itself is not locked). Use `Weak` for back-pointers so cycles do not leak.",
+   "Weak": "A non-owning handle to an `Rc` value. It does not keep the value alive: `upgrade()` gives an owner while there still is one and `null` afterwards. Counts are atomic."
   }
  }
 }
