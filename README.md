@@ -68,9 +68,27 @@ the current directory (or use `-C DIR`).
 
 ## Performance
 
-Benchmarks show that Crumbs produces binaries with sizes comparable to equivalent
-C programs. Runtime performance is also close to C, with Crumbs benchmarks taking
-approximately **1.2% more time** than their C equivalents in the measured tests.
+Crumbs compiles to C, so code that works on numbers and arrays runs at C speed. `bench/` holds nine programs, each written the same way in
+Crumbs, C, C++, Rust, Go, Java and Node.js (`bench/programs/`); `python3 bench/run.py` builds and times them and checks that every language
+prints the same answer. Best of 5 runs on a 2-core Xeon, time relative to C (bounds checks are on for Crumbs, Rust, Go and Java):
+
+| program | Crumbs | Crumbs `--no-gc` | C++ | Rust | Go | Java | Node.js |
+|---|---|---|---|---|---|---|---|
+| fib(40), calls | 1.1x | 1.0x | 1.0x | 1.8x | 3.2x | 3.3x | 6.2x |
+| Collatz, integer loops | 1.0x | 1.0x | 1.0x | 0.7x | 1.0x | 1.2x | 6.4x |
+| Mandelbrot, float loops | 1.0x | 1.0x | 1.0x | 1.0x | 1.0x | 1.4x | 1.2x |
+| N-body, float math on structs | 1.0x | 1.0x | 1.0x | 0.8x | 1.3x | 1.4x | 1.9x |
+| Matrix multiply | 1.4x | 0.9x | 0.8x | 0.9x | 1.9x | 1.8x | 4.3x |
+| Sieve, 50M bytes | 1.0x | 1.1x | 1.0x | 1.0x | 1.0x | 1.1x | 1.5x |
+| Quicksort, 3M integers | 1.1x | 1.1x | 1.0x | 1.0x | 1.1x | 1.5x | 1.9x |
+| Binary trees (allocation heavy) | **10.5x** | 1.2x | 1.3x | 1.4x | 2.5x | 1.2x | 1.1x |
+| Hash map, 1M string keys (vs C++) | 2.0x | 0.7x | 1.0x | 0.6x | 0.7x | 0.4x | 1.1x |
+
+Where Crumbs is slow is the garbage collector: it is a conservative, non-moving, generational mark-and-sweep collector, so programs that
+allocate millions of small objects pay for it (binary trees, hash map keys), and it holds more memory than `malloc`/`free` or a moving
+collector would. Building with `--no-gc` removes that cost (binary trees go from ~10x to ~1.2x C, with 9 MiB instead of ~108 MiB) in exchange for
+freeing memory yourself; the table above shows both. Peak memory, compile times and binary sizes are in [`bench/RESULTS.md`](bench/RESULTS.md); the chart is
+[`bench/results.svg`](bench/results.svg). Run one language or program with `python3 bench/run.py fib --langs crumbs,c`.
 
 ## Language tour
 
@@ -372,12 +390,12 @@ SDL or raylib: raw declarations, a struct whose `drop` closes the handle, and a 
 
 **Garbage collector (on by default; `--no-gc` for plain malloc).** A conservative, **three-generation** collector (Linux; glibc or musl)
 manages `alloc()`, `String` buffers and the string arena. New blocks start in generation 0 (the nursery). When the nursery has grown by
-1 MiB the allocator runs one of three collections:
+4 MiB the allocator runs one of three collections:
 
 | collection | collects | survivors go to | when |
 |---|---|---|---|
 | minor | generation 0 | generation 1 | every nursery fill |
-| mid | generations 0 and 1 | generation 2 (old) | every 8 minors, or generation 1 holds 4 MiB, or many cards are dirty |
+| mid | generations 0 and 1 | generation 2 (old) | every 8 minors, or generation 1 holds 16 MiB, or many cards are dirty |
 | major | everything | generation 2 | the old generation grew by as much as it held (at least 16 MiB), or `gc_collect()` |
 
 Within a collection blocks are white (not reached), grey (reached, contents not scanned) or black (reached and scanned); only the blocks

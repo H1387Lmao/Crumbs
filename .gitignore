@@ -28,3 +28,4 @@ htmlcov/
 .idea/
 *.swp
 .DS_Store
+bench/build/

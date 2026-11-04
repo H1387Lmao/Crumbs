@@ -336,10 +336,10 @@ typedef struct cb_hdr { size_t n; struct cb_hdr *prev, *next; uintptr_t flags; }
 #define CB_SETGEN(h, g) ((h)->flags = ((h)->flags & ~(uintptr_t)0x30) | ((uintptr_t)(g) << 4))
 
 #ifndef CB_GC_NURSERY
-#define CB_GC_NURSERY ((size_t)1 << 20)      /* bytes allocated since the last collection that trigger a minor one */
+#define CB_GC_NURSERY ((size_t)4 << 20)      /* bytes allocated since the last collection that trigger a minor one */
 #endif
 #ifndef CB_GC_MID
-#define CB_GC_MID ((size_t)4 << 20)          /* bytes in generation 1 that make the next collection a mid one */
+#define CB_GC_MID ((size_t)16 << 20)         /* bytes in generation 1 that make the next collection a mid one */
 #endif
 #ifndef CB_GC_MID_EVERY
 #define CB_GC_MID_EVERY 8                    /* ... or this many minor collections in a row */

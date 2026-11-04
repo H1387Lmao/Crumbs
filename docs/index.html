@@ -518,6 +518,28 @@
     }
     .footer a { color: var(--muted); transition: color .15s ease; }
     .footer a:hover { color: var(--accent); }
+
+    /* Benchmarks on the overview */
+    .bench { margin: 0 0 40px; }
+    .bench-lead { margin: 6px 0 14px; color: var(--muted); font-size: 13.5px; max-width: 760px; }
+    .bench-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+    .bench-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 12.5px; }
+    .bench-table th, .bench-table td { padding: 8px 10px; border-top: 1px solid var(--line); text-align: right; white-space: nowrap; }
+    .bench-table thead th { border-top: 0; color: var(--subtle); font-size: 11px; font-weight: 700; vertical-align: bottom; white-space: normal; }
+    .bench-table th:first-child, .bench-table td:first-child { text-align: left; color: var(--ink); font-weight: 600; white-space: normal; min-width: 190px; }
+    .bench-table td.me, .bench-table th.me { background: var(--accent-soft); }
+    .bench-table td { font-family: "DM Mono", monospace; }
+    .bench-cell { position: relative; display: inline-block; min-width: 56px; }
+    .bench-cell i { position: absolute; left: 0; bottom: -3px; height: 2px; border-radius: 1px; background: var(--line-strong); }
+    .bench-table td.me .bench-cell i { background: var(--accent); }
+    .bench-table td.best { color: var(--accent); font-weight: 600; }
+    .bench-table td.bad { color: #e8a07a; }
+    .bench-note { margin: 12px 0 0; color: var(--muted); font-size: 12.5px; max-width: 820px; line-height: 1.75; }
+    .bench-gc { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 9px; margin: 16px 0 0; }
+    .bench-gc div { padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+    .bench-gc b { display: block; font: 600 20px "DM Mono", monospace; color: var(--accent); }
+    .bench-gc span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
     /* Mode tabs (Guide / Standard library) */
     .mode-tabs { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
     .mode-tab {
@@ -804,6 +826,7 @@
     const STD_URL = "stdlib.json";
     let DOC_DATA = null;
     let STD_DATA = null;
+    let BENCH_DATA = null;
     let SUBSECTION_MAP = new Map();
     let SUBSECTION_ORDER = [];
     let CURRENT_PAGE_ID = "overview";
@@ -1192,6 +1215,78 @@
       }
       appendFooter(container);
     }
+
+    /* ------------------------------------------------------------------ benchmarks (overview page) */
+    function renderBenchmarks(container) {
+      const data = BENCH_DATA;
+      if (!data || !data.programs.length) return;
+      const sec = make("section", "bench");
+      sec.id = "performance";
+      const head = make("div", "quickstart-heading");
+      head.append(make("h2", "", "Performance"), make("span", "", "Crumbs against other languages"));
+      sec.append(head);
+      const lead = make("p", "bench-lead");
+      lead.textContent = `Run time of the same program in each language, relative to C (1.0x = as fast as C; lower is better). Best of ${data.runs} runs on ${data.machine}. Every language printed the same answer. The ${"`--no-gc`"} column is Crumbs built without the garbage collector.`.replace(/`/g, "");
+      sec.append(lead);
+
+      const langs = data.languages;
+      const baseId = langs.some(l => l.id === "c") ? "c" : "cpp";
+      const wrap = make("div", "bench-scroll");
+      const table = make("table", "bench-table");
+      const thead = make("thead"); const hr = make("tr");
+      hr.append(make("th", "", "Program"));
+      langs.forEach(l => hr.append(make("th", l.id.startsWith("crumbs") ? "me" : "", l.label)));
+      thead.append(hr); table.append(thead);
+      const body = make("tbody");
+      const ratios = {};
+      data.programs.forEach(p => {
+        const base = (p.results[baseId] || p.results.cpp || p.results.crumbs).seconds;
+        const tr = make("tr");
+        tr.append(make("td", "", p.title.replace(/:.*$/, "").replace(/, /, " · ")));
+        const fastest = Math.min(...Object.values(p.results).filter(r => r.ok).map(r => r.seconds));
+        langs.forEach(l => {
+          const r = p.results[l.id];
+          const td = make("td", l.id.startsWith("crumbs") ? "me" : "");
+          if (!r) { td.textContent = "–"; td.title = "no version of this program"; }
+          else {
+            const rel = r.seconds / base;
+            (ratios[p.id] = ratios[p.id] || {})[l.id] = rel;
+            const cell = make("span", "bench-cell", rel >= 10 ? `${rel.toFixed(0)}x` : `${rel.toFixed(2)}x`);
+            const bar = make("i"); bar.style.width = `${Math.min(100, rel / 4 * 100)}%`;
+            cell.append(bar);
+            td.append(cell);
+            td.title = `${r.seconds.toFixed(2)} s · peak ${r.rss_mib} MiB`;
+            if (!r.ok) { td.classList.add("bad"); td.title += " · OUTPUT DIFFERS"; }
+            if (r.ok && r.seconds === fastest) td.classList.add("best");
+          }
+          tr.append(td);
+        });
+        body.append(tr);
+      });
+      table.append(body); wrap.append(table); sec.append(wrap);
+      const note = make("p", "bench-note");
+      note.textContent = "Hover a cell for the time in seconds and the peak memory. The fastest result of each row is highlighted. Bounds checks are on for Crumbs, Rust, Go and Java; the \"unchecked\" column removes them from Crumbs. The hash-map row is relative to C++ (there is no C hash map in the standard library).";
+      sec.append(note);
+
+      // collector vs. no collector
+      const cards = make("div", "bench-gc");
+      const pair = data.programs.filter(p => p.results.crumbs && p.results["crumbs-nogc"]);
+      if (pair.length) {
+        const geo = pair.reduce((a, p) => a + Math.log(p.results.crumbs.seconds / p.results["crumbs-nogc"].seconds), 0) / pair.length;
+        const worst = pair.reduce((a, p) => (p.results.crumbs.seconds / p.results["crumbs-nogc"].seconds > a.r ? { p, r: p.results.crumbs.seconds / p.results["crumbs-nogc"].seconds } : a), { r: 0 });
+        const card = (big, small) => { const d = make("div"); d.append(make("b", "", big), make("span", "", small)); cards.append(d); };
+        card(`${Math.exp(geo).toFixed(2)}x`, "typical cost of the collector (geometric mean of with-collector time ÷ --no-gc time)");
+        card(`${worst.r.toFixed(1)}x`, `largest cost, on ${worst.p.title.replace(/:.*$/, "")}: ${worst.p.results.crumbs.seconds.toFixed(2)} s with the collector, ${worst.p.results["crumbs-nogc"].seconds.toFixed(2)} s without`);
+        const bt = pair.find(p => p.id === "bintrees");
+        if (bt) card(`${bt.results["crumbs-nogc"].rss_mib} MiB`, `peak memory of binary trees with --no-gc (freeing by hand), against ${bt.results.crumbs.rss_mib} MiB with the collector`);
+        sec.append(cards);
+        const gcNote = make("p", "bench-note");
+        gcNote.textContent = "--no-gc replaces the collector with plain malloc: allocation is as cheap as in C, but you have to free() everything yourself (the binary-trees program frees its trees explicitly in this mode). Programs that never allocate in a loop pay nothing for the collector either way.";
+        sec.append(gcNote);
+      }
+      container.append(sec);
+    }
+
     function renderOverviewPage(container) {
       const project = DOC_DATA.project || {};
       const repository = project.repository || "https://github.com/H1387Lmao/crumbs";
@@ -1261,6 +1356,8 @@
         qsSection.append(qsGrid);
         container.append(qsSection);
       }
+
+      renderBenchmarks(container);
 
       appendFooter(container);
     }
@@ -1625,10 +1722,12 @@
     const fetchJSON = url => fetch(url).then(r => { if (!r.ok) throw new Error(`Could not load ${url}`); return r.json(); });
     Promise.all([
       fetchJSON(DATA_URL),
-      fetchJSON(STD_URL).catch(error => { console.error(error); return null; })
-    ]).then(([guide, std]) => {
+      fetchJSON(STD_URL).catch(error => { console.error(error); return null; }),
+      fetchJSON("benchmarks.json").catch(() => null)
+    ]).then(([guide, std, bench]) => {
       DOC_DATA = guide;
       STD_DATA = std;
+      BENCH_DATA = bench;
       SUBSECTION_MAP.clear(); SUBSECTION_ORDER = [];
       (guide.sections || []).forEach(section => (section.subsections || []).forEach(subsection => {
         SUBSECTION_MAP.set(subsection.id, { section, subsection });
