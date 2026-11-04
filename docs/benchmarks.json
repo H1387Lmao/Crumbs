@@ -4,15 +4,11 @@
  "languages": [
   {
    "id": "crumbs",
-   "label": "Crumbs"
+   "label": "Crumbs (owned memory)"
   },
   {
-   "id": "crumbs-nogc",
-   "label": "Crumbs (--no-gc)"
-  },
-  {
-   "id": "crumbs-own",
-   "label": "Crumbs (std.own)"
+   "id": "crumbs-gc",
+   "label": "Crumbs (--gc)"
   },
   {
    "id": "crumbs-unchecked",
@@ -49,47 +45,47 @@
    "title": "fib(40): recursive calls",
    "results": {
     "crumbs": {
-     "seconds": 0.169,
+     "seconds": 0.177,
      "rss_mib": 2,
      "ok": true
     },
-    "crumbs-nogc": {
-     "seconds": 0.165,
+    "crumbs-gc": {
+     "seconds": 0.179,
      "rss_mib": 2,
      "ok": true
     },
     "crumbs-unchecked": {
-     "seconds": 0.18,
+     "seconds": 0.203,
      "rss_mib": 2,
      "ok": true
     },
     "c": {
-     "seconds": 0.156,
+     "seconds": 0.171,
      "rss_mib": 2,
      "ok": true
     },
     "cpp": {
-     "seconds": 0.156,
+     "seconds": 0.177,
      "rss_mib": 2,
      "ok": true
     },
     "rust": {
-     "seconds": 0.291,
+     "seconds": 0.307,
      "rss_mib": 2,
      "ok": true
     },
     "go": {
-     "seconds": 0.492,
+     "seconds": 0.543,
      "rss_mib": 2,
      "ok": true
     },
     "java": {
-     "seconds": 0.543,
+     "seconds": 0.568,
      "rss_mib": 39,
      "ok": true
     },
     "node": {
-     "seconds": 1.007,
+     "seconds": 1.04,
      "rss_mib": 47,
      "ok": true
     }
@@ -100,48 +96,48 @@
    "title": "Collatz chains below 3M: integer loops",
    "results": {
     "crumbs": {
-     "seconds": 0.799,
+     "seconds": 0.847,
      "rss_mib": 2,
      "ok": true
     },
-    "crumbs-nogc": {
-     "seconds": 0.797,
+    "crumbs-gc": {
+     "seconds": 0.897,
      "rss_mib": 2,
      "ok": true
     },
     "crumbs-unchecked": {
-     "seconds": 0.787,
+     "seconds": 0.831,
      "rss_mib": 2,
      "ok": true
     },
     "c": {
-     "seconds": 0.75,
+     "seconds": 0.83,
      "rss_mib": 2,
      "ok": true
     },
     "cpp": {
-     "seconds": 0.751,
+     "seconds": 0.842,
      "rss_mib": 2,
      "ok": true
     },
     "rust": {
-     "seconds": 0.554,
+     "seconds": 0.583,
      "rss_mib": 2,
      "ok": true
     },
     "go": {
-     "seconds": 0.848,
+     "seconds": 0.898,
      "rss_mib": 2,
      "ok": true
     },
     "java": {
-     "seconds": 0.952,
+     "seconds": 1.027,
      "rss_mib": 42,
      "ok": true
     },
     "node": {
-     "seconds": 5.039,
-     "rss_mib": 47,
+     "seconds": 5.731,
+     "rss_mib": 48,
      "ok": true
     }
    }
@@ -151,47 +147,47 @@
    "title": "Mandelbrot 2000x2000: float loops",
    "results": {
     "crumbs": {
-     "seconds": 0.263,
+     "seconds": 0.288,
      "rss_mib": 2,
      "ok": true
     },
-    "crumbs-nogc": {
-     "seconds": 0.269,
+    "crumbs-gc": {
+     "seconds": 0.282,
      "rss_mib": 2,
      "ok": true
     },
     "crumbs-unchecked": {
-     "seconds": 0.257,
+     "seconds": 0.288,
      "rss_mib": 2,
      "ok": true
     },
     "c": {
-     "seconds": 0.271,
+     "seconds": 0.284,
      "rss_mib": 2,
      "ok": true
     },
     "cpp": {
-     "seconds": 0.272,
+     "seconds": 0.28,
      "rss_mib": 2,
      "ok": true
     },
     "rust": {
-     "seconds": 0.254,
+     "seconds": 0.274,
      "rss_mib": 2,
      "ok": true
     },
     "go": {
-     "seconds": 0.253,
+     "seconds": 0.281,
      "rss_mib": 2,
      "ok": true
     },
     "java": {
-     "seconds": 0.358,
+     "seconds": 0.392,
      "rss_mib": 40,
      "ok": true
     },
     "node": {
-     "seconds": 0.298,
+     "seconds": 0.325,
      "rss_mib": 49,
      "ok": true
     }
@@ -202,48 +198,48 @@
    "title": "N-body, 5M steps: float math on structs",
    "results": {
     "crumbs": {
-     "seconds": 0.242,
+     "seconds": 0.261,
      "rss_mib": 2,
      "ok": true
     },
-    "crumbs-nogc": {
-     "seconds": 0.238,
+    "crumbs-gc": {
+     "seconds": 0.261,
      "rss_mib": 2,
      "ok": true
     },
     "crumbs-unchecked": {
-     "seconds": 0.239,
+     "seconds": 0.274,
      "rss_mib": 2,
      "ok": true
     },
     "c": {
-     "seconds": 0.233,
+     "seconds": 0.257,
      "rss_mib": 2,
      "ok": true
     },
     "cpp": {
-     "seconds": 0.232,
+     "seconds": 0.253,
      "rss_mib": 2,
      "ok": true
     },
     "rust": {
-     "seconds": 0.192,
+     "seconds": 0.212,
      "rss_mib": 2,
      "ok": true
     },
     "go": {
-     "seconds": 0.28,
+     "seconds": 0.349,
      "rss_mib": 2,
      "ok": true
     },
     "java": {
-     "seconds": 0.339,
-     "rss_mib": 42,
+     "seconds": 0.403,
+     "rss_mib": 43,
      "ok": true
     },
     "node": {
-     "seconds": 0.446,
-     "rss_mib": 51,
+     "seconds": 0.513,
+     "rss_mib": 50,
      "ok": true
     }
    }
@@ -253,47 +249,47 @@
    "title": "Matrix multiply 600x600: memory and float",
    "results": {
     "crumbs": {
-     "seconds": 0.116,
+     "seconds": 0.09,
      "rss_mib": 10,
      "ok": true
     },
-    "crumbs-nogc": {
-     "seconds": 0.086,
+    "crumbs-gc": {
+     "seconds": 0.132,
      "rss_mib": 10,
      "ok": true
     },
     "crumbs-unchecked": {
-     "seconds": 0.087,
+     "seconds": 0.073,
      "rss_mib": 10,
      "ok": true
     },
     "c": {
-     "seconds": 0.078,
+     "seconds": 0.083,
      "rss_mib": 10,
      "ok": true
     },
     "cpp": {
-     "seconds": 0.077,
+     "seconds": 0.082,
      "rss_mib": 12,
      "ok": true
     },
     "rust": {
-     "seconds": 0.077,
+     "seconds": 0.078,
      "rss_mib": 10,
      "ok": true
     },
     "go": {
-     "seconds": 0.153,
+     "seconds": 0.181,
      "rss_mib": 10,
      "ok": true
     },
     "java": {
-     "seconds": 0.149,
+     "seconds": 0.167,
      "rss_mib": 49,
      "ok": true
     },
     "node": {
-     "seconds": 0.351,
+     "seconds": 0.385,
      "rss_mib": 58,
      "ok": true
     }
@@ -304,47 +300,47 @@
    "title": "Sieve of Eratosthenes, 50M: byte array",
    "results": {
     "crumbs": {
-     "seconds": 0.292,
+     "seconds": 0.301,
      "rss_mib": 49,
      "ok": true
     },
-    "crumbs-nogc": {
-     "seconds": 0.275,
+    "crumbs-gc": {
+     "seconds": 0.3,
      "rss_mib": 49,
      "ok": true
     },
     "crumbs-unchecked": {
-     "seconds": 0.279,
+     "seconds": 0.307,
      "rss_mib": 49,
      "ok": true
     },
     "c": {
-     "seconds": 0.257,
+     "seconds": 0.295,
      "rss_mib": 49,
      "ok": true
     },
     "cpp": {
-     "seconds": 0.281,
-     "rss_mib": 51,
+     "seconds": 0.299,
+     "rss_mib": 52,
      "ok": true
     },
     "rust": {
-     "seconds": 0.266,
+     "seconds": 0.292,
      "rss_mib": 50,
      "ok": true
     },
     "go": {
-     "seconds": 0.278,
+     "seconds": 0.286,
      "rss_mib": 50,
      "ok": true
     },
     "java": {
-     "seconds": 0.322,
+     "seconds": 0.356,
      "rss_mib": 88,
      "ok": true
     },
     "node": {
-     "seconds": 0.41,
+     "seconds": 0.465,
      "rss_mib": 95,
      "ok": true
     }
@@ -355,47 +351,47 @@
    "title": "Quicksort, 3M integers: array swaps",
    "results": {
     "crumbs": {
-     "seconds": 0.316,
+     "seconds": 0.348,
      "rss_mib": 25,
      "ok": true
     },
-    "crumbs-nogc": {
-     "seconds": 0.301,
+    "crumbs-gc": {
+     "seconds": 0.344,
      "rss_mib": 25,
      "ok": true
     },
     "crumbs-unchecked": {
-     "seconds": 0.283,
+     "seconds": 0.306,
      "rss_mib": 25,
      "ok": true
     },
     "c": {
-     "seconds": 0.281,
+     "seconds": 0.307,
      "rss_mib": 25,
      "ok": true
     },
     "cpp": {
-     "seconds": 0.278,
+     "seconds": 0.3,
      "rss_mib": 25,
      "ok": true
     },
     "rust": {
-     "seconds": 0.281,
+     "seconds": 0.286,
      "rss_mib": 25,
      "ok": true
     },
     "go": {
-     "seconds": 0.304,
+     "seconds": 0.33,
      "rss_mib": 25,
      "ok": true
     },
     "java": {
-     "seconds": 0.381,
+     "seconds": 0.451,
      "rss_mib": 65,
      "ok": true
     },
     "node": {
-     "seconds": 0.505,
+     "seconds": 0.553,
      "rss_mib": 73,
      "ok": true
     }
@@ -406,52 +402,47 @@
    "title": "Binary trees, depth 16: allocation",
    "results": {
     "crumbs": {
-     "seconds": 1.991,
-     "rss_mib": 108,
-     "ok": true
-    },
-    "crumbs-nogc": {
-     "seconds": 0.264,
-     "rss_mib": 9,
-     "ok": true
-    },
-    "crumbs-own": {
-     "seconds": 0.229,
+     "seconds": 0.258,
      "rss_mib": 14,
      "ok": true
     },
+    "crumbs-gc": {
+     "seconds": 2.042,
+     "rss_mib": 107,
+     "ok": true
+    },
     "crumbs-unchecked": {
-     "seconds": 1.956,
-     "rss_mib": 105,
+     "seconds": 0.253,
+     "rss_mib": 14,
      "ok": true
     },
     "c": {
-     "seconds": 0.224,
+     "seconds": 0.229,
      "rss_mib": 10,
      "ok": true
     },
     "cpp": {
-     "seconds": 0.275,
+     "seconds": 0.297,
      "rss_mib": 12,
      "ok": true
     },
     "rust": {
-     "seconds": 0.3,
+     "seconds": 0.308,
      "rss_mib": 10,
      "ok": true
     },
     "go": {
-     "seconds": 0.521,
-     "rss_mib": 15,
+     "seconds": 0.566,
+     "rss_mib": 14,
      "ok": true
     },
     "java": {
-     "seconds": 0.292,
-     "rss_mib": 276,
+     "seconds": 0.269,
+     "rss_mib": 277,
      "ok": true
     },
     "node": {
-     "seconds": 0.232,
+     "seconds": 0.248,
      "rss_mib": 93,
      "ok": true
     }
@@ -462,43 +453,43 @@
    "title": "Hash map, 1M string keys: library code",
    "results": {
     "crumbs": {
-     "seconds": 2.498,
-     "rss_mib": 162,
-     "ok": true
-    },
-    "crumbs-nogc": {
-     "seconds": 1.031,
+     "seconds": 1.03,
      "rss_mib": 133,
      "ok": true
     },
+    "crumbs-gc": {
+     "seconds": 2.457,
+     "rss_mib": 162,
+     "ok": true
+    },
     "crumbs-unchecked": {
-     "seconds": 2.654,
-     "rss_mib": 163,
+     "seconds": 0.998,
+     "rss_mib": 133,
      "ok": true
     },
     "cpp": {
-     "seconds": 1.316,
+     "seconds": 1.355,
      "rss_mib": 76,
      "ok": true
     },
     "rust": {
-     "seconds": 0.821,
+     "seconds": 0.863,
      "rss_mib": 134,
      "ok": true
     },
     "go": {
-     "seconds": 0.995,
+     "seconds": 1.028,
      "rss_mib": 100,
      "ok": true
     },
     "java": {
-     "seconds": 0.561,
-     "rss_mib": 255,
+     "seconds": 0.609,
+     "rss_mib": 251,
      "ok": true
     },
     "node": {
-     "seconds": 1.42,
-     "rss_mib": 147,
+     "seconds": 1.563,
+     "rss_mib": 145,
      "ok": true
     }
    }

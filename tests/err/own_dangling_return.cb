@@ -1,0 +1,11 @@
+import std.own;
+
+fn first() -> *i64 {
+    let o = own.new(41 as i64);
+    return o.at();  // ERROR: pointer into the owned value `o` cannot be returned
+}
+
+fn main() {
+    let p = first();
+    println("{}", *p);
+}

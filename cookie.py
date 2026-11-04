@@ -11,7 +11,7 @@
     cookie info                 show the project and the exact compiler commands
 
 Every option below is forwarded to the Crumbs compiler under the same name, so
-`cookie build --no-gc -O3` and `crumbs build --no-gc -O3 src/main.cb` mean the same thing.
+`cookie build --gc -O3` and `crumbs build --gc -O3 src/main.cb` mean the same thing.
 Settings come from project.toml and can be overridden on the command line.
 """
 import argparse
@@ -245,8 +245,9 @@ class Options:
         self.opt = str(pick("opt", "2"))
         self.unchecked = bool(pick("unchecked", False))
         self.overflow_panic = bool(pick("overflow_panic", False))
-        self.gc = bool(pick("gc", True))
+        gc_set = pick("gc", None)
         self.gc_mode = str(pick("gc_mode", "auto"))
+        self.gc = bool(gc_set) if gc_set is not None else self.gc_mode != "auto"     # a collector mode implies the collector
         self.gc_interval = int(pick("gc_interval", 100))
         self.no_stdruntime = bool(pick("no_stdruntime", False))
         self.strict_casts = bool(pick("strict_casts", False))
@@ -589,7 +590,7 @@ def add_common(p):
     g.add_argument("--entry", metavar="NAME",
                    help="entry function (default: `entry_fn` from project.toml, normally `main`); `--entry=` builds an object file")
     g.add_argument("--gc", action=argparse.BooleanOptionalAction, default=None,
-                   help="conservative garbage collector (default on); --no-gc uses plain malloc")
+                   help="conservative garbage collector (default off: memory is owned, see std.own)")
     g.add_argument("--gc-mode", choices=GC_MODES, default=None,
                    help="auto (default): the allocator collects when the nursery is full; thread: a background collector thread "
                         "collects periodically; manual: only gc_collect() / gc_collect_gen(g)")

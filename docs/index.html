@@ -1226,7 +1226,7 @@
       head.append(make("h2", "", "Performance"), make("span", "", "Crumbs against other languages"));
       sec.append(head);
       const lead = make("p", "bench-lead");
-      lead.textContent = `Run time of the same program in each language, relative to C (1.0x = as fast as C; lower is better). Best of ${data.runs} runs on ${data.machine}. Every language printed the same answer. The ${"`--no-gc`"} column is Crumbs built without the garbage collector.`.replace(/`/g, "");
+      lead.textContent = `Run time of the same program in each language, relative to C (1.0x = as fast as C; lower is better). Best of ${data.runs} runs on ${data.machine}. Every language printed the same answer. The first Crumbs column is the default build (owned memory, no garbage collector); the ${"`--gc`"} column is the same programs built with the optional collector.`.replace(/`/g, "");
       sec.append(lead);
 
       const langs = data.languages;
@@ -1268,20 +1268,21 @@
       note.textContent = "Hover a cell for the time in seconds and the peak memory. The fastest result of each row is highlighted. Bounds checks are on for Crumbs, Rust, Go and Java; the \"unchecked\" column removes them from Crumbs. The hash-map row is relative to C++ (there is no C hash map in the standard library).";
       sec.append(note);
 
-      // collector vs. no collector
+      // owned memory (default) vs. the optional collector
       const cards = make("div", "bench-gc");
-      const pair = data.programs.filter(p => p.results.crumbs && p.results["crumbs-nogc"]);
+      const pair = data.programs.filter(p => p.results.crumbs && p.results["crumbs-gc"]);
       if (pair.length) {
-        const geo = pair.reduce((a, p) => a + Math.log(p.results.crumbs.seconds / p.results["crumbs-nogc"].seconds), 0) / pair.length;
-        const worst = pair.reduce((a, p) => (p.results.crumbs.seconds / p.results["crumbs-nogc"].seconds > a.r ? { p, r: p.results.crumbs.seconds / p.results["crumbs-nogc"].seconds } : a), { r: 0 });
+        const ratio = p => p.results["crumbs-gc"].seconds / p.results.crumbs.seconds;
+        const geo = pair.reduce((a, p) => a + Math.log(ratio(p)), 0) / pair.length;
+        const worst = pair.reduce((a, p) => (ratio(p) > a.r ? { p, r: ratio(p) } : a), { r: 0 });
         const card = (big, small) => { const d = make("div"); d.append(make("b", "", big), make("span", "", small)); cards.append(d); };
-        card(`${Math.exp(geo).toFixed(2)}x`, "typical cost of the collector (geometric mean of with-collector time ÷ --no-gc time)");
-        card(`${worst.r.toFixed(1)}x`, `largest cost, on ${worst.p.title.replace(/:.*$/, "")}: ${worst.p.results.crumbs.seconds.toFixed(2)} s with the collector, ${worst.p.results["crumbs-nogc"].seconds.toFixed(2)} s without`);
+        card(`${Math.exp(geo).toFixed(2)}x`, "typical cost of the optional collector (geometric mean of --gc time ÷ default time)");
+        card(`${worst.r.toFixed(1)}x`, `largest cost, on ${worst.p.title.replace(/:.*$/, "")}: ${worst.p.results["crumbs-gc"].seconds.toFixed(2)} s with --gc, ${worst.p.results.crumbs.seconds.toFixed(2)} s by default`);
         const bt = pair.find(p => p.id === "bintrees");
-        if (bt) card(`${bt.results["crumbs-nogc"].rss_mib} MiB`, `peak memory of binary trees with --no-gc (freeing by hand), against ${bt.results.crumbs.rss_mib} MiB with the collector`);
+        if (bt) card(`${bt.results.crumbs.rss_mib} MiB`, `peak memory of binary trees by default, against ${bt.results["crumbs-gc"].rss_mib} MiB with --gc`);
         sec.append(cards);
         const gcNote = make("p", "bench-note");
-        gcNote.textContent = "--no-gc replaces the collector with plain malloc: allocation is as cheap as in C, but you have to free() everything yourself (the binary-trees program frees its trees explicitly in this mode). Programs that never allocate in a loop pay nothing for the collector either way.";
+        gcNote.textContent = "By default memory is owned: String, List and std.own values free themselves at scope end and allocation is plain malloc, as cheap as in C (the binary-trees program uses std.own). --gc switches on the conservative collector for programs that want to allocate without thinking about who frees. Programs that never allocate in a loop pay nothing for it either way.";
         sec.append(gcNote);
       }
       container.append(sec);

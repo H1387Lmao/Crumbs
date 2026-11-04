@@ -5,7 +5,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from run import LANGS, TITLES, ORDER
 
-COLORS = {"crumbs": "#d9a400", "crumbs-unchecked": "#f2cf5b", "crumbs-nogc": "#e8832a", "crumbs-own": "#c43e8a", "c": "#5b7bd6", "cpp": "#7f9ae0", "rust": "#c4623a",
+COLORS = {"crumbs": "#d9a400", "crumbs-unchecked": "#f2cf5b", "crumbs-gc": "#e8832a", "c": "#5b7bd6", "cpp": "#7f9ae0", "rust": "#c4623a",
           "go": "#2fa6b8", "java": "#a0674b", "node": "#6a9a47"}
 CAP = 4.0          # bars are cut at 4x C; the label still shows the real figure
 
