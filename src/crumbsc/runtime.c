@@ -1281,6 +1281,7 @@ static inline void *cb_nn(void *p, const char *loc) { if (CB_UNLIKELY(!p)) cb_pa
 static int cb_argc_v;
 static char **cb_argv_v;
 
+#ifndef CB_NOSTD
 /* ---- std.own: blocks that have exactly one owner, with a generation counter -------------------------
    Every block is a 16-byte header (generation, capacity) followed by the payload; the language only sees the payload.
    The generation is odd while the block is live and even while it is free, and goes up by one every time the state
@@ -1329,4 +1330,5 @@ void cb_own_free(void *p) {
 #endif
 }
 uint64_t cb_own_gen(void *p) { return p ? ((cb_OwnHdr *)p - 1)->gen : 0; }
+#endif
 /* ---- end runtime ----------------------------------------------------- */
