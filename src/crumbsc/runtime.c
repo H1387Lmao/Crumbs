@@ -25,6 +25,9 @@
 #endif
 
 typedef struct { const uint8_t *ptr; int64_t len; } cb_str;
+/* a closure value: code pointer, captured environment (heap block or null), and the function that destroys the environment */
+typedef struct { void *fn; void *env; void (*drop)(void *); } cb_Clo;
+static inline void cb_clo_drop(cb_Clo *c) { if (c->env) { c->drop(c->env); c->env = 0; } }
 
 #ifdef CB_NOSTD
 #define cb_wb_range(p, n) ((void)0)       /* no collector, so no write barrier */

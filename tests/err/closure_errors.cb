@@ -1,0 +1,18 @@
+fn call(f: |i32| -> i32) -> i32 { return f(1); }
+
+fn leak() -> || -> i32 {
+    let x = 5;
+    return || -> i32 { return x; };  // ERROR: this closure borrows the local `x` and cannot be returned
+}
+
+fn main() {
+    let a = 1;
+    let set = || { a = 2; };  // ERROR: cannot assign to an immutable place
+    set();
+    println("{}", call(|x| x, 3));  // ERROR: function `call` takes 1 argument but 2 were supplied
+    let s = string_from("hi");
+    let eat = move || { let _t = s; };  // ERROR: cannot move `s` out of a closure's captured variables
+    eat();
+    println("{}", s);  // ERROR: use of moved value `s`
+    let _f = |x| x;  // ERROR: cannot infer the type of the closure parameter `x`
+}

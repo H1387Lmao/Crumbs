@@ -31,6 +31,8 @@ class Ty:
             self.key = inner.key + "?"
         elif kind == "fn":
             self.key = "fn(" + ",".join(p.key for p in params) + ")->" + inner.key
+        elif kind == "clo":
+            self.key = "clo(" + ",".join(p.key for p in params) + ")->" + inner.key
         elif kind in ("struct", "enum"):
             self.key = f"{kind}:{sym.full}"
         else:
@@ -59,6 +61,9 @@ class Ty:
         if k == "fn":
             ret = "" if self.inner.kind == "prim" and self.inner.name == "void" else f" -> {self.inner}"
             return f"fn({', '.join(str(p) for p in self.params)}){ret}"
+        if k == "clo":
+            ret = "" if self.inner.kind == "prim" and self.inner.name == "void" else f" -> {self.inner}"
+            return f"|{', '.join(str(p) for p in self.params)}|{ret}"
         if k in ("struct", "enum"):
             return self.sym.name
         return self.kind
@@ -124,6 +129,10 @@ def slc(t):
 
 def fnty(params, ret):
     return Ty("fn", inner=ret, params=tuple(params))
+
+
+def clo(params, ret):
+    return Ty("clo", inner=ret, params=tuple(params))
 
 
 def eu(t):

@@ -19,10 +19,10 @@ SKIP = {"span", "ty", "local", "sym", "handler", "orig_args", "eu_ty", "opty", "
 
 
 class Loan:
-    __slots__ = ("owner", "path", "excl", "span", "via_own")
+    __slots__ = ("owner", "path", "excl", "span", "via_own", "closure")
 
-    def __init__(self, owner, path, excl, span, via_own=False):
-        self.owner, self.path, self.excl, self.span, self.via_own = owner, path, excl, span, via_own
+    def __init__(self, owner, path, excl, span, via_own=False, closure=False):
+        self.owner, self.path, self.excl, self.span, self.via_own, self.closure = owner, path, excl, span, via_own, closure
 
 
 def overlap(a, b):
@@ -81,7 +81,9 @@ class BorrowCk:
             k = e.kind
             if k == "Ident":
                 loc = getattr(e, "local", None)
-                return (loc, tuple(reversed(path))) if loc is not None and not getattr(loc, "region_handle", False) else None
+                if loc is not None and (getattr(loc, "region_handle", False) or getattr(loc, "captured", False)):
+                    return None                     # a closure's captured variable: its owner is the environment
+                return (loc, tuple(reversed(path))) if loc is not None else None
             if k == "Field":
                 if getattr(e, "mode", None) != "field":
                     return None
@@ -334,6 +336,10 @@ class BorrowCk:
                     self.d.error(ln.span, f"pointer into the owned value `{ln.owner.name}` cannot be returned",
                                  label=f"`{ln.owner.name}` is freed when its scope ends, so this pointer would dangle",
                                  help="move the owner out instead (return it or store it), or keep a checked `Ref` with `.ref()`")
+                elif ln.closure:
+                    self.d.error(ln.span, f"this closure borrows the local `{ln.owner.name}` and cannot be returned",
+                                 label=f"`{ln.owner.name}` is destroyed when the function returns, so the closure would dangle",
+                                 help="write `move |..| ...` to give the closure its own copy")
                 else:
                     self.d.error(ln.span, f"cannot return a reference to the local `{ln.owner.name}`",
                                  label=f"`{ln.owner.name}` is destroyed when the function returns, so this would dangle",
@@ -363,3 +369,26 @@ class BorrowCk:
 
     def w_Fn(self, n):
         return []
+
+    def w_Closure(self, n):
+        """Creating a closure borrows what it captures by reference (exclusive when the body writes it) and moves what it captures by value."""
+        carried = []
+        for outer, proxy in n.captures:
+            self.tick += 1
+            if self.phase == 1:
+                self.last[outer] = self.tick
+                self.decl.setdefault(outer, self.tick)
+                continue
+            if proxy.byref:
+                self.access(outer, (), "excl" if proxy.written else "shared", n.span)
+                if not outer.captured:
+                    carried.append(Loan(outer, (), proxy.written, n.span, closure=True))
+                else:
+                    carried += list(self.holds.get(outer, []))
+            else:
+                self.access(outer, (), "move" if outer.glue else "read", n.span)
+                if outer.glue:
+                    self.moved.add(outer)
+                if self.holds_ptr(outer.ty):
+                    carried += list(self.holds.get(outer, []))
+        return carried

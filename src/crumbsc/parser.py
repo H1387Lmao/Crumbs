@@ -655,6 +655,17 @@ class Parser:
             self.expect_op(")", "after the parameter types of a function type")
             ret = self.parse_ret_type() if self.accept_op("->") else None
             return N("TFn", self.sp(t), params=ps, ret=ret)
+        if t.kind == "op" and t.val in ("|", "||"):                  # closure type: `|A, B| -> R`
+            self.advance()
+            ps = []
+            if t.val == "|":
+                while not self.is_op("|"):
+                    ps.append(self.parse_type())
+                    if not self.accept_op(","):
+                        break
+                self.expect_op("|", "after the parameter types of a closure type")
+            ret = self.parse_ret_type() if self.accept_op("->") else None
+            return N("TClo", self.sp(t), params=ps, ret=ret)
         if t.kind == "op" and t.val == "[":
             self.advance()
             if self.accept_op("]"):
@@ -1112,9 +1123,44 @@ class Parser:
         self.expect_op("]", "after index")
         return N("Index", self.sp(start), obj=base, idx=idx)
 
+    def parse_closure(self):
+        """`[move] |a, b: T| [-> R] expr-or-block`"""
+        start = self.tok
+        is_move = False
+        if start.kind == "ident" and start.val == "move":
+            self.advance()
+            is_move = True
+        bar = self.tok
+        params = []
+        if bar.val == "||":
+            self.advance()
+        else:
+            self.expect_op("|")
+            while not self.is_op("|"):
+                nm = self.expect_ident("closure parameter name")
+                ty = self.parse_type() if self.accept_op(":") else None
+                params.append(N("Param", nm.span, name=nm.val, tyn=ty, name_span=nm.span, mut=False))
+                if not self.accept_op(","):
+                    break
+            self.expect_op("|", "after the closure parameters")
+        ret = self.parse_ret_type() if self.accept_op("->") else None
+        if self.is_op("{"):
+            body = self.parse_block()
+            expr_body = False
+        else:
+            saved = self.no_struct
+            e = self.parse_expr()
+            self.no_struct = saved
+            body = e
+            expr_body = True
+        return N("Closure", self.sp(start), params=params, ret=ret, body=body, expr_body=expr_body, move=is_move)
+
     def parse_primary(self):
         t = self.tok
         k = t.kind
+        if (k == "op" and t.val in ("|", "||")) or (k == "ident" and t.val == "move" and self.peek().kind == "op"
+                                                       and self.peek().val in ("|", "||")):
+            return self.parse_closure()
         if k == "int":
             self.advance()
             return N("Int", t.span, value=t.val, suffix=t.suffix)
