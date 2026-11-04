@@ -237,3 +237,24 @@ math.pow :: `x` raised to the power `y` (libm). :: `f64` :: x=the base; y=the ex
 math.floor :: Rounds down to a whole number (libm). :: `f64` :: x=the number
 math.ceil :: Rounds up to a whole number (libm). :: `f64` :: x=the number
 math.fabs :: Absolute value of a float (libm). :: `f64` :: x=the number
+own.new :: Moves `v` to the heap and returns its single owner. The value is destroyed and its memory freed when the owner goes out of scope (or is moved away and that owner does). :: an `Own<T>` :: v=the value to store
+own.none :: An owner that owns nothing: the empty link of a list or tree. :: an empty `Own<T>` ::
+own.shared :: Moves `v` to the heap under shared ownership. The count starts at 1. :: an `Rc<T>` :: v=the value to store
+own.release :: Destroys the value and frees its block now, leaving the owner empty. The scope end does this for you. :: nothing :: o=the owner
+own.Own.is_none :: True when the owner owns nothing. :: `bool` ::
+own.Own.is_some :: True when the owner holds a value. :: `bool` ::
+own.Own.at :: Borrows the value for as long as this owner is alive. Fast and unchecked: do not keep the pointer after the owner is gone (use `ref` for that). Panics on an empty owner. :: a `*T` ::
+own.Own.ref :: Makes a copyable handle that remembers the value's generation. After the owner frees the value, `get` panics and `alive` is false. :: a `Ref<T>` ::
+own.Own.set :: Replaces the value; the old one is destroyed and any existing `Ref` to it goes stale. :: nothing :: v=the new value
+own.Own.take :: Moves the value out and frees the block; the owner is left empty. Panics on an empty owner. :: the value ::
+own.Own.release :: Destroys the value and frees its block now, leaving the owner empty. :: nothing ::
+own.Ref.alive :: True while the owner still owns the value this handle was made from. :: `bool` ::
+own.Ref.get :: Borrows the value, after checking its generation. Panics with "use of a freed value" when the owner is gone. :: a `*T` ::
+own.Rc.clone :: Makes another owner of the same value and raises the count. :: an `Rc<T>` ::
+own.Rc.get :: Borrows the shared value. :: a `*T` ::
+own.Rc.count :: How many owners the value has right now. :: `i64` ::
+own.none_weak :: A `Weak` that points at nothing, for a parent link that has no parent yet. Its `upgrade` gives null. :: an empty `Weak<T>` ::
+own.Rc.downgrade :: Makes a handle that does not keep the value alive. Use it for back-pointers and caches so cycles can be freed. :: a `Weak<T>` ::
+own.Rc.weak_count :: How many `Weak` handles point at the value right now. :: `i64` ::
+own.Weak.upgrade :: Turns the handle back into an owner when the value is still alive. Safe to call while other threads drop their owners. :: an `Rc<T>`, or `null` when every owner is gone ::
+own.Weak.clone :: Makes another `Weak` handle to the same value. :: a `Weak<T>` ::

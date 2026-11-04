@@ -1,0 +1,11 @@
+len 3
+first a
+removed b
+drop a
+drop c
+cleared
+drop x1
+map has 1
+end
+drop x2
+drop b

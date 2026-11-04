@@ -486,6 +486,23 @@ Written in Crumbs and imported with `import std.name;` (`String`, `str`, `List<T
 helpers: they bind libc and pthread with plain `extern fn` / `extern struct` / `extern const` declarations, exactly like user code does.
 (The only runtime hooks they call are the collector's thread notifications in `std.thread`.)
 
+## Experimental: owned memory (`std.own`)
+
+The collector is convenient but costs time and memory (see Performance). `std.own` is an experiment in the other direction: deterministic
+freeing without a borrow checker and without `free()`.
+
+* `own.new(v)` returns an `Own<T>`, the single owner of a heap value. Owners move like `String`s, and the value is destroyed and its memory
+  freed at the end of the owner's scope, so allocation costs what `malloc` costs. Nothing pauses and nothing is traced.
+* Borrowing is not proved, it is *checked when used*: every block carries a generation number that changes when the block is freed, and
+  `owner.ref()` makes a `Ref<T>` that remembers it. `r.get()` panics with `use of a freed value` if the owner is gone, so a dangling reference
+  is a clean panic, not corruption. `owner.at()` is the unchecked fast borrow.
+* `own.shared(v)` gives an `Rc<T>` for values with several owners (atomic counts, so owners can live on different threads; freed when the last
+  one goes). A `Weak<T>` (`rc.downgrade()`, `weak.upgrade()` gives `Rc<T>?`) points back without keeping the value alive, so parent/child cycles are freed.
+* Owners work inside `List` and `HashMap`: removing or clearing destroys the value right there.
+
+Binary trees written this way (`bench/programs/bintrees/bintrees_own.cb`, built with `--no-gc`) take 0.23 s (14 MiB), against 2.0 s (108 MiB) with the collector and
+0.22 s for C, with no `free` calls in the source. Still to do: a static check for the common dangling cases and returning freed blocks to the system.
+
 ## Compiler layout
 
 | file | role |

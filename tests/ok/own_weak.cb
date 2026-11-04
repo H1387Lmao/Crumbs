@@ -1,0 +1,21 @@
+// Weak handles do not keep a value alive, so a parent that owns its children can be pointed back at without a leak.
+import std.own;
+import std.list;
+
+struct Node { name: str, parent: own.Weak<Node>, children: list.List<own.Rc<Node>> }
+drop Node(self) { println("drop ", self.name); }
+
+fn main() {
+    let root = own.shared(Node { name: "root", parent: own.none_weak(), children: list.List.new() });
+    {
+        let leaf = own.shared(Node { name: "leaf", parent: root.downgrade(), children: list.List.new() });
+        root.get().children.push(leaf.clone());
+        println("leaf owners {}, root weak handles {}", leaf.count(), root.weak_count());
+        let up = leaf.get().parent.upgrade();
+        println("leaf's parent: {}", up.is_some());
+    }
+    println("root owners {}", root.count());
+    let probe = root.downgrade();
+    drop(root);
+    println("root alive: {}", probe.upgrade().is_some());
+}

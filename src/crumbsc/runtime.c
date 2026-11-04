@@ -1280,4 +1280,66 @@ static inline void *cb_nn(void *p, const char *loc) { if (CB_UNLIKELY(!p)) cb_pa
 /* main's argument vector, read by std.env through FFI */
 static int cb_argc_v;
 static char **cb_argv_v;
+
+#ifndef CB_NOSTD
+/* ---- std.own: blocks that have exactly one owner, with a generation counter -------------------------
+   Every block is a 16-byte header (generation, capacity) followed by the payload; the language only sees the payload.
+   The generation is odd while the block is live and even while it is free, and goes up by one every time the state
+   changes, so a `Ref` that remembers an old generation can tell that its block was freed (or freed and reused).
+   Freed blocks are never returned to the system: they wait on a per-size free list, so a stale reference always reads a
+   valid header. With the collector the blocks are ordinary collected blocks (nothing is recycled; the collector reclaims
+   a block once the owner is gone and no `Ref` points at it). */
+typedef struct { uint64_t gen; uint64_t cap; } cb_OwnHdr;
+#ifndef CB_GC
+static __thread void *cb_own_free_list[64];                 /* payload pointers, one list per power-of-two capacity; the next link is stored in the payload */
+#endif
+void *cb_own_alloc(int64_t size) {
+    if (size < 16) size = 16;
+    int cls = 64 - __builtin_clzll((uint64_t)size - 1);
+    size_t cap = (size_t)1 << cls;
+#ifdef CB_GC
+    cb_OwnHdr *h = (cb_OwnHdr *)cb_mem_alloc(sizeof *h + cap, 0);
+    h->gen = 1; h->cap = cap;
+    return h + 1;
+#else
+    void *p = cb_own_free_list[cls];
+    if (p) {
+        cb_own_free_list[cls] = *(void **)p;
+        memset(p, 0, cap);
+        ((cb_OwnHdr *)p - 1)->gen++;                          /* even -> odd: live again, under a new generation */
+        return p;
+    }
+    cb_OwnHdr *h = (cb_OwnHdr *)calloc(1, sizeof *h + cap);
+    if (!h) { fputs("panic: out of memory (own)\n", stderr); exit(101); }
+    h->gen = 1; h->cap = cap;
+    return h + 1;
+#endif
+}
+void cb_own_free(void *p) {
+    if (!p) return;
+    cb_OwnHdr *h = (cb_OwnHdr *)p - 1;
+    if (!(h->gen & 1)) { fflush(stdout); fputs("panic: value freed twice\n", stderr); exit(101); }
+    h->gen++;                                                 /* odd -> even: every Ref to this block is now stale */
+#ifdef CB_GC
+    memset(p, 0, h->cap);                                     /* do not keep what the dead value pointed to alive */
+#else
+    memset(p, 0xDD, h->cap);                                  /* a stale raw pointer reads 0xDD.. instead of old data */
+    int cls = 63 - __builtin_clzll(h->cap);
+    *(void **)p = cb_own_free_list[cls];
+    cb_own_free_list[cls] = p;
+#endif
+}
+uint64_t cb_own_gen(void *p) { return p ? ((cb_OwnHdr *)p - 1)->gen : 0; }
+/* atomic counters for std.own's Rc/Weak (the pointer is an i64 inside a heap block) */
+int64_t cb_atomic_add(int64_t *p, int64_t n) { return __atomic_fetch_add(p, n, __ATOMIC_ACQ_REL); }
+int64_t cb_atomic_load(int64_t *p) { return __atomic_load_n(p, __ATOMIC_ACQUIRE); }
+/* raises *p by one unless it is zero; true when it did (a Weak turning into an Rc) */
+int cb_atomic_inc_nonzero(int64_t *p) {
+    int64_t n = __atomic_load_n(p, __ATOMIC_ACQUIRE);
+    while (n != 0) {
+        if (__atomic_compare_exchange_n(p, &n, n + 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return 1;
+    }
+    return 0;
+}
+#endif
 /* ---- end runtime ----------------------------------------------------- */

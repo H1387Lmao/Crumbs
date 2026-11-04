@@ -1,0 +1,26 @@
+// Owners inside the standard collections: removing or clearing destroys the values right there.
+import std.own;
+import std.list;
+import std.map;
+
+struct Item { name: str }
+drop Item(self) { println("drop ", self.name); }
+
+fn main() {
+    let mut items: list.List<own.Own<Item>> = list.List.new();
+    items.push(own.new(Item { name: "a" }));
+    items.push(own.new(Item { name: "b" }));
+    items.push(own.new(Item { name: "c" }));
+    println("len {}", items.len);
+    println("first {}", items.at(0).at().name);
+    let removed = items.remove(1);              // moved out: freed when `removed` goes
+    println("removed {}", removed.at().name);
+    items.clear();
+    println("cleared");
+
+    let mut m: map.HashMap<own.Own<Item>> = map.HashMap.new();
+    m.set("x", own.new(Item { name: "x1" }));
+    m.set("x", own.new(Item { name: "x2" }));    // the old value is destroyed
+    println("map has {}", m.len());
+    println("end");
+}

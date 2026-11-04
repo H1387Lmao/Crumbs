@@ -1,0 +1,6 @@
+leaf owners 2, root weak handles 1
+leaf's parent: true
+root owners 1
+drop root
+drop leaf
+root alive: false

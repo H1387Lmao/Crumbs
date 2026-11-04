@@ -28,6 +28,12 @@
    ]
   },
   {
+   "title": "Memory (experimental)",
+   "modules": [
+    "own"
+   ]
+  },
+  {
    "title": "Input, output and system",
    "modules": [
     "io",
@@ -4414,6 +4420,381 @@
      "receiver": null,
      "doc": "in-place insertion sort for any element type with `<`",
      "fallible": false
+    }
+   ]
+  },
+  {
+   "id": "own",
+   "name": "own",
+   "import": "std.own",
+   "summary": "std.own (EXPERIMENTAL): memory with an owner. No collector, no borrow checker, and no manual free().",
+   "description": "An `Own<T>` is the single owner of one heap value. It is moved like a `String` (`let b = a;` leaves `a` unusable), and when the\nowner goes out of scope the value is destroyed and its memory is freed on the spot, so allocation costs what `malloc` costs and\nnothing ever pauses. What `Own` does NOT do is stop you from keeping a pointer past that point. Instead of proving it away\n(borrowing rules) it makes it detectable: every block carries a generation number that changes when the block is freed, and a\n`Ref<T>` remembers the number it was made with. `r.get()` compares them and panics with \"use of a freed value\" if they differ,\nso a dangling `Ref` is a clean panic, never silent corruption. `Own.at()` is the fast, unchecked borrow for code that\nalready holds the owner. When ownership really is shared, `Rc<T>` counts its owners and frees the value when the last one goes.\n\n`Rc` counts are atomic, so an `Rc` can be cloned and dropped on different threads (the value itself is not locked: share it\nread-only, or put a `thread.Mutex` inside). A `Weak<T>` does not keep the value alive, so back-pointers and caches no longer make cycles leak.\n\nLimits: freed blocks are recycled but never returned to the system, and a raw `*T` taken from `at()` is as unchecked as any pointer.",
+   "example": "import std.own;\n\nstruct Node { value: i32, next: own.Own<Node> }\n\nfn main() {\n    let list = own.new(Node { value: 1, next: own.new(Node { value: 2, next: own.none() }) });\n    println(\"{}\", list.at().value);          // 1: `at` borrows the value\n    let r = list.ref();                        // a checked handle that can outlive borrows\n    println(\"{}\", r.get().value);              // 1\n    let shared = own.shared(5);\n    let again = shared.clone();\n    println(\"{}\", again.count());               // 2: freed when the last owner goes\n    let weak = shared.downgrade();              // does not keep it alive\n    println(\"{}\", weak.upgrade().is_some());    // true\n}\n// at the end of main the whole list is freed, in order, right there",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "Own",
+     "kind": "struct",
+     "tparams": [
+      "T"
+     ],
+     "doc": "the single owner of one heap value; an empty owner (`own.none()`) holds nothing",
+     "fields": [
+      {
+       "name": "p",
+       "type": "*T"
+      }
+     ],
+     "methods": [
+      {
+       "name": "is_none",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "True when the owner owns nothing.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "is_some",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "True when the owner holds a value.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "at",
+       "tparams": [],
+       "params": [],
+       "returns": "*T",
+       "receiver": "self",
+       "doc": "borrows the value; valid while this owner is. Panics on an empty owner.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a `*T`"
+      },
+      {
+       "name": "ref",
+       "tparams": [],
+       "params": [],
+       "returns": "Ref<T>",
+       "receiver": "self",
+       "doc": "a checked handle that outlives borrows: using it after the owner is gone panics",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a `Ref<T>`"
+      },
+      {
+       "name": "set",
+       "tparams": [],
+       "params": [
+        {
+         "name": "v",
+         "type": "T",
+         "doc": "the new value"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "replaces the value; the old one is destroyed",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "take",
+       "tparams": [],
+       "params": [],
+       "returns": "T",
+       "receiver": "mut self",
+       "doc": "moves the value out and frees the block; the owner is left empty",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the value"
+      },
+      {
+       "name": "release",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Destroys the value and frees its block now, leaving the owner empty.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      }
+     ]
+    },
+    {
+     "name": "Ref",
+     "kind": "struct",
+     "tparams": [
+      "T"
+     ],
+     "doc": "a copyable, checked handle to a value that someone else owns",
+     "fields": [
+      {
+       "name": "p",
+       "type": "*T"
+      },
+      {
+       "name": "gen",
+       "type": "u64"
+      }
+     ],
+     "methods": [
+      {
+       "name": "alive",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "true while the owner still owns the value this handle was made from",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "get",
+       "tparams": [],
+       "params": [],
+       "returns": "*T",
+       "receiver": "self",
+       "doc": "the value, or a panic (\"use of a freed value\") when its owner is gone",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a `*T`"
+      }
+     ]
+    },
+    {
+     "name": "Rc",
+     "kind": "struct",
+     "tparams": [
+      "T"
+     ],
+     "doc": "Shared ownership by reference counting: `clone` adds an owner, the last owner to go frees the value. Counts are atomic, so owners can live on different threads (the value itself is not locked). Use `Weak` for back-pointers so cycles do not leak.",
+     "fields": [
+      {
+       "name": "b",
+       "type": "*RcBox<T>"
+      }
+     ],
+     "methods": [
+      {
+       "name": "clone",
+       "tparams": [],
+       "params": [],
+       "returns": "Rc<T>",
+       "receiver": "self",
+       "doc": "another owner of the same value",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "an `Rc<T>`"
+      },
+      {
+       "name": "get",
+       "tparams": [],
+       "params": [],
+       "returns": "*T",
+       "receiver": "self",
+       "doc": "Borrows the shared value.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a `*T`"
+      },
+      {
+       "name": "count",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "how many owners the value has right now",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`i64`"
+      },
+      {
+       "name": "downgrade",
+       "tparams": [],
+       "params": [],
+       "returns": "Weak<T>",
+       "receiver": "self",
+       "doc": "a handle that does not keep the value alive (use it for back-pointers and caches, so cycles can be freed)",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a `Weak<T>`"
+      },
+      {
+       "name": "weak_count",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "how many Weak handles point at the value",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`i64`"
+      }
+     ]
+    },
+    {
+     "name": "Weak",
+     "kind": "struct",
+     "tparams": [
+      "T"
+     ],
+     "doc": "a non-owning handle to an Rc value: it does not keep the value alive, `upgrade` tells whether it still is",
+     "fields": [
+      {
+       "name": "b",
+       "type": "*RcBox<T>"
+      }
+     ],
+     "methods": [
+      {
+       "name": "upgrade",
+       "tparams": [],
+       "params": [],
+       "returns": "Rc<T>?",
+       "receiver": "self",
+       "doc": "a new owner when the value is still alive, null when every owner is gone",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "an `Rc<T>`, or `null` when every owner is gone"
+      },
+      {
+       "name": "clone",
+       "tparams": [],
+       "params": [],
+       "returns": "Weak<T>",
+       "receiver": "self",
+       "doc": "Makes another `Weak` handle to the same value.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a `Weak<T>`"
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "new",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "v",
+       "type": "T",
+       "doc": "the value to store"
+      }
+     ],
+     "returns": "Own<T>",
+     "receiver": null,
+     "doc": "moves `v` to the heap and returns its owner",
+     "fallible": false,
+     "returns_doc": "an `Own<T>`"
+    },
+    {
+     "name": "none",
+     "tparams": [
+      "T"
+     ],
+     "params": [],
+     "returns": "Own<T>",
+     "receiver": null,
+     "doc": "an owner that owns nothing (an empty link in a list or tree)",
+     "fallible": false,
+     "returns_doc": "an empty `Own<T>`"
+    },
+    {
+     "name": "shared",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "v",
+       "type": "T",
+       "doc": "the value to store"
+      }
+     ],
+     "returns": "Rc<T>",
+     "receiver": null,
+     "doc": "moves `v` to the heap under shared ownership (count 1)",
+     "fallible": false,
+     "returns_doc": "an `Rc<T>`"
+    },
+    {
+     "name": "none_weak",
+     "tparams": [
+      "T"
+     ],
+     "params": [],
+     "returns": "Weak<T>",
+     "receiver": null,
+     "doc": "a Weak that points at nothing (a parent link that has no parent yet); `upgrade` on it gives null",
+     "fallible": false,
+     "returns_doc": "an empty `Weak<T>`"
+    },
+    {
+     "name": "release",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "o",
+       "type": "*Own<T>",
+       "doc": "the owner"
+      }
+     ],
+     "returns": "",
+     "receiver": null,
+     "doc": "destroys the value now (the scope end does this for you) and leaves the owner empty",
+     "fallible": false,
+     "returns_doc": "nothing"
     }
    ]
   },

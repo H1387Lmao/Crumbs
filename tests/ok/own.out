@@ -1,0 +1,15 @@
+made inner
+drop inner
+after inner scope
+sum = 15
+42 alive=true
+alive=false owner empty=true
+alive=false value=7
+moved out / empty=true
+moved to b: moved
+count 1
+count 2 shared
+count 1
+end of main
+drop shared
+drop moved
