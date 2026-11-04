@@ -5,7 +5,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from run import LANGS, TITLES, ORDER
 
-COLORS = {"crumbs": "#d9a400", "crumbs-unchecked": "#f2cf5b", "c": "#5b7bd6", "cpp": "#7f9ae0", "rust": "#c4623a",
+COLORS = {"crumbs": "#d9a400", "crumbs-unchecked": "#f2cf5b", "crumbs-nogc": "#e8832a", "c": "#5b7bd6", "cpp": "#7f9ae0", "rust": "#c4623a",
           "go": "#2fa6b8", "java": "#a0674b", "node": "#6a9a47"}
 CAP = 4.0          # bars are cut at 4x C; the label still shows the real figure
 
@@ -21,7 +21,7 @@ def main():
            '<style>.t{fill:#272820}.m{fill:#606157}@media (prefers-color-scheme: dark){.t{fill:#f0f0e9}.m{fill:#b0b0a5}}</style>',
            f'<text x="{left}" y="24" class="t" font-size="15" font-weight="700">Run time relative to C (lower is better)</text>']
     for i, l in enumerate(langs):
-        lx, ly = left + (i % 4) * 150, 36 + (i // 4) * 16
+        lx, ly = left + (i % 5) * 150, 36 + (i // 4) * 16
         out.append(f'<rect x="{lx}" y="{ly}" width="10" height="10" fill="{COLORS[l]}"/><text x="{lx + 14}" y="{ly + 9}" class="m">{LANGS[l][0]}</text>')
     y = 86
     for p in progs:

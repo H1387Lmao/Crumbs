@@ -1,0 +1,498 @@
+{
+ "machine": "Intel(R) Xeon(R) Processor @ 2.10GHz, 2 cores",
+ "runs": 5,
+ "languages": [
+  {
+   "id": "crumbs",
+   "label": "Crumbs"
+  },
+  {
+   "id": "crumbs-nogc",
+   "label": "Crumbs (--no-gc)"
+  },
+  {
+   "id": "crumbs-unchecked",
+   "label": "Crumbs (unchecked)"
+  },
+  {
+   "id": "c",
+   "label": "C (gcc -O2)"
+  },
+  {
+   "id": "cpp",
+   "label": "C++ (g++ -O2)"
+  },
+  {
+   "id": "rust",
+   "label": "Rust (-O)"
+  },
+  {
+   "id": "go",
+   "label": "Go"
+  },
+  {
+   "id": "java",
+   "label": "Java"
+  },
+  {
+   "id": "node",
+   "label": "Node.js"
+  }
+ ],
+ "programs": [
+  {
+   "id": "fib",
+   "title": "fib(40): recursive calls",
+   "results": {
+    "crumbs": {
+     "seconds": 0.167,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "crumbs-nogc": {
+     "seconds": 0.16,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "crumbs-unchecked": {
+     "seconds": 0.187,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "c": {
+     "seconds": 0.156,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "cpp": {
+     "seconds": 0.156,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "rust": {
+     "seconds": 0.287,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "go": {
+     "seconds": 0.503,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "java": {
+     "seconds": 0.524,
+     "rss_mib": 39,
+     "ok": true
+    },
+    "node": {
+     "seconds": 0.963,
+     "rss_mib": 47,
+     "ok": true
+    }
+   }
+  },
+  {
+   "id": "collatz",
+   "title": "Collatz chains below 3M: integer loops",
+   "results": {
+    "crumbs": {
+     "seconds": 0.774,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "crumbs-nogc": {
+     "seconds": 0.791,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "crumbs-unchecked": {
+     "seconds": 0.739,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "c": {
+     "seconds": 0.786,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "cpp": {
+     "seconds": 0.806,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "rust": {
+     "seconds": 0.543,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "go": {
+     "seconds": 0.82,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "java": {
+     "seconds": 0.968,
+     "rss_mib": 42,
+     "ok": true
+    },
+    "node": {
+     "seconds": 5.026,
+     "rss_mib": 48,
+     "ok": true
+    }
+   }
+  },
+  {
+   "id": "mandelbrot",
+   "title": "Mandelbrot 2000x2000: float loops",
+   "results": {
+    "crumbs": {
+     "seconds": 0.263,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "crumbs-nogc": {
+     "seconds": 0.264,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "crumbs-unchecked": {
+     "seconds": 0.256,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "c": {
+     "seconds": 0.257,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "cpp": {
+     "seconds": 0.255,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "rust": {
+     "seconds": 0.251,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "go": {
+     "seconds": 0.255,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "java": {
+     "seconds": 0.359,
+     "rss_mib": 40,
+     "ok": true
+    },
+    "node": {
+     "seconds": 0.302,
+     "rss_mib": 49,
+     "ok": true
+    }
+   }
+  },
+  {
+   "id": "nbody",
+   "title": "N-body, 5M steps: float math on structs",
+   "results": {
+    "crumbs": {
+     "seconds": 0.238,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "crumbs-nogc": {
+     "seconds": 0.238,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "crumbs-unchecked": {
+     "seconds": 0.254,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "c": {
+     "seconds": 0.242,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "cpp": {
+     "seconds": 0.247,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "rust": {
+     "seconds": 0.192,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "go": {
+     "seconds": 0.308,
+     "rss_mib": 2,
+     "ok": true
+    },
+    "java": {
+     "seconds": 0.344,
+     "rss_mib": 42,
+     "ok": true
+    },
+    "node": {
+     "seconds": 0.454,
+     "rss_mib": 50,
+     "ok": true
+    }
+   }
+  },
+  {
+   "id": "matmul",
+   "title": "Matrix multiply 600x600: memory and float",
+   "results": {
+    "crumbs": {
+     "seconds": 0.111,
+     "rss_mib": 10,
+     "ok": true
+    },
+    "crumbs-nogc": {
+     "seconds": 0.076,
+     "rss_mib": 10,
+     "ok": true
+    },
+    "crumbs-unchecked": {
+     "seconds": 0.088,
+     "rss_mib": 10,
+     "ok": true
+    },
+    "c": {
+     "seconds": 0.081,
+     "rss_mib": 10,
+     "ok": true
+    },
+    "cpp": {
+     "seconds": 0.067,
+     "rss_mib": 12,
+     "ok": true
+    },
+    "rust": {
+     "seconds": 0.072,
+     "rss_mib": 10,
+     "ok": true
+    },
+    "go": {
+     "seconds": 0.157,
+     "rss_mib": 10,
+     "ok": true
+    },
+    "java": {
+     "seconds": 0.148,
+     "rss_mib": 49,
+     "ok": true
+    },
+    "node": {
+     "seconds": 0.348,
+     "rss_mib": 58,
+     "ok": true
+    }
+   }
+  },
+  {
+   "id": "sieve",
+   "title": "Sieve of Eratosthenes, 50M: byte array",
+   "results": {
+    "crumbs": {
+     "seconds": 0.288,
+     "rss_mib": 49,
+     "ok": true
+    },
+    "crumbs-nogc": {
+     "seconds": 0.307,
+     "rss_mib": 49,
+     "ok": true
+    },
+    "crumbs-unchecked": {
+     "seconds": 0.3,
+     "rss_mib": 49,
+     "ok": true
+    },
+    "c": {
+     "seconds": 0.277,
+     "rss_mib": 49,
+     "ok": true
+    },
+    "cpp": {
+     "seconds": 0.273,
+     "rss_mib": 52,
+     "ok": true
+    },
+    "rust": {
+     "seconds": 0.273,
+     "rss_mib": 50,
+     "ok": true
+    },
+    "go": {
+     "seconds": 0.288,
+     "rss_mib": 50,
+     "ok": true
+    },
+    "java": {
+     "seconds": 0.315,
+     "rss_mib": 88,
+     "ok": true
+    },
+    "node": {
+     "seconds": 0.412,
+     "rss_mib": 95,
+     "ok": true
+    }
+   }
+  },
+  {
+   "id": "quicksort",
+   "title": "Quicksort, 3M integers: array swaps",
+   "results": {
+    "crumbs": {
+     "seconds": 0.322,
+     "rss_mib": 25,
+     "ok": true
+    },
+    "crumbs-nogc": {
+     "seconds": 0.324,
+     "rss_mib": 25,
+     "ok": true
+    },
+    "crumbs-unchecked": {
+     "seconds": 0.292,
+     "rss_mib": 25,
+     "ok": true
+    },
+    "c": {
+     "seconds": 0.283,
+     "rss_mib": 25,
+     "ok": true
+    },
+    "cpp": {
+     "seconds": 0.283,
+     "rss_mib": 25,
+     "ok": true
+    },
+    "rust": {
+     "seconds": 0.287,
+     "rss_mib": 25,
+     "ok": true
+    },
+    "go": {
+     "seconds": 0.303,
+     "rss_mib": 25,
+     "ok": true
+    },
+    "java": {
+     "seconds": 0.418,
+     "rss_mib": 65,
+     "ok": true
+    },
+    "node": {
+     "seconds": 0.526,
+     "rss_mib": 73,
+     "ok": true
+    }
+   }
+  },
+  {
+   "id": "bintrees",
+   "title": "Binary trees, depth 16: allocation",
+   "results": {
+    "crumbs": {
+     "seconds": 2.224,
+     "rss_mib": 108,
+     "ok": true
+    },
+    "crumbs-nogc": {
+     "seconds": 0.262,
+     "rss_mib": 9,
+     "ok": true
+    },
+    "crumbs-unchecked": {
+     "seconds": 1.918,
+     "rss_mib": 105,
+     "ok": true
+    },
+    "c": {
+     "seconds": 0.211,
+     "rss_mib": 10,
+     "ok": true
+    },
+    "cpp": {
+     "seconds": 0.269,
+     "rss_mib": 12,
+     "ok": true
+    },
+    "rust": {
+     "seconds": 0.288,
+     "rss_mib": 10,
+     "ok": true
+    },
+    "go": {
+     "seconds": 0.523,
+     "rss_mib": 15,
+     "ok": true
+    },
+    "java": {
+     "seconds": 0.248,
+     "rss_mib": 277,
+     "ok": true
+    },
+    "node": {
+     "seconds": 0.243,
+     "rss_mib": 93,
+     "ok": true
+    }
+   }
+  },
+  {
+   "id": "hashmap",
+   "title": "Hash map, 1M string keys: library code",
+   "results": {
+    "crumbs": {
+     "seconds": 2.658,
+     "rss_mib": 162,
+     "ok": true
+    },
+    "crumbs-nogc": {
+     "seconds": 0.971,
+     "rss_mib": 133,
+     "ok": true
+    },
+    "crumbs-unchecked": {
+     "seconds": 2.539,
+     "rss_mib": 163,
+     "ok": true
+    },
+    "cpp": {
+     "seconds": 1.342,
+     "rss_mib": 76,
+     "ok": true
+    },
+    "rust": {
+     "seconds": 0.827,
+     "rss_mib": 134,
+     "ok": true
+    },
+    "go": {
+     "seconds": 0.972,
+     "rss_mib": 103,
+     "ok": true
+    },
+    "java": {
+     "seconds": 0.58,
+     "rss_mib": 256,
+     "ok": true
+    },
+    "node": {
+     "seconds": 1.43,
+     "rss_mib": 145,
+     "ok": true
+    }
+   }
+  }
+ ]
+}

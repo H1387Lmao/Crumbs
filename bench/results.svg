@@ -1,182 +1,201 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 1224" font-family="DM Sans, Helvetica, Arial, sans-serif" font-size="11">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 1341" font-family="DM Sans, Helvetica, Arial, sans-serif" font-size="11">
 <style>.t{fill:#272820}.m{fill:#606157}@media (prefers-color-scheme: dark){.t{fill:#f0f0e9}.m{fill:#b0b0a5}}</style>
 <text x="250" y="24" class="t" font-size="15" font-weight="700">Run time relative to C (lower is better)</text>
 <rect x="250" y="36" width="10" height="10" fill="#d9a400"/><text x="264" y="45" class="m">Crumbs</text>
-<rect x="400" y="36" width="10" height="10" fill="#f2cf5b"/><text x="414" y="45" class="m">Crumbs (unchecked)</text>
-<rect x="550" y="36" width="10" height="10" fill="#5b7bd6"/><text x="564" y="45" class="m">C (gcc -O2)</text>
-<rect x="700" y="36" width="10" height="10" fill="#7f9ae0"/><text x="714" y="45" class="m">C++ (g++ -O2)</text>
+<rect x="400" y="36" width="10" height="10" fill="#e8832a"/><text x="414" y="45" class="m">Crumbs (--no-gc)</text>
+<rect x="550" y="36" width="10" height="10" fill="#f2cf5b"/><text x="564" y="45" class="m">Crumbs (unchecked)</text>
+<rect x="700" y="36" width="10" height="10" fill="#5b7bd6"/><text x="714" y="45" class="m">C (gcc -O2)</text>
+<rect x="850" y="52" width="10" height="10" fill="#7f9ae0"/><text x="864" y="61" class="m">C++ (g++ -O2)</text>
 <rect x="250" y="52" width="10" height="10" fill="#c4623a"/><text x="264" y="61" class="m">Rust (-O)</text>
 <rect x="400" y="52" width="10" height="10" fill="#2fa6b8"/><text x="414" y="61" class="m">Go</text>
 <rect x="550" y="52" width="10" height="10" fill="#a0674b"/><text x="564" y="61" class="m">Java</text>
-<rect x="700" y="52" width="10" height="10" fill="#6a9a47"/><text x="714" y="61" class="m">Node.js</text>
-<text x="240" y="142.0" text-anchor="end" class="t" font-weight="600">fib(40)</text>
-<line x1="250" y1="82" x2="250" y2="190" stroke="#888" stroke-opacity=".4"/>
-<line x1="395.0" y1="82" x2="395.0" y2="190" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
-<rect x="250" y="86" width="127.0" height="11" rx="2" fill="#d9a400"/>
-<text x="382.0" y="95" class="m" font-size="10">0.9x</text>
-<rect x="250" y="99" width="151.7" height="11" rx="2" fill="#f2cf5b"/>
-<text x="406.7" y="108" class="m" font-size="10">1.0x</text>
-<rect x="250" y="112" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
-<text x="400.0" y="121" class="m" font-size="10">1.0x</text>
-<rect x="250" y="125" width="145.1" height="11" rx="2" fill="#7f9ae0"/>
-<text x="400.1" y="134" class="m" font-size="10">1.0x</text>
-<rect x="250" y="138" width="185.5" height="11" rx="2" fill="#c4623a"/>
-<text x="440.5" y="147" class="m" font-size="10">1.3x</text>
-<rect x="250" y="151" width="342.0" height="11" rx="2" fill="#2fa6b8"/>
-<text x="597.0" y="160" class="m" font-size="10">2.4x</text>
-<rect x="250" y="164" width="305.3" height="11" rx="2" fill="#a0674b"/>
-<text x="560.3" y="173" class="m" font-size="10">2.1x</text>
-<rect x="250" y="177" width="580.0" height="11" rx="2" fill="#6a9a47"/>
-<text x="835.0" y="186" class="m" font-size="10">7.3x ▸</text>
-<text x="240" y="264.0" text-anchor="end" class="t" font-weight="600">Collatz chains below 3M</text>
-<line x1="250" y1="204" x2="250" y2="312" stroke="#888" stroke-opacity=".4"/>
-<line x1="395.0" y1="204" x2="395.0" y2="312" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
-<rect x="250" y="208" width="157.4" height="11" rx="2" fill="#d9a400"/>
-<text x="412.4" y="217" class="m" font-size="10">1.1x</text>
-<rect x="250" y="221" width="155.4" height="11" rx="2" fill="#f2cf5b"/>
-<text x="410.4" y="230" class="m" font-size="10">1.1x</text>
-<rect x="250" y="234" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
-<text x="400.0" y="243" class="m" font-size="10">1.0x</text>
-<rect x="250" y="247" width="145.2" height="11" rx="2" fill="#7f9ae0"/>
-<text x="400.2" y="256" class="m" font-size="10">1.0x</text>
-<rect x="250" y="260" width="74.9" height="11" rx="2" fill="#c4623a"/>
-<text x="329.9" y="269" class="m" font-size="10">0.5x</text>
-<rect x="250" y="273" width="159.5" height="11" rx="2" fill="#2fa6b8"/>
-<text x="414.5" y="282" class="m" font-size="10">1.1x</text>
-<rect x="250" y="286" width="187.3" height="11" rx="2" fill="#a0674b"/>
-<text x="442.3" y="295" class="m" font-size="10">1.3x</text>
-<rect x="250" y="299" width="580.0" height="11" rx="2" fill="#6a9a47"/>
-<text x="835.0" y="308" class="m" font-size="10">6.4x ▸</text>
-<text x="240" y="386.0" text-anchor="end" class="t" font-weight="600">Mandelbrot 2000x2000</text>
-<line x1="250" y1="326" x2="250" y2="434" stroke="#888" stroke-opacity=".4"/>
-<line x1="395.0" y1="326" x2="395.0" y2="434" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
-<rect x="250" y="330" width="149.9" height="11" rx="2" fill="#d9a400"/>
-<text x="404.9" y="339" class="m" font-size="10">1.0x</text>
-<rect x="250" y="343" width="159.5" height="11" rx="2" fill="#f2cf5b"/>
-<text x="414.5" y="352" class="m" font-size="10">1.1x</text>
-<rect x="250" y="356" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
-<text x="400.0" y="365" class="m" font-size="10">1.0x</text>
-<rect x="250" y="369" width="149.2" height="11" rx="2" fill="#7f9ae0"/>
+<rect x="700" y="68" width="10" height="10" fill="#6a9a47"/><text x="714" y="77" class="m">Node.js</text>
+<text x="240" y="148.5" text-anchor="end" class="t" font-weight="600">fib(40)</text>
+<line x1="250" y1="82" x2="250" y2="203" stroke="#888" stroke-opacity=".4"/>
+<line x1="395.0" y1="82" x2="395.0" y2="203" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
+<rect x="250" y="86" width="154.9" height="11" rx="2" fill="#d9a400"/>
+<text x="409.9" y="95" class="m" font-size="10">1.1x</text>
+<rect x="250" y="99" width="147.8" height="11" rx="2" fill="#e8832a"/>
+<text x="402.8" y="108" class="m" font-size="10">1.0x</text>
+<rect x="250" y="112" width="173.2" height="11" rx="2" fill="#f2cf5b"/>
+<text x="428.2" y="121" class="m" font-size="10">1.2x</text>
+<rect x="250" y="125" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
+<text x="400.0" y="134" class="m" font-size="10">1.0x</text>
+<rect x="250" y="138" width="144.9" height="11" rx="2" fill="#7f9ae0"/>
+<text x="399.9" y="147" class="m" font-size="10">1.0x</text>
+<rect x="250" y="151" width="265.8" height="11" rx="2" fill="#c4623a"/>
+<text x="520.8" y="160" class="m" font-size="10">1.8x</text>
+<rect x="250" y="164" width="466.3" height="11" rx="2" fill="#2fa6b8"/>
+<text x="721.3" y="173" class="m" font-size="10">3.2x</text>
+<rect x="250" y="177" width="485.5" height="11" rx="2" fill="#a0674b"/>
+<text x="740.5" y="186" class="m" font-size="10">3.3x</text>
+<rect x="250" y="190" width="580.0" height="11" rx="2" fill="#6a9a47"/>
+<text x="835.0" y="199" class="m" font-size="10">6.2x ▸</text>
+<text x="240" y="283.5" text-anchor="end" class="t" font-weight="600">Collatz chains below 3M</text>
+<line x1="250" y1="217" x2="250" y2="338" stroke="#888" stroke-opacity=".4"/>
+<line x1="395.0" y1="217" x2="395.0" y2="338" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
+<rect x="250" y="221" width="142.8" height="11" rx="2" fill="#d9a400"/>
+<text x="397.8" y="230" class="m" font-size="10">1.0x</text>
+<rect x="250" y="234" width="145.8" height="11" rx="2" fill="#e8832a"/>
+<text x="400.8" y="243" class="m" font-size="10">1.0x</text>
+<rect x="250" y="247" width="136.3" height="11" rx="2" fill="#f2cf5b"/>
+<text x="391.3" y="256" class="m" font-size="10">0.9x</text>
+<rect x="250" y="260" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
+<text x="400.0" y="269" class="m" font-size="10">1.0x</text>
+<rect x="250" y="273" width="148.7" height="11" rx="2" fill="#7f9ae0"/>
+<text x="403.7" y="282" class="m" font-size="10">1.0x</text>
+<rect x="250" y="286" width="100.1" height="11" rx="2" fill="#c4623a"/>
+<text x="355.1" y="295" class="m" font-size="10">0.7x</text>
+<rect x="250" y="299" width="151.3" height="11" rx="2" fill="#2fa6b8"/>
+<text x="406.3" y="308" class="m" font-size="10">1.0x</text>
+<rect x="250" y="312" width="178.6" height="11" rx="2" fill="#a0674b"/>
+<text x="433.6" y="321" class="m" font-size="10">1.2x</text>
+<rect x="250" y="325" width="580.0" height="11" rx="2" fill="#6a9a47"/>
+<text x="835.0" y="334" class="m" font-size="10">6.4x ▸</text>
+<text x="240" y="418.5" text-anchor="end" class="t" font-weight="600">Mandelbrot 2000x2000</text>
+<line x1="250" y1="352" x2="250" y2="473" stroke="#888" stroke-opacity=".4"/>
+<line x1="395.0" y1="352" x2="395.0" y2="473" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
+<rect x="250" y="356" width="148.7" height="11" rx="2" fill="#d9a400"/>
+<text x="403.7" y="365" class="m" font-size="10">1.0x</text>
+<rect x="250" y="369" width="149.2" height="11" rx="2" fill="#e8832a"/>
 <text x="404.2" y="378" class="m" font-size="10">1.0x</text>
-<rect x="250" y="382" width="140.4" height="11" rx="2" fill="#c4623a"/>
-<text x="395.4" y="391" class="m" font-size="10">1.0x</text>
-<rect x="250" y="395" width="153.6" height="11" rx="2" fill="#2fa6b8"/>
-<text x="408.6" y="404" class="m" font-size="10">1.1x</text>
-<rect x="250" y="408" width="188.5" height="11" rx="2" fill="#a0674b"/>
-<text x="443.5" y="417" class="m" font-size="10">1.3x</text>
-<rect x="250" y="421" width="166.4" height="11" rx="2" fill="#6a9a47"/>
-<text x="421.4" y="430" class="m" font-size="10">1.1x</text>
-<text x="240" y="508.0" text-anchor="end" class="t" font-weight="600">N-body, 5M steps</text>
-<line x1="250" y1="448" x2="250" y2="556" stroke="#888" stroke-opacity=".4"/>
-<line x1="395.0" y1="448" x2="395.0" y2="556" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
-<rect x="250" y="452" width="154.2" height="11" rx="2" fill="#d9a400"/>
-<text x="409.2" y="461" class="m" font-size="10">1.1x</text>
-<rect x="250" y="465" width="149.1" height="11" rx="2" fill="#f2cf5b"/>
-<text x="404.1" y="474" class="m" font-size="10">1.0x</text>
-<rect x="250" y="478" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
-<text x="400.0" y="487" class="m" font-size="10">1.0x</text>
-<rect x="250" y="491" width="144.2" height="11" rx="2" fill="#7f9ae0"/>
-<text x="399.2" y="500" class="m" font-size="10">1.0x</text>
-<rect x="250" y="504" width="101.2" height="11" rx="2" fill="#c4623a"/>
-<text x="356.2" y="513" class="m" font-size="10">0.7x</text>
-<rect x="250" y="517" width="184.3" height="11" rx="2" fill="#2fa6b8"/>
-<text x="439.3" y="526" class="m" font-size="10">1.3x</text>
-<rect x="250" y="530" width="258.7" height="11" rx="2" fill="#a0674b"/>
-<text x="513.7" y="539" class="m" font-size="10">1.8x</text>
-<rect x="250" y="543" width="318.7" height="11" rx="2" fill="#6a9a47"/>
-<text x="573.7" y="552" class="m" font-size="10">2.2x</text>
-<text x="240" y="630.0" text-anchor="end" class="t" font-weight="600">Matrix multiply 600x600</text>
-<line x1="250" y1="570" x2="250" y2="678" stroke="#888" stroke-opacity=".4"/>
-<line x1="395.0" y1="570" x2="395.0" y2="678" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
-<rect x="250" y="574" width="205.8" height="11" rx="2" fill="#d9a400"/>
-<text x="460.8" y="583" class="m" font-size="10">1.4x</text>
-<rect x="250" y="587" width="170.5" height="11" rx="2" fill="#f2cf5b"/>
-<text x="425.5" y="596" class="m" font-size="10">1.2x</text>
-<rect x="250" y="600" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
-<text x="400.0" y="609" class="m" font-size="10">1.0x</text>
-<rect x="250" y="613" width="129.1" height="11" rx="2" fill="#7f9ae0"/>
-<text x="384.1" y="622" class="m" font-size="10">0.9x</text>
-<rect x="250" y="626" width="137.6" height="11" rx="2" fill="#c4623a"/>
-<text x="392.6" y="635" class="m" font-size="10">0.9x</text>
-<rect x="250" y="639" width="251.2" height="11" rx="2" fill="#2fa6b8"/>
-<text x="506.2" y="648" class="m" font-size="10">1.7x</text>
-<rect x="250" y="652" width="282.9" height="11" rx="2" fill="#a0674b"/>
-<text x="537.9" y="661" class="m" font-size="10">2.0x</text>
-<rect x="250" y="665" width="580.0" height="11" rx="2" fill="#6a9a47"/>
-<text x="835.0" y="674" class="m" font-size="10">4.8x ▸</text>
-<text x="240" y="752.0" text-anchor="end" class="t" font-weight="600">Sieve of Eratosthenes, 50M</text>
-<line x1="250" y1="692" x2="250" y2="800" stroke="#888" stroke-opacity=".4"/>
-<line x1="395.0" y1="692" x2="395.0" y2="800" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
-<rect x="250" y="696" width="147.4" height="11" rx="2" fill="#d9a400"/>
-<text x="402.4" y="705" class="m" font-size="10">1.0x</text>
-<rect x="250" y="709" width="151.1" height="11" rx="2" fill="#f2cf5b"/>
-<text x="406.1" y="718" class="m" font-size="10">1.0x</text>
-<rect x="250" y="722" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
-<text x="400.0" y="731" class="m" font-size="10">1.0x</text>
-<rect x="250" y="735" width="150.5" height="11" rx="2" fill="#7f9ae0"/>
-<text x="405.5" y="744" class="m" font-size="10">1.0x</text>
-<rect x="250" y="748" width="149.7" height="11" rx="2" fill="#c4623a"/>
-<text x="404.7" y="757" class="m" font-size="10">1.0x</text>
-<rect x="250" y="761" width="151.5" height="11" rx="2" fill="#2fa6b8"/>
-<text x="406.5" y="770" class="m" font-size="10">1.0x</text>
-<rect x="250" y="774" width="164.0" height="11" rx="2" fill="#a0674b"/>
-<text x="419.0" y="783" class="m" font-size="10">1.1x</text>
-<rect x="250" y="787" width="190.3" height="11" rx="2" fill="#6a9a47"/>
-<text x="445.3" y="796" class="m" font-size="10">1.3x</text>
-<text x="240" y="874.0" text-anchor="end" class="t" font-weight="600">Quicksort, 3M integers</text>
-<line x1="250" y1="814" x2="250" y2="922" stroke="#888" stroke-opacity=".4"/>
-<line x1="395.0" y1="814" x2="395.0" y2="922" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
-<rect x="250" y="818" width="178.8" height="11" rx="2" fill="#d9a400"/>
-<text x="433.8" y="827" class="m" font-size="10">1.2x</text>
-<rect x="250" y="831" width="148.9" height="11" rx="2" fill="#f2cf5b"/>
-<text x="403.9" y="840" class="m" font-size="10">1.0x</text>
-<rect x="250" y="844" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
-<text x="400.0" y="853" class="m" font-size="10">1.0x</text>
-<rect x="250" y="857" width="152.7" height="11" rx="2" fill="#7f9ae0"/>
-<text x="407.7" y="866" class="m" font-size="10">1.1x</text>
-<rect x="250" y="870" width="167.0" height="11" rx="2" fill="#c4623a"/>
-<text x="422.0" y="879" class="m" font-size="10">1.2x</text>
-<rect x="250" y="883" width="163.5" height="11" rx="2" fill="#2fa6b8"/>
-<text x="418.5" y="892" class="m" font-size="10">1.1x</text>
-<rect x="250" y="896" width="239.8" height="11" rx="2" fill="#a0674b"/>
-<text x="494.8" y="905" class="m" font-size="10">1.7x</text>
-<rect x="250" y="909" width="311.5" height="11" rx="2" fill="#6a9a47"/>
-<text x="566.5" y="918" class="m" font-size="10">2.1x</text>
-<text x="240" y="996.0" text-anchor="end" class="t" font-weight="600">Binary trees, depth 16</text>
-<line x1="250" y1="936" x2="250" y2="1044" stroke="#888" stroke-opacity=".4"/>
-<line x1="395.0" y1="936" x2="395.0" y2="1044" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
-<rect x="250" y="940" width="580.0" height="11" rx="2" fill="#d9a400"/>
-<text x="835.0" y="949" class="m" font-size="10">9.1x ▸</text>
-<rect x="250" y="953" width="580.0" height="11" rx="2" fill="#f2cf5b"/>
-<text x="835.0" y="962" class="m" font-size="10">8.3x ▸</text>
-<rect x="250" y="966" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
-<text x="400.0" y="975" class="m" font-size="10">1.0x</text>
-<rect x="250" y="979" width="167.4" height="11" rx="2" fill="#7f9ae0"/>
-<text x="422.4" y="988" class="m" font-size="10">1.2x</text>
-<rect x="250" y="992" width="196.0" height="11" rx="2" fill="#c4623a"/>
-<text x="451.0" y="1001" class="m" font-size="10">1.4x</text>
-<rect x="250" y="1005" width="328.6" height="11" rx="2" fill="#2fa6b8"/>
-<text x="583.6" y="1014" class="m" font-size="10">2.3x</text>
-<rect x="250" y="1018" width="129.2" height="11" rx="2" fill="#a0674b"/>
-<text x="384.2" y="1027" class="m" font-size="10">0.9x</text>
-<rect x="250" y="1031" width="180.3" height="11" rx="2" fill="#6a9a47"/>
-<text x="435.3" y="1040" class="m" font-size="10">1.2x</text>
-<text x="240" y="1118.0" text-anchor="end" class="t" font-weight="600">Hash map, 1M string keys</text>
-<line x1="250" y1="1058" x2="250" y2="1166" stroke="#888" stroke-opacity=".4"/>
-<line x1="395.0" y1="1058" x2="395.0" y2="1166" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
-<rect x="250" y="1062" width="307.7" height="11" rx="2" fill="#d9a400"/>
-<text x="562.7" y="1071" class="m" font-size="10">2.1x</text>
-<rect x="250" y="1075" width="269.4" height="11" rx="2" fill="#f2cf5b"/>
-<text x="524.4" y="1084" class="m" font-size="10">1.9x</text>
-<rect x="250" y="1101" width="145.0" height="11" rx="2" fill="#7f9ae0"/>
-<text x="400.0" y="1110" class="m" font-size="10">1.0x</text>
-<rect x="250" y="1114" width="119.9" height="11" rx="2" fill="#c4623a"/>
-<text x="374.9" y="1123" class="m" font-size="10">0.8x</text>
-<rect x="250" y="1127" width="125.2" height="11" rx="2" fill="#2fa6b8"/>
-<text x="380.2" y="1136" class="m" font-size="10">0.9x</text>
-<rect x="250" y="1140" width="71.7" height="11" rx="2" fill="#a0674b"/>
-<text x="326.7" y="1149" class="m" font-size="10">0.5x</text>
-<rect x="250" y="1153" width="162.2" height="11" rx="2" fill="#6a9a47"/>
-<text x="417.2" y="1162" class="m" font-size="10">1.1x</text>
-<text x="395.0" y="1188" text-anchor="middle" class="m" font-size="10">1x = C</text>
+<rect x="250" y="382" width="144.3" height="11" rx="2" fill="#f2cf5b"/>
+<text x="399.3" y="391" class="m" font-size="10">1.0x</text>
+<rect x="250" y="395" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
+<text x="400.0" y="404" class="m" font-size="10">1.0x</text>
+<rect x="250" y="408" width="144.2" height="11" rx="2" fill="#7f9ae0"/>
+<text x="399.2" y="417" class="m" font-size="10">1.0x</text>
+<rect x="250" y="421" width="141.8" height="11" rx="2" fill="#c4623a"/>
+<text x="396.8" y="430" class="m" font-size="10">1.0x</text>
+<rect x="250" y="434" width="144.0" height="11" rx="2" fill="#2fa6b8"/>
+<text x="399.0" y="443" class="m" font-size="10">1.0x</text>
+<rect x="250" y="447" width="202.9" height="11" rx="2" fill="#a0674b"/>
+<text x="457.9" y="456" class="m" font-size="10">1.4x</text>
+<rect x="250" y="460" width="170.7" height="11" rx="2" fill="#6a9a47"/>
+<text x="425.7" y="469" class="m" font-size="10">1.2x</text>
+<text x="240" y="553.5" text-anchor="end" class="t" font-weight="600">N-body, 5M steps</text>
+<line x1="250" y1="487" x2="250" y2="608" stroke="#888" stroke-opacity=".4"/>
+<line x1="395.0" y1="487" x2="395.0" y2="608" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
+<rect x="250" y="491" width="142.6" height="11" rx="2" fill="#d9a400"/>
+<text x="397.6" y="500" class="m" font-size="10">1.0x</text>
+<rect x="250" y="504" width="142.6" height="11" rx="2" fill="#e8832a"/>
+<text x="397.6" y="513" class="m" font-size="10">1.0x</text>
+<rect x="250" y="517" width="151.6" height="11" rx="2" fill="#f2cf5b"/>
+<text x="406.6" y="526" class="m" font-size="10">1.0x</text>
+<rect x="250" y="530" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
+<text x="400.0" y="539" class="m" font-size="10">1.0x</text>
+<rect x="250" y="543" width="147.6" height="11" rx="2" fill="#7f9ae0"/>
+<text x="402.6" y="552" class="m" font-size="10">1.0x</text>
+<rect x="250" y="556" width="115.0" height="11" rx="2" fill="#c4623a"/>
+<text x="370.0" y="565" class="m" font-size="10">0.8x</text>
+<rect x="250" y="569" width="183.9" height="11" rx="2" fill="#2fa6b8"/>
+<text x="438.9" y="578" class="m" font-size="10">1.3x</text>
+<rect x="250" y="582" width="205.5" height="11" rx="2" fill="#a0674b"/>
+<text x="460.5" y="591" class="m" font-size="10">1.4x</text>
+<rect x="250" y="595" width="271.3" height="11" rx="2" fill="#6a9a47"/>
+<text x="526.3" y="604" class="m" font-size="10">1.9x</text>
+<text x="240" y="688.5" text-anchor="end" class="t" font-weight="600">Matrix multiply 600x600</text>
+<line x1="250" y1="622" x2="250" y2="743" stroke="#888" stroke-opacity=".4"/>
+<line x1="395.0" y1="622" x2="395.0" y2="743" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
+<rect x="250" y="626" width="199.9" height="11" rx="2" fill="#d9a400"/>
+<text x="454.9" y="635" class="m" font-size="10">1.4x</text>
+<rect x="250" y="639" width="137.3" height="11" rx="2" fill="#e8832a"/>
+<text x="392.3" y="648" class="m" font-size="10">0.9x</text>
+<rect x="250" y="652" width="158.5" height="11" rx="2" fill="#f2cf5b"/>
+<text x="413.5" y="661" class="m" font-size="10">1.1x</text>
+<rect x="250" y="665" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
+<text x="400.0" y="674" class="m" font-size="10">1.0x</text>
+<rect x="250" y="678" width="120.9" height="11" rx="2" fill="#7f9ae0"/>
+<text x="375.9" y="687" class="m" font-size="10">0.8x</text>
+<rect x="250" y="691" width="129.9" height="11" rx="2" fill="#c4623a"/>
+<text x="384.9" y="700" class="m" font-size="10">0.9x</text>
+<rect x="250" y="704" width="282.2" height="11" rx="2" fill="#2fa6b8"/>
+<text x="537.2" y="713" class="m" font-size="10">1.9x</text>
+<rect x="250" y="717" width="265.4" height="11" rx="2" fill="#a0674b"/>
+<text x="520.4" y="726" class="m" font-size="10">1.8x</text>
+<rect x="250" y="730" width="580.0" height="11" rx="2" fill="#6a9a47"/>
+<text x="835.0" y="739" class="m" font-size="10">4.3x ▸</text>
+<text x="240" y="823.5" text-anchor="end" class="t" font-weight="600">Sieve of Eratosthenes, 50M</text>
+<line x1="250" y1="757" x2="250" y2="878" stroke="#888" stroke-opacity=".4"/>
+<line x1="395.0" y1="757" x2="395.0" y2="878" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
+<rect x="250" y="761" width="150.4" height="11" rx="2" fill="#d9a400"/>
+<text x="405.4" y="770" class="m" font-size="10">1.0x</text>
+<rect x="250" y="774" width="160.6" height="11" rx="2" fill="#e8832a"/>
+<text x="415.6" y="783" class="m" font-size="10">1.1x</text>
+<rect x="250" y="787" width="156.9" height="11" rx="2" fill="#f2cf5b"/>
+<text x="411.9" y="796" class="m" font-size="10">1.1x</text>
+<rect x="250" y="800" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
+<text x="400.0" y="809" class="m" font-size="10">1.0x</text>
+<rect x="250" y="813" width="142.9" height="11" rx="2" fill="#7f9ae0"/>
+<text x="397.9" y="822" class="m" font-size="10">1.0x</text>
+<rect x="250" y="826" width="142.8" height="11" rx="2" fill="#c4623a"/>
+<text x="397.8" y="835" class="m" font-size="10">1.0x</text>
+<rect x="250" y="839" width="150.4" height="11" rx="2" fill="#2fa6b8"/>
+<text x="405.4" y="848" class="m" font-size="10">1.0x</text>
+<rect x="250" y="852" width="164.6" height="11" rx="2" fill="#a0674b"/>
+<text x="419.6" y="861" class="m" font-size="10">1.1x</text>
+<rect x="250" y="865" width="215.1" height="11" rx="2" fill="#6a9a47"/>
+<text x="470.1" y="874" class="m" font-size="10">1.5x</text>
+<text x="240" y="958.5" text-anchor="end" class="t" font-weight="600">Quicksort, 3M integers</text>
+<line x1="250" y1="892" x2="250" y2="1013" stroke="#888" stroke-opacity=".4"/>
+<line x1="395.0" y1="892" x2="395.0" y2="1013" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
+<rect x="250" y="896" width="164.6" height="11" rx="2" fill="#d9a400"/>
+<text x="419.6" y="905" class="m" font-size="10">1.1x</text>
+<rect x="250" y="909" width="165.7" height="11" rx="2" fill="#e8832a"/>
+<text x="420.7" y="918" class="m" font-size="10">1.1x</text>
+<rect x="250" y="922" width="149.3" height="11" rx="2" fill="#f2cf5b"/>
+<text x="404.3" y="931" class="m" font-size="10">1.0x</text>
+<rect x="250" y="935" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
+<text x="400.0" y="944" class="m" font-size="10">1.0x</text>
+<rect x="250" y="948" width="144.8" height="11" rx="2" fill="#7f9ae0"/>
+<text x="399.8" y="957" class="m" font-size="10">1.0x</text>
+<rect x="250" y="961" width="146.9" height="11" rx="2" fill="#c4623a"/>
+<text x="401.9" y="970" class="m" font-size="10">1.0x</text>
+<rect x="250" y="974" width="154.9" height="11" rx="2" fill="#2fa6b8"/>
+<text x="409.9" y="983" class="m" font-size="10">1.1x</text>
+<rect x="250" y="987" width="213.9" height="11" rx="2" fill="#a0674b"/>
+<text x="468.9" y="996" class="m" font-size="10">1.5x</text>
+<rect x="250" y="1000" width="268.9" height="11" rx="2" fill="#6a9a47"/>
+<text x="523.9" y="1009" class="m" font-size="10">1.9x</text>
+<text x="240" y="1093.5" text-anchor="end" class="t" font-weight="600">Binary trees, depth 16</text>
+<line x1="250" y1="1027" x2="250" y2="1148" stroke="#888" stroke-opacity=".4"/>
+<line x1="395.0" y1="1027" x2="395.0" y2="1148" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
+<rect x="250" y="1031" width="580.0" height="11" rx="2" fill="#d9a400"/>
+<text x="835.0" y="1040" class="m" font-size="10">10.5x ▸</text>
+<rect x="250" y="1044" width="179.7" height="11" rx="2" fill="#e8832a"/>
+<text x="434.7" y="1053" class="m" font-size="10">1.2x</text>
+<rect x="250" y="1057" width="580.0" height="11" rx="2" fill="#f2cf5b"/>
+<text x="835.0" y="1066" class="m" font-size="10">9.1x ▸</text>
+<rect x="250" y="1070" width="145.0" height="11" rx="2" fill="#5b7bd6"/>
+<text x="400.0" y="1079" class="m" font-size="10">1.0x</text>
+<rect x="250" y="1083" width="184.7" height="11" rx="2" fill="#7f9ae0"/>
+<text x="439.7" y="1092" class="m" font-size="10">1.3x</text>
+<rect x="250" y="1096" width="197.8" height="11" rx="2" fill="#c4623a"/>
+<text x="452.8" y="1105" class="m" font-size="10">1.4x</text>
+<rect x="250" y="1109" width="358.6" height="11" rx="2" fill="#2fa6b8"/>
+<text x="613.6" y="1118" class="m" font-size="10">2.5x</text>
+<rect x="250" y="1122" width="169.8" height="11" rx="2" fill="#a0674b"/>
+<text x="424.8" y="1131" class="m" font-size="10">1.2x</text>
+<rect x="250" y="1135" width="166.6" height="11" rx="2" fill="#6a9a47"/>
+<text x="421.6" y="1144" class="m" font-size="10">1.1x</text>
+<text x="240" y="1228.5" text-anchor="end" class="t" font-weight="600">Hash map, 1M string keys</text>
+<line x1="250" y1="1162" x2="250" y2="1283" stroke="#888" stroke-opacity=".4"/>
+<line x1="395.0" y1="1162" x2="395.0" y2="1283" stroke="#888" stroke-opacity=".25" stroke-dasharray="3 3"/>
+<rect x="250" y="1166" width="287.2" height="11" rx="2" fill="#d9a400"/>
+<text x="542.2" y="1175" class="m" font-size="10">2.0x</text>
+<rect x="250" y="1179" width="104.9" height="11" rx="2" fill="#e8832a"/>
+<text x="359.9" y="1188" class="m" font-size="10">0.7x</text>
+<rect x="250" y="1192" width="274.3" height="11" rx="2" fill="#f2cf5b"/>
+<text x="529.3" y="1201" class="m" font-size="10">1.9x</text>
+<rect x="250" y="1218" width="145.0" height="11" rx="2" fill="#7f9ae0"/>
+<text x="400.0" y="1227" class="m" font-size="10">1.0x</text>
+<rect x="250" y="1231" width="89.4" height="11" rx="2" fill="#c4623a"/>
+<text x="344.4" y="1240" class="m" font-size="10">0.6x</text>
+<rect x="250" y="1244" width="105.0" height="11" rx="2" fill="#2fa6b8"/>
+<text x="360.0" y="1253" class="m" font-size="10">0.7x</text>
+<rect x="250" y="1257" width="62.7" height="11" rx="2" fill="#a0674b"/>
+<text x="317.7" y="1266" class="m" font-size="10">0.4x</text>
+<rect x="250" y="1270" width="154.5" height="11" rx="2" fill="#6a9a47"/>
+<text x="409.5" y="1279" class="m" font-size="10">1.1x</text>
+<text x="395.0" y="1305" text-anchor="middle" class="m" font-size="10">1x = C</text>
 </svg>

@@ -70,23 +70,24 @@ the current directory (or use `-C DIR`).
 
 Crumbs compiles to C, so code that works on numbers and arrays runs at C speed. `bench/` holds nine programs, each written the same way in
 Crumbs, C, C++, Rust, Go, Java and Node.js (`bench/programs/`); `python3 bench/run.py` builds and times them and checks that every language
-prints the same answer. Best of 5 runs on a 2-core 2.8 GHz Xeon, time relative to C (bounds checks are on for Crumbs, Rust, Go and Java):
+prints the same answer. Best of 5 runs on a 2-core Xeon, time relative to C (bounds checks are on for Crumbs, Rust, Go and Java):
 
-| program | Crumbs | C++ | Rust | Go | Java | Node.js |
-|---|---|---|---|---|---|---|
-| fib(40), calls | 0.9x | 1.0x | 1.3x | 2.4x | 2.1x | 7.3x |
-| Collatz, integer loops | 1.1x | 1.0x | 0.5x | 1.1x | 1.3x | 6.4x |
-| Mandelbrot, float loops | 1.0x | 1.0x | 1.0x | 1.1x | 1.3x | 1.1x |
-| N-body, float math on structs | 1.1x | 1.0x | 0.7x | 1.3x | 1.8x | 2.2x |
-| Matrix multiply | 1.4x | 0.9x | 0.9x | 1.7x | 2.0x | 4.8x |
-| Sieve, 50M bytes | 1.0x | 1.0x | 1.0x | 1.0x | 1.1x | 1.3x |
-| Quicksort, 3M integers | 1.2x | 1.1x | 1.2x | 1.1x | 1.7x | 2.1x |
-| Binary trees (allocation heavy) | **9.1x** | 1.2x | 1.4x | 2.3x | 0.9x | 1.2x |
-| Hash map, 1M string keys (vs C++) | **2.1x** | 1.0x | 0.8x | 0.9x | 0.5x | 1.1x |
+| program | Crumbs | Crumbs `--no-gc` | C++ | Rust | Go | Java | Node.js |
+|---|---|---|---|---|---|---|---|
+| fib(40), calls | 1.1x | 1.0x | 1.0x | 1.8x | 3.2x | 3.3x | 6.2x |
+| Collatz, integer loops | 1.0x | 1.0x | 1.0x | 0.7x | 1.0x | 1.2x | 6.4x |
+| Mandelbrot, float loops | 1.0x | 1.0x | 1.0x | 1.0x | 1.0x | 1.4x | 1.2x |
+| N-body, float math on structs | 1.0x | 1.0x | 1.0x | 0.8x | 1.3x | 1.4x | 1.9x |
+| Matrix multiply | 1.4x | 0.9x | 0.8x | 0.9x | 1.9x | 1.8x | 4.3x |
+| Sieve, 50M bytes | 1.0x | 1.1x | 1.0x | 1.0x | 1.0x | 1.1x | 1.5x |
+| Quicksort, 3M integers | 1.1x | 1.1x | 1.0x | 1.0x | 1.1x | 1.5x | 1.9x |
+| Binary trees (allocation heavy) | **10.5x** | 1.2x | 1.3x | 1.4x | 2.5x | 1.2x | 1.1x |
+| Hash map, 1M string keys (vs C++) | 2.0x | 0.7x | 1.0x | 0.6x | 0.7x | 0.4x | 1.1x |
 
 Where Crumbs is slow is the garbage collector: it is a conservative, non-moving, generational mark-and-sweep collector, so programs that
 allocate millions of small objects pay for it (binary trees, hash map keys), and it holds more memory than `malloc`/`free` or a moving
-collector would. Peak memory, compile times and binary sizes are in [`bench/RESULTS.md`](bench/RESULTS.md); the chart is
+collector would. Building with `--no-gc` removes that cost (binary trees go from ~10x to ~1.2x C, with 9 MiB instead of ~108 MiB) in exchange for
+freeing memory yourself; the table above shows both. Peak memory, compile times and binary sizes are in [`bench/RESULTS.md`](bench/RESULTS.md); the chart is
 [`bench/results.svg`](bench/results.svg). Run one language or program with `python3 bench/run.py fib --langs crumbs,c`.
 
 ## Language tour

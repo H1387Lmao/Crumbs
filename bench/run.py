@@ -25,7 +25,7 @@ TITLES = {
 }
 LANGS = {
     # name: (label, source extension, build function or None, run command builder)
-    "crumbs": ("Crumbs", "cb"), "crumbs-unchecked": ("Crumbs (unchecked)", "cb"),
+    "crumbs": ("Crumbs", "cb"), "crumbs-nogc": ("Crumbs (--no-gc)", "cb"), "crumbs-unchecked": ("Crumbs (unchecked)", "cb"),
     "c": ("C (gcc -O2)", "c"), "cpp": ("C++ (g++ -O2)", "cpp"), "rust": ("Rust (-O)", "rs"),
     "go": ("Go", "go"), "java": ("Java", "java"), "node": ("Node.js", "js"),
 }
@@ -44,8 +44,13 @@ def build(lang, prog):
     os.makedirs(out_dir, exist_ok=True)
     exe = os.path.join(out_dir, prog)
     t0 = time.perf_counter()
-    if lang in ("crumbs", "crumbs-unchecked"):
-        cmd = [sys.executable, os.path.join(ROOT, "crumbs.py"), "build", os.path.join(src_dir, prog + ".cb"), "-o", exe]
+    if lang in ("crumbs", "crumbs-unchecked", "crumbs-nogc"):
+        src = os.path.join(src_dir, prog + ".cb")
+        if lang == "crumbs-nogc" and os.path.exists(os.path.join(src_dir, prog + "_nogc.cb")):
+            src = os.path.join(src_dir, prog + "_nogc.cb")        # a version that frees its memory by hand
+        cmd = [sys.executable, os.path.join(ROOT, "crumbs.py"), "build", src, "-o", exe]
+        if lang == "crumbs-nogc":
+            cmd += ["--no-gc"]
         if lang == "crumbs-unchecked":
             cmd += ["--unchecked", "-O", "3"]
         r = sh(cmd)
@@ -156,6 +161,22 @@ def main():
     with open(os.path.join(out_dir, "results.json"), "w") as f:
         json.dump(results, f, indent=1)
     write_markdown(results, out_dir)
+    if full:
+        write_docs_json(results)
+
+
+def write_docs_json(res):
+    """docs/benchmarks.json feeds the performance table on the documentation overview page."""
+    langs = [l for l in LANGS if any(l in row for row in res["programs"].values())]
+    out = {"machine": f"{res['machine']['cpu']}, {res['machine']['cores']} cores", "runs": res["machine"]["runs"],
+           "languages": [{"id": l, "label": LANGS[l][0]} for l in langs],
+           "programs": [{"id": p, "title": TITLES[p],
+                         "results": {l: {"seconds": round(r["best"], 3), "rss_mib": round(r["rss_mib"]), "ok": r["status"] == "ok"}
+                                     for l, r in row.items()}}
+                        for p, row in res["programs"].items()]}
+    with open(os.path.join(ROOT, "docs", "benchmarks.json"), "w") as f:
+        json.dump(out, f, indent=1)
+    print("wrote docs/benchmarks.json")
 
 
 def versions():

@@ -1,0 +1,45 @@
+// The same program for `crumbs build --no-gc`: nothing collects the trees, so they are freed by hand.
+struct Node { left: *Node, right: *Node }
+
+fn make(d: i32) -> *Node {
+    let n = alloc(Node, 1);
+    if d > 0 {
+        n[0].left = make(d - 1);
+        n[0].right = make(d - 1);
+    }
+    return &n[0];
+}
+
+fn check(t: *Node) -> i64 {
+    if t->left == null { return 1; }
+    return 1 + check(t->left) + check(t->right);
+}
+
+fn release(t: *Node) {
+    if t->left != null {
+        release(t->left);
+        release(t->right);
+    }
+    free(slice_of(t, 1));
+}
+
+fn main() {
+    let max_depth = 16;
+    let stretch = make(max_depth + 1);
+    let mut total: i64 = check(stretch);
+    release(stretch);
+    let long_lived = make(max_depth);
+    let mut d = 4;
+    while d <= max_depth {
+        let iters = 1 << (max_depth - d + 4);
+        for _ in 0..iters {
+            let t = make(d);
+            total += check(t);
+            release(t);
+        }
+        d += 2;
+    }
+    total += check(long_lived);
+    release(long_lived);
+    println("{}", total);
+}
