@@ -6559,7 +6559,7 @@
         }
        ],
        "returns": "",
-       "receiver": "self",
+       "receiver": "mut self",
        "doc": "Writes the value.",
        "fallible": false,
        "returns_doc": "nothing"
@@ -6574,7 +6574,7 @@
         }
        ],
        "returns": "i64",
-       "receiver": "self",
+       "receiver": "mut self",
        "doc": "adds d and returns the new value",
        "fallible": false
       }
@@ -6620,7 +6620,7 @@
         }
        ],
        "returns": "void!",
-       "receiver": "self",
+       "receiver": "mut self",
        "doc": "queue a value (fails with thread.Closed after close())",
        "fallible": true,
        "impl_tparams": [
@@ -6632,7 +6632,7 @@
        "tparams": [],
        "params": [],
        "returns": "T!",
-       "receiver": "self",
+       "receiver": "mut self",
        "doc": "wait for a value; fails with thread.Closed once the channel is closed and drained",
        "fallible": true,
        "impl_tparams": [
@@ -6644,7 +6644,7 @@
        "tparams": [],
        "params": [],
        "returns": "",
-       "receiver": "self",
+       "receiver": "mut self",
        "doc": "Closes the channel. Values already queued can still be received; after that `recv` fails with `Closed`, and `send` fails with `Closed` right away.",
        "fallible": false,
        "impl_tparams": [

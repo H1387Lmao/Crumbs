@@ -1,0 +1,37 @@
+// Borrows that the checker must accept: a borrow ends at its last use, shared borrows may overlap,
+// disjoint fields can be borrowed together, and `v.push(v.len)` reads while the receiver is being set up.
+import std.list;
+
+struct Pair { a: i32, b: i32 }
+
+fn bump(p: *i32) { *p += 1; }
+fn add(a: *i32, b: *i32) { *a += *b; }
+
+fn main() {
+    let mut x = 1;
+    let p = &x;
+    *p = 10;
+    x = x + 1;                 // `p` is not used again: its borrow is over
+    println(x);
+
+    let mut s = Pair { a: 1, b: 2 };
+    add(&s.a, &s.b);           // two different fields
+    bump(&s.a);
+    println(s.a, " ", s.b);
+
+    let mut v: list.List<i64> = list.List.new();
+    v.push(1);
+    v.push(v.len);             // reads `v` while it is being borrowed for the push
+    let first = v.at(0);
+    let second = v.at(1);      // shared borrows overlap fine
+    println(*first, " ", *second);
+    v.push(3);                 // both pointers are dead by now
+    println(v.len);
+
+    let mut n = 0;
+    for i in 0..3 {
+        let q = &n;
+        *q += i;
+    }
+    println(n);
+}

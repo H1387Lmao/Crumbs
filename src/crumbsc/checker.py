@@ -8,6 +8,7 @@ import re
 from .timing import TIMINGS
 from .diag import suggest
 from .parser import N, Parser
+from .borrowck import BorrowCk
 from .types import (INTS, PRIMS, Ty, I8, I16, I32, I64, U8, U16, U32, U64, F32, F64, BOOL, STR, VOID,
                     ERR, POISON, STRING, REGION, ptr, arr, slc, eu, opt, fnty, same)
 
@@ -83,8 +84,6 @@ class Local:
         self.rdepth = 0           # how many `region` blocks enclose its declaration
         self.taint = None         # the region (a handle Local) whose memory this variable may point into
         self.region_handle = False
-        self.sdepth = 0           # how many block scopes enclose its declaration
-        self.own_src = None       # the `Own` local whose value this pointer variable may point into
 
 
 class FnInfo:
@@ -329,7 +328,7 @@ class Checker:
             s.method_name = fn.name
             s.has_self = bool(fn.params) and fn.params[0].name == "self"
             s.self_mut = s.has_self and getattr(fn.params[0], "self_mut", False)
-            s.owner_key = key
+            s.self_mut = s.has_self and (getattr(fn.params[0], "self_mut", False) or getattr(fn.params[0], "mut", False))
             if self.define(m, s, fn.span):
                 table[fn.name] = s
                 if not s.tparams:
@@ -1076,7 +1075,6 @@ class Checker:
                          notes=[f"first declared at line {old.span.line}"],
                          help="use a different name, or assign to the existing variable (declare it with `let mut`)")
         loc = Local(name, ty, mut, self.alloc_cname(name), span, is_param)
-        loc.sdepth = len(self.scopes)
         loc.glue = (not ty.poison) and self.has_glue(ty)
         loc.rdepth = self.fn.rdepth if self.fn is not None else 0
         sc[name] = loc
@@ -1105,8 +1103,11 @@ class Checker:
         s.param_locals = []
         for p, t in zip(it.params, s.params):
             s.param_locals.append(self.declare_local(p.name, t, getattr(p, "mut", False), p.name_span, is_param=True))
+        n_err = self.d.error_count
         self.check_block(it.body)
         self.pop()
+        if self.d.error_count == n_err:           # the borrow checker needs a fully typed body
+            BorrowCk(self).run(it.body, s.param_locals)
         if s.ret.kind != "eu" and s.ret != VOID and not s.ret.poison and not self.terminates(it.body):
             self.d.error(it.span, f"function `{s.name}` does not return a value on every path",
                          label=f"expected `{s.ret}` to be returned",
@@ -2104,6 +2105,15 @@ class Checker:
             return True
         return False
 
+    def readonly_self(self, e):
+        """Is `e` the `self` of the method being checked, and was the method declared with plain `self` (not `mut self`)?"""
+        if e.kind != "Ident":
+            return False
+        loc = getattr(e, "local", None)
+        fn = self.fn
+        return (loc is not None and loc.is_param and loc.name == "self" and fn is not None and fn.sym is not None
+                and getattr(fn.sym, "has_self", False) and not getattr(fn.sym, "self_mut", False))
+
     def place_mut(self, e):
         """None if `e` is a mutable place; otherwise (label, help)."""
         k = e.kind
@@ -2117,6 +2127,9 @@ class Checker:
             return (f"`{loc.name}` is declared without `mut`", f"declare it with `let mut {loc.name}`")
         if k == "Field":
             if e.mode == "ptrfield":
+                if self.readonly_self(e.obj):
+                    return ("this method takes `self`, which only reads the object",
+                            "declare the method with `mut self` so it may change its fields (the caller then needs `let mut`)")
                 return None
             return self.place_mut(e.obj)
         if k == "Index":
@@ -2740,50 +2753,10 @@ class Checker:
         elif e.targs:
             self.d.error(e.span, f"function `{sym.name}` is not generic and takes no type arguments")
         e.sym = sym
-        self.mark_own_borrow(e, sym)
         sig = f"fn {sym.name}({', '.join(f'{p.name}: {t}' for p, t in zip(sym.node.params, sym.params))}{', ...' if sym.variadic else ''})" \
               + (f" -> {sym.ret}" if sym.ret != VOID else "")
         self.check_args(e, sym.params, f"function `{sym.name}`", sig=sig, variadic=sym.variadic)
         return sym.ret
-
-    def mark_own_borrow(self, e, sym):
-        """`owner.at()` on a local `std.own` owner borrows from it: remember which local, for the dangling checks below."""
-        if sym.name != "Own.at" or sym.mod.name != "std.own" or not getattr(e, "method_recv", False):
-            return
-        r = e.args[0]
-        while r.kind == "Unary" and r.op in ("&", "*"):
-            r = r.expr
-        loc = getattr(r, "local", None) if r.kind == "Ident" else None
-        if loc is not None and loc.ty.kind == "struct":
-            e.own_src = loc
-
-    def own_src(self, e):
-        """The local `Own` whose payload the pointer value of expression `e` may refer to, or None."""
-        t = getattr(e, "ty", None)
-        if t is None or t.poison or not self.holds_ptr(t):
-            return None
-        if e.kind == "Call":
-            src = getattr(e, "own_src", None)
-            if src is not None:
-                return src
-        if e.kind == "Ident":
-            loc = getattr(e, "local", None)
-            return loc.own_src if loc is not None else None
-        best = None
-        for k, v in e.__dict__.items():
-            if k in ("span", "ty", "local", "sym", "handler", "own_src"):
-                continue
-            for c in (v if isinstance(v, (list, tuple)) else [v]):
-                if isinstance(c, N) and c.kind != "Block" and hasattr(c, "ty"):
-                    r = self.own_src(c)
-                    if r is not None and (best is None or r.sdepth > best.sdepth):
-                        best = r
-        return best
-
-    def dangling_error(self, span, owner, what):
-        self.d.error(span, f"pointer into the owned value `{owner.name}` {what}",
-                     label=f"`{owner.name}` is freed when its scope ends, so this pointer would dangle",
-                     help="move the owner out instead (return it or store it), or keep a checked `Ref` with `.ref()`")
 
     def find_method(self, e):
         """`Type.f(args)` / `value.f(args)`: look the function up among the methods of the type.
@@ -2872,6 +2845,10 @@ class Checker:
         by_ptr = p0.tyn.kind == "TPtr"
         if by_ptr:
             if ot.kind == "ptr":
+                if meth.self_mut and self.readonly_self(obj):
+                    self.d.error(obj.span, f"cannot call `{meth.method_name}`, which takes `mut self`, on the read-only `self`",
+                                 label="this method was declared with plain `self`",
+                                 help="declare the calling method with `mut self` too")
                 return obj                                          # already a pointer
             if cand != base:                                        # String -> str needs a by-value view, not a pointer
                 return obj
@@ -3249,7 +3226,6 @@ class Checker:
         s.local = self.declare_local(s.name, ty, s.mut, s.name_span)
         if not ty.poison and self.holds_ptr(ty):
             s.local.taint = self.taint(s.init)
-            s.local.own_src = self.own_src(s.init)
 
     def cond(self, c):
         t = self.check(c, BOOL)
@@ -3431,16 +3407,6 @@ class Checker:
                      help="copy what you need out of the region before it ends, or allocate it outside with `alloc`")
 
     def check_escape_store(self, target, value):
-        ov = self.own_src(value)
-        if ov is not None and ov not in self.moved:
-            root = target
-            while root.kind in ("Field", "Index"):
-                root = root.obj
-            rl = getattr(root, "local", None) if root.kind == "Ident" else None
-            if rl is not None and rl is not ov and rl.sdepth < ov.sdepth and not rl.is_param:
-                self.dangling_error(value.span, ov, "would outlive it if stored here")
-            if rl is not None and self.holds_ptr(rl.ty):
-                rl.own_src = ov if (rl.own_src is None or ov.sdepth > rl.own_src.sdepth) else rl.own_src
         tv = self.taint(value)
         if tv is None:
             return
@@ -3470,9 +3436,6 @@ class Checker:
         tx = self.taint(x)
         if tx is not None:
             self.escape_error(x.span, tx, "cannot be returned")
-        ox = self.own_src(x)
-        if ox is not None and ox not in self.moved:
-            self.dangling_error(x.span, ox, "cannot be returned")
         if T == STR and x.kind == "Ident" and getattr(x, "coerce", False) and getattr(x, "local", None) is not None \
                 and x.local.glue:
             self.d.error(x.span, f"cannot return a view of the local `String` `{x.name}`: it is destroyed when the function returns",

@@ -159,13 +159,13 @@ impl AtomicI64 {
         self.lock.unlock();
         return v;
     }
-    pub fn store(self, v: i64) {
+    pub fn store(mut self, v: i64) {
         self.lock.lock();
         self.value = v;
         self.lock.unlock();
     }
     // adds d and returns the new value
-    pub fn add(self, d: i64) -> i64 {
+    pub fn add(mut self, d: i64) -> i64 {
         self.lock.lock();
         self.value += d;
         let v = self.value;
@@ -187,7 +187,7 @@ pub fn channel<T>() -> *Channel<T> {
 
 impl<T> Channel<T> {
     // queue a value (fails with thread.Closed after close())
-    pub fn send(self, v: T) -> void! {
+    pub fn send(mut self, v: T) -> void! {
         self.lock.lock();
         if self.closed {
             self.lock.unlock();
@@ -198,7 +198,7 @@ impl<T> Channel<T> {
         self.lock.unlock();
     }
     // wait for a value; fails with thread.Closed once the channel is closed and drained
-    pub fn recv(self) -> T! {
+    pub fn recv(mut self) -> T! {
         self.lock.lock();
         while self.head == self.items.len && !self.closed {
             self.ready.wait(self.lock);
@@ -216,7 +216,7 @@ impl<T> Channel<T> {
         self.lock.unlock();
         return v;
     }
-    pub fn close(self) {
+    pub fn close(mut self) {
         self.lock.lock();
         self.closed = true;
         self.ready.broadcast();

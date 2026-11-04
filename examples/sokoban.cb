@@ -178,16 +178,24 @@ fn main() -> void {
     let c: u8 = line.lower()[line.len-1];
     match c {
       'w' => {
-        level.player.move(&level, 0, -1);
+        let mut p = level.player;
+        p.move(&level, 0, -1);
+        level.player = p;
       }
       's' => {
-        level.player.move(&level, 0, 1);
+        let mut p = level.player;
+        p.move(&level, 0, 1);
+        level.player = p;
       }
       'a' => {
-        level.player.move(&level, -1, 0);
+        let mut p = level.player;
+        p.move(&level, -1, 0);
+        level.player = p;
       }
       'd' => {
-        level.player.move(&level, 1, 0);
+        let mut p = level.player;
+        p.move(&level, 1, 0);
+        level.player = p;
       }
       'q' => {
         break;

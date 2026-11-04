@@ -307,8 +307,8 @@ try {
 **Increment / decrement.** `i++`, `i--`, `++i`, `--i` work as statements and as expressions
 (`cells[p++] = x`) on any mutable integer/float place.
 
-**Methods (`impl`).** Functions can live on a type. `self` borrows the value; `mut self` is for methods that change it, so the
-variable must be `let mut`. `Self` names the type inside the block, and a field that holds a function pointer wins over a method of the
+**Methods (`impl`).** Functions can live on a type. `self` borrows the value read-only; `mut self` is for methods that change it, so the
+variable must be `let mut`. A method with plain `self` that assigns to a field (or calls a `mut self` method on it) is a compile error. `Self` names the type inside the block, and a field that holds a function pointer wins over a method of the
 same name.
 
 ```
@@ -485,9 +485,32 @@ Written in Crumbs and imported with `import std.name;` (`String`, `str`, `List<T
 helpers: they bind libc and pthread with plain `extern fn` / `extern struct` / `extern const` declarations, exactly like user code does.
 (The only runtime hooks they call are the collector's thread notifications in `std.thread`.)
 
+## Borrow checker
+
+Every function body is checked after type checking for the aliasing mistakes that `&` makes possible. A *borrow* is `&place` (exclusive:
+taking `&` already needs a `let mut` variable) or a method call on a variable (shared for plain `self`, exclusive for `mut self`). A pointer
+made from a borrow carries it: `let p = l.at(0);` makes `p` hold a shared borrow of `l`, and a call's result carries the borrows of its
+arguments. A borrow lasts until the last use of the variable holding it (not to the end of the block), and while it lasts:
+
+* the variable cannot be assigned, moved or borrowed exclusively, and if the borrow is exclusive it cannot even be read;
+* one call cannot take two overlapping borrows of the same place when one of them is exclusive (`both(&x, &x)`); different fields are fine;
+* a borrow cannot outlive its owner: `return &x` of a local, or a pointer stored in a longer-lived variable and used after the owner's block ended.
+
+```
+let mut l: list.List<i32> = list.List.new();
+l.push(1);
+let p = l.at(0);
+l.push(2);          // error: cannot borrow mutably `l` because it is borrowed by `p`, which is used again later
+println(*p);
+```
+
+Raw pointers that come from `alloc`, from pointer parameters or through `*p` carry no borrows, so they stay the unchecked escape hatch (and
+`std.own` handles check themselves when used). Limits: the check is local to one function; a pointer stored inside a struct keeps its borrow
+only while that struct variable is used; `extern fn` calls are not checked for aliasing.
+
 ## Owned memory (the default, `std.own`)
 
-Without `--gc` memory is owned: values are freed deterministically at the end of their scope, without a borrow checker and without `free()`.
+Without `--gc` memory is owned: values are freed deterministically at the end of their scope, with a borrow checker and without `free()`.
 `String` and `List` already work this way; `std.own` gives the same thing to any value. Programs that would rather not think about who frees
 what can build with `--gc` (the conservative collector below). `alloc()` memory is raw: free it with `free`, or wrap it in an owner.
 

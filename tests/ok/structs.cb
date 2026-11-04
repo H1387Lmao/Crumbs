@@ -22,7 +22,7 @@ fn main() {
     let mut anchor = 5;
     let mut n3 = Node { value: 3, next: &anchor };
     *n3.next += 1;
-    println(n3.value, " ", anchor);
+    println(n3.value, " ", *n3.next);
     let mut grid = [[0; 3]; 2];
     grid[1][2] = 7;
     let mut s = 0;

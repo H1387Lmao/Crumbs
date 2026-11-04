@@ -1,0 +1,7 @@
+fn both(a: *i32, b: *i32) { *a += 1; *b += 1; }
+
+fn main() {
+    let mut x = 1;
+    both(&x, &x);  // ERROR: cannot borrow `x` twice in one call
+    println(x);
+}

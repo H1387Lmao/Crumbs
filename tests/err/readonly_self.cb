@@ -1,0 +1,19 @@
+struct Counter { n: i32 }
+
+impl Counter {
+    pub fn bump(mut self) { self.n += 1; }
+    pub fn reset(self) {
+        self.n = 0;  // ERROR: cannot assign to an immutable place
+    }
+    pub fn twice(self) {
+        self.bump();  // ERROR: cannot call `bump`, which takes `mut self`, on the read-only `self`
+    }
+}
+
+fn main() {
+    let mut c = Counter { n: 1 };
+    c.bump();
+    c.reset();
+    c.twice();
+    println(c.n);
+}

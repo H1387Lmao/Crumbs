@@ -1,0 +1,8 @@
+fn pick() -> *i32 {
+    let mut x = 5;
+    return &x;  // ERROR: cannot return a reference to the local `x`
+}
+
+fn main() {
+    println(*pick());
+}

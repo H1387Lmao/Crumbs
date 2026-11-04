@@ -471,13 +471,38 @@
           ]
         },
         {
+          "id": "borrow-checking",
+          "title": "Borrow checking",
+          "features": [
+            {
+              "id": "borrow-rules",
+              "title": "Borrows, and how long they last",
+              "desc": "A borrow is `&place` or a method call on a variable (shared for plain `self`, exclusive for `mut self`). A pointer made from a borrow carries it, so `let p = list.at(0);` makes `p` hold a shared borrow of `list`. The borrow lasts until the last use of `p`, not to the end of the block. While it lasts the borrowed variable cannot be assigned, moved or borrowed exclusively, and an exclusive borrow also forbids reading it. One call cannot take two overlapping borrows of the same place when one is exclusive, but different fields are fine.",
+              "code": "let mut l: list.List<i32> = list.List.new();\nl.push(1);\nlet p = l.at(0);\nl.push(2);           // error: `l` is borrowed by `p`, which is used again later\nprintln(*p);\n\nlet mut x = 1;\nlet q = &x;\n*q = 10;\nx = x + 1;           // fine: `q` is not used again",
+              "note": "Raw pointers from `alloc`, from pointer parameters or through `*p` carry no borrows: they are the unchecked escape hatch. The check is local to one function and does not look inside `extern fn` calls."
+            },
+            {
+              "id": "borrow-outlive",
+              "title": "Borrows cannot outlive their owner",
+              "desc": "Returning `&local`, or storing a pointer into a variable that lives longer and using it after the owner's block ended, is a compile error: the owner is destroyed at the end of its scope. Move the owner out instead, return the value itself, or allocate it with `own.new` and return the owner.",
+              "code": "fn pick() -> *i32 {\n    let mut x = 5;\n    return &x;       // error: cannot return a reference to the local `x`\n}"
+            },
+            {
+              "id": "readonly-self",
+              "title": "Plain self is read-only",
+              "desc": "A method declared with `self` only reads the object. Assigning to `self.field`, or calling a `mut self` method on it, is a compile error; declare the method with `mut self` and call it on a `let mut` variable.",
+              "code": "impl Counter {\n    pub fn bump(mut self) { self.n += 1; }\n    pub fn reset(self) { self.n = 0; }   // error: this method takes `self`, which only reads the object\n}"
+            }
+          ]
+        },
+        {
           "id": "owned-memory",
           "title": "Owned memory (experimental)",
           "features": [
             {
               "id": "own-basics",
               "title": "Own<T>: a value with one owner",
-              "desc": "Owned memory is the default: no collector and no borrow checker. `own.new(v)` moves a value to the heap and returns its single owner, an `Own<T>`. The owner is moved like a `String`, and when it goes out of scope the value is destroyed and its memory is freed on the spot: allocation costs what `malloc` costs and nothing ever pauses. `at()` borrows the value while the owner is alive; `own.none()` is an empty owner for the end of a list or tree; `take()` moves the value back out. Build with `--gc` if you would rather have the collector. A raw pointer from `at()` that would outlive its owner (returned, or stored in a longer-lived variable) is a compile error.",
+              "desc": "Owned memory is the default: no collector, and the borrow checker watches the pointers you take. `own.new(v)` moves a value to the heap and returns its single owner, an `Own<T>`. The owner is moved like a `String`, and when it goes out of scope the value is destroyed and its memory is freed on the spot: allocation costs what `malloc` costs and nothing ever pauses. `at()` borrows the value while the owner is alive; `own.none()` is an empty owner for the end of a list or tree; `take()` moves the value back out. Build with `--gc` if you would rather have the collector. A raw pointer from `at()` that would outlive its owner (returned, or stored in a longer-lived variable) is a compile error.",
               "code": "import std.own;\n\nstruct Node { value: i32, next: own.Own<Node> }\n\nfn build(n: i32) -> own.Own<Node> {\n    if n == 0 { return own.none(); }\n    return own.new(Node { value: n, next: build(n - 1) });\n}\n\nfn main() {\n    let list = build(3);\n    println(\"{}\", list.at().value);   // 3\n}                                   // the whole chain is freed here, in order"
             },
             {
