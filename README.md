@@ -23,7 +23,7 @@ python3 crumbs.py emit  examples/hello.cb        # print the generated C
 python3 crumbs.py check examples/hello.cb        # type-check only
         --unchecked        # drop bounds/null/division/conversion checks (about 1.08x of hand-written C vs 1.3x checked)
         --overflow-panic   # panic on integer overflow (+ - * neg); the default is to wrap around like C
-        --no-gc            # plain malloc instead of the (default) garbage collector -- you must free()
+        --gc               # turn on the conservative garbage collector (default: owned memory, no collector)
         --no-stdruntime    # freestanding build: only integer/bounds helpers, no libc (no print, String, alloc, std.*)
         -O3 --cc clang --keep-c out.c
         --entry=start  # use `fn start()` as the entry point instead of `main`
@@ -42,7 +42,7 @@ python3 cookie.py new my_game          # create ./my_game (project.toml, src/mai
 python3 cookie.py init                 # turn the current directory into a project
 python3 cookie.py run                  # compile and run (debug profile); program arguments go after `--`
 python3 cookie.py build --release      # -> build/release/<name>
-python3 cookie.py build --no-gc -O2 --overflow-panic --unchecked --cc clang -l m --pkg sdl2 --entry=start
+python3 cookie.py build --gc -O2 --overflow-panic --unchecked --cc clang -l m --pkg sdl2 --entry=start
 python3 cookie.py check | emit | clean | info [--json]
 python3 cookie.py build -n -v          # -n prints the exact compiler command, -v also logs phase timings (-vv per file)
 ```
@@ -72,22 +72,21 @@ Crumbs compiles to C, so code that works on numbers and arrays runs at C speed. 
 Crumbs, C, C++, Rust, Go, Java and Node.js (`bench/programs/`); `python3 bench/run.py` builds and times them and checks that every language
 prints the same answer. Best of 5 runs on a 2-core Xeon, time relative to C (bounds checks are on for Crumbs, Rust, Go and Java):
 
-| program | Crumbs | Crumbs `--no-gc` | C++ | Rust | Go | Java | Node.js |
+| program | Crumbs (default) | Crumbs `--gc` | C++ | Rust | Go | Java | Node.js |
 |---|---|---|---|---|---|---|---|
-| fib(40), calls | 1.1x | 1.0x | 1.0x | 1.8x | 3.2x | 3.3x | 6.2x |
-| Collatz, integer loops | 1.0x | 1.0x | 1.0x | 0.7x | 1.0x | 1.2x | 6.4x |
-| Mandelbrot, float loops | 1.0x | 1.0x | 1.0x | 1.0x | 1.0x | 1.4x | 1.2x |
-| N-body, float math on structs | 1.0x | 1.0x | 1.0x | 0.8x | 1.3x | 1.4x | 1.9x |
-| Matrix multiply | 1.4x | 0.9x | 0.8x | 0.9x | 1.9x | 1.8x | 4.3x |
-| Sieve, 50M bytes | 1.0x | 1.1x | 1.0x | 1.0x | 1.0x | 1.1x | 1.5x |
-| Quicksort, 3M integers | 1.1x | 1.1x | 1.0x | 1.0x | 1.1x | 1.5x | 1.9x |
-| Binary trees (allocation heavy) | **10.5x** | 1.2x | 1.3x | 1.4x | 2.5x | 1.2x | 1.1x |
-| Hash map, 1M string keys (vs C++) | 2.0x | 0.7x | 1.0x | 0.6x | 0.7x | 0.4x | 1.1x |
+| fib(40), calls | 1.0x | 1.0x | 1.0x | 1.8x | 3.2x | 3.3x | 6.1x |
+| Collatz, integer loops | 1.0x | 1.1x | 1.0x | 0.7x | 1.1x | 1.2x | 6.9x |
+| Mandelbrot, float loops | 1.0x | 1.0x | 1.0x | 1.0x | 1.0x | 1.4x | 1.1x |
+| N-body, float math on structs | 1.0x | 1.0x | 1.0x | 0.8x | 1.4x | 1.6x | 2.0x |
+| Matrix multiply | 1.1x | 1.6x | 1.0x | 0.9x | 2.2x | 2.0x | 4.7x |
+| Sieve, 50M bytes | 1.0x | 1.0x | 1.0x | 1.0x | 1.0x | 1.2x | 1.6x |
+| Quicksort, 3M integers | 1.1x | 1.1x | 1.0x | 0.9x | 1.1x | 1.5x | 1.8x |
+| Binary trees (allocation heavy) | 1.1x | **8.9x** | 1.3x | 1.3x | 2.5x | 1.2x | 1.1x |
+| Hash map, 1M string keys (vs C++) | 0.8x | 1.8x | 1.0x | 0.6x | 0.8x | 0.4x | 1.2x |
 
-Where Crumbs is slow is the garbage collector: it is a conservative, non-moving, generational mark-and-sweep collector, so programs that
-allocate millions of small objects pay for it (binary trees, hash map keys), and it holds more memory than `malloc`/`free` or a moving
-collector would. Building with `--no-gc` removes that cost (binary trees go from ~10x to ~1.2x C, with 9 MiB instead of ~108 MiB) in exchange for
-freeing memory yourself; the table above shows both. Peak memory, compile times and binary sizes are in [`bench/RESULTS.md`](bench/RESULTS.md); the chart is
+Memory is owned by default: `String`, `List` and `std.own` values free themselves at scope end and allocation is plain `malloc`, so allocation-heavy
+programs run at C speed (binary trees take 0.26 s and 14 MiB). The optional conservative, non-moving, generational
+collector (`--gc`) costs time and memory on programs that allocate millions of small objects (binary trees 2.0 s and 107 MiB, hash map keys), which is why it is no longer the default. Peak memory, compile times and binary sizes are in [`bench/RESULTS.md`](bench/RESULTS.md); the chart is
 [`bench/results.svg`](bench/results.svg). Run one language or program with `python3 bench/run.py fib --langs crumbs,c`.
 
 ## Language tour
@@ -388,7 +387,7 @@ of those, arrays of those). Bridge helpers: `cstr(s)` (NUL-terminated copy of a 
 converts to it implicitly; get a typed pointer back with `as`). `examples/ffi/` wraps a small C library the way you would wrap
 SDL or raylib: raw declarations, a struct whose `drop` closes the handle, and a callback trampoline.
 
-**Garbage collector (on by default; `--no-gc` for plain malloc).** A conservative, **three-generation** collector (Linux; glibc or musl)
+**Garbage collector (optional, `--gc`; the default is owned memory, see below).** A conservative, **three-generation** collector (Linux; glibc or musl)
 manages `alloc()`, `String` buffers and the string arena. New blocks start in generation 0 (the nursery). When the nursery has grown by
 4 MiB the allocator runs one of three collections:
 
@@ -420,7 +419,7 @@ collect. `gc_collect_gen` is available only in `manual` mode (elsewhere it is a 
 
 Controls: `gc_collect()` forces a major collection in every mode, `gc_collect_gen(g)` (manual mode) collects generations `0..g`,
 `gc_bytes()` reports bytes in use, `gc_collections()` counts all cycles, and `gc_gen_bytes(g)` / `gc_gen_collections(g)` report one
-generation (all no-ops / 0 with `--no-gc`).
+generation (all no-ops / 0 without `--gc`).
 Compile with `--cflag=-DCB_GC_VERIFY` to check every collection against a full trace of the heap (it aborts on a missed barrier or a
 grey block left over); the thresholds can be tuned with `-DCB_GC_NURSERY=`, `CB_GC_MID`, `CB_GC_MID_EVERY`, `CB_GC_MAJOR_MIN` and
 `CB_GC_CARD_BUDGET`. `free()` and destructors stay legal and release memory immediately. Caveats: memory given to C and kept only on the C
@@ -486,10 +485,11 @@ Written in Crumbs and imported with `import std.name;` (`String`, `str`, `List<T
 helpers: they bind libc and pthread with plain `extern fn` / `extern struct` / `extern const` declarations, exactly like user code does.
 (The only runtime hooks they call are the collector's thread notifications in `std.thread`.)
 
-## Experimental: owned memory (`std.own`)
+## Owned memory (the default, `std.own`)
 
-The collector is convenient but costs time and memory (see Performance). `std.own` is an experiment in the other direction: deterministic
-freeing without a borrow checker and without `free()`.
+Without `--gc` memory is owned: values are freed deterministically at the end of their scope, without a borrow checker and without `free()`.
+`String` and `List` already work this way; `std.own` gives the same thing to any value. Programs that would rather not think about who frees
+what can build with `--gc` (the conservative collector below). `alloc()` memory is raw: free it with `free`, or wrap it in an owner.
 
 * `own.new(v)` returns an `Own<T>`, the single owner of a heap value. Owners move like `String`s, and the value is destroyed and its memory
   freed at the end of the owner's scope, so allocation costs what `malloc` costs. Nothing pauses and nothing is traced.
@@ -499,9 +499,13 @@ freeing without a borrow checker and without `free()`.
 * `own.shared(v)` gives an `Rc<T>` for values with several owners (atomic counts, so owners can live on different threads; freed when the last
   one goes). A `Weak<T>` (`rc.downgrade()`, `weak.upgrade()` gives `Rc<T>?`) points back without keeping the value alive, so parent/child cycles are freed.
 * Owners work inside `List` and `HashMap`: removing or clearing destroys the value right there.
+* Dangling pointers are caught at compile time in the common cases: returning `owner.at()` (or storing it in a variable that outlives the owner)
+  while the owner is still in this scope is an error. Moving the owner out together with the pointer is fine.
+* Freed blocks of 64 KiB or more give their pages back to the system at once (the header stays mapped so stale `Ref`s still panic cleanly);
+  smaller blocks are recycled through per-size free lists.
 
-Binary trees written this way (`bench/programs/bintrees/bintrees_own.cb`, built with `--no-gc`) take 0.23 s (14 MiB), against 2.0 s (108 MiB) with the collector and
-0.22 s for C, with no `free` calls in the source. Still to do: a static check for the common dangling cases and returning freed blocks to the system.
+Binary trees written this way (`bench/programs/bintrees/bintrees_own.cb`) take 0.26 s (14 MiB), against 2.0 s (107 MiB)
+with `--gc` and 0.23 s for C, with no `free` calls in the source.
 
 ## Compiler layout
 

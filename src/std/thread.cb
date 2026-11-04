@@ -36,7 +36,7 @@ extern fn pthread_cond_broadcast(c: *void) -> i32;
 extern fn sched_yield() -> i32;
 extern fn sysconf(name: i32) -> i64;
 
-// ---- the collector's thread hooks (runtime.c; no-ops under --no-gc) -----------------------------
+// ---- the collector's thread hooks (runtime.c; no-ops without --gc) -----------------------------
 extern fn cb_gc_thread_prepare(arg: *void) -> *void;
 extern fn cb_gc_thread_begin(rec: *void);
 extern fn cb_gc_thread_end();
