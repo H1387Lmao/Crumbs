@@ -14,6 +14,7 @@ EXTRA = os.path.join(ROOT, "docs", "stdlib_builtins.json")   # hand-written: the
 GROUPS = [
     ("Text and numbers", ["str", "conv", "fmt", "math", "rand"]),
     ("Collections", ["list", "stack", "queue", "map", "tree", "mem"]),
+    ("Memory (experimental)", ["own"]),
     ("Input, output and system", ["io", "fs", "env", "time"]),
     ("Networking", ["net", "http"]),
     ("Concurrency", ["thread", "async"]),

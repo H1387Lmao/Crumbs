@@ -469,6 +469,30 @@
               "command": "crumbs build lib.cb --no-stdruntime --entry= -o lib.o"
             }
           ]
+        },
+        {
+          "id": "owned-memory",
+          "title": "Owned memory (experimental)",
+          "features": [
+            {
+              "id": "own-basics",
+              "title": "Own<T>: a value with one owner",
+              "desc": "`std.own` is an experiment in memory without a collector and without a borrow checker. `own.new(v)` moves a value to the heap and returns its single owner, an `Own<T>`. The owner is moved like a `String`, and when it goes out of scope the value is destroyed and its memory is freed on the spot: allocation costs what `malloc` costs and nothing ever pauses. `at()` borrows the value while the owner is alive; `own.none()` is an empty owner for the end of a list or tree; `take()` moves the value back out. Build with `--no-gc` to leave the collector out entirely.",
+              "code": "import std.own;\n\nstruct Node { value: i32, next: own.Own<Node> }\n\nfn build(n: i32) -> own.Own<Node> {\n    if n == 0 { return own.none(); }\n    return own.new(Node { value: n, next: build(n - 1) });\n}\n\nfn main() {\n    let list = build(3);\n    println(\"{}\", list.at().value);   // 3\n}                                   // the whole chain is freed here, in order"
+            },
+            {
+              "id": "own-ref",
+              "title": "Ref<T>: dangling pointers that panic",
+              "desc": "Instead of proving at compile time that nothing outlives its owner, `std.own` makes the mistake detectable. Every block has a generation number that changes when it is freed. `owner.ref()` makes a copyable `Ref<T>` that remembers the number; `r.get()` compares and panics with `use of a freed value` when they differ, `r.alive()` asks without panicking. A stale `Ref` is therefore a clean panic, never silent corruption. `at()` is the unchecked, fast borrow for code that already holds the owner.",
+              "code": "fn leak() -> own.Ref<i32> {\n    let o = own.new(5);\n    return o.ref();          // `o` is freed when the function returns\n}\n\nlet r = leak();\nprintln(\"{}\", r.alive());     // false\nprintln(\"{}\", *r.get());      // panic: use of a freed value"
+            },
+            {
+              "id": "own-rc",
+              "title": "Rc<T>: shared ownership",
+              "desc": "When ownership really is shared, `own.shared(v)` gives an `Rc<T>`: `clone()` adds an owner, each owner that goes out of scope removes one, and the value is freed when the last one goes. `count()` tells how many there are. Counts are not atomic (keep an `Rc` on one thread) and cycles leak. Limits of the whole module: it is experimental, freed blocks are recycled but never returned to the system, and a raw `*T` taken from `at()` is as unchecked as any pointer.",
+              "code": "let a = own.shared(string_from(\"shared\"));\n{\n    let b = a.clone();\n    println(\"{}\", a.count());   // 2\n}\nprintln(\"{}\", a.count());       // 1: freed when `a` goes"
+            }
+          ]
         }
       ]
     },

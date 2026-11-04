@@ -1,0 +1,133 @@
+// std.own (EXPERIMENTAL): memory with an owner. No collector, no borrow checker, and no manual free().
+//
+//     import std.own;
+//     struct Node { value: i32, next: own.Own<Node> }
+//
+//     let list = own.new(Node { value: 1, next: own.new(Node { value: 2, next: own.none() }) });
+//     println(list.at().value);              // 1: `at` borrows the value; the owner keeps it alive
+//     let r = list.ref();                      // a Ref is a copyable handle that remembers the value's generation
+//     println(r.get().value);                  // 1
+//     // when `list` goes out of scope the whole chain is freed, in order, right there.
+//
+// An `Own<T>` is the single owner of one heap value. It is moved like a `String` (`let b = a;` leaves `a` unusable), and when the
+// owner goes out of scope the value is destroyed and its memory is freed on the spot, so allocation costs what `malloc` costs and
+// nothing ever pauses. What `Own` does NOT do is stop you from keeping a pointer past that point. Instead of proving it away
+// (borrowing rules) it makes it detectable: every block carries a generation number that changes when the block is freed, and a
+// `Ref<T>` remembers the number it was made with. `r.get()` compares them and panics with "use of a freed value" if they differ,
+// so a dangling `Ref` is a clean panic, never silent corruption. `Own.at()` is the fast, unchecked borrow for code that
+// already holds the owner. When ownership really is shared, `Rc<T>` counts its owners and frees the value when the last one goes.
+//
+// Limits: `Rc` counts are not atomic (do not share an `Rc` between threads), `Rc` cycles leak, freed blocks are recycled but never
+// returned to the system, and a raw `*T` taken from `at()` is as unchecked as any pointer.
+extern fn cb_own_alloc(size: i64) -> *void;
+extern fn cb_own_free(p: *void);
+extern fn cb_own_gen(p: *void) -> u64;
+
+// the single owner of one heap value; an empty owner (`own.none()`) holds nothing
+pub struct Own<T> { p: *T }
+
+// a copyable, checked handle to a value that someone else owns
+pub struct Ref<T> { p: *T, gen: u64 }
+
+// reference-counted shared ownership
+struct RcBox<T> { count: i64, value: T }
+pub struct Rc<T> { b: *RcBox<T> }
+
+// moves `v` to the heap and returns its owner
+pub fn new<T>(v: T) -> Own<T> {
+    let p = cb_own_alloc(size_of(T)) as *T;
+    write_at(p, v);
+    return Own { p: p };
+}
+
+// an owner that owns nothing (an empty link in a list or tree)
+pub fn none<T>() -> Own<T> {
+    return Own { p: null as *T };
+}
+
+// moves `v` to the heap under shared ownership (count 1)
+pub fn shared<T>(v: T) -> Rc<T> {
+    let b = cb_own_alloc(size_of(RcBox<T>)) as *RcBox<T>;
+    write_at(&b.value, v);
+    b.count = 1;
+    return Rc { b: b };
+}
+
+drop<T> Own<T>(self) { release(self); }
+
+// destroys the value now (the scope end does this for you) and leaves the owner empty
+pub fn release<T>(o: *Own<T>) {
+    if o.p != null {
+        drop_at(o.p);
+        cb_own_free(o.p as *void);
+        o.p = null as *T;
+    }
+}
+
+impl<T> Own<T> {
+    pub fn is_none(self) -> bool { return self.p == null; }
+    pub fn is_some(self) -> bool { return self.p != null; }
+
+    // borrows the value; valid while this owner is. Panics on an empty owner.
+    pub fn at(self) -> *T {
+        if self.p == null { panic("own: the owner is empty"); }
+        return self.p;
+    }
+
+    // a checked handle that outlives borrows: using it after the owner is gone panics
+    pub fn ref(self) -> Ref<T> {
+        if self.p == null { panic("own: the owner is empty"); }
+        return Ref { p: self.p, gen: cb_own_gen(self.p as *void) };
+    }
+
+    // replaces the value; the old one is destroyed
+    pub fn set(mut self, v: T) {
+        release(self);
+        self.p = cb_own_alloc(size_of(T)) as *T;
+        write_at(self.p, v);
+    }
+
+    // moves the value out and frees the block; the owner is left empty
+    pub fn take(mut self) -> T {
+        if self.p == null { panic("own: the owner is empty"); }
+        let v = read_at(self.p);
+        cb_own_free(self.p as *void);
+        self.p = null as *T;
+        return v;
+    }
+
+    pub fn release(mut self) { release(self); }
+}
+
+impl<T> Ref<T> {
+    // true while the owner still owns the value this handle was made from
+    pub fn alive(self) -> bool { return cb_own_gen(self.p as *void) == self.gen; }
+
+    // the value, or a panic ("use of a freed value") when its owner is gone
+    pub fn get(self) -> *T {
+        if cb_own_gen(self.p as *void) != self.gen { panic("use of a freed value"); }
+        return self.p;
+    }
+}
+
+drop<T> Rc<T>(self) {
+    if self.b != null {
+        self.b.count -= 1;
+        if self.b.count == 0 {
+            drop_at(&self.b.value);
+            cb_own_free(self.b as *void);
+        }
+        self.b = null as *RcBox<T>;
+    }
+}
+
+impl<T> Rc<T> {
+    // another owner of the same value
+    pub fn clone(self) -> Rc<T> {
+        self.b.count += 1;
+        return Rc { b: self.b };
+    }
+    pub fn get(self) -> *T { return &self.b.value; }
+    // how many owners the value has right now
+    pub fn count(self) -> i64 { return self.b.count; }
+}

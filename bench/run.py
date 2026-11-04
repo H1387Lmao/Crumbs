@@ -25,7 +25,7 @@ TITLES = {
 }
 LANGS = {
     # name: (label, source extension, build function or None, run command builder)
-    "crumbs": ("Crumbs", "cb"), "crumbs-nogc": ("Crumbs (--no-gc)", "cb"), "crumbs-unchecked": ("Crumbs (unchecked)", "cb"),
+    "crumbs": ("Crumbs", "cb"), "crumbs-nogc": ("Crumbs (--no-gc)", "cb"), "crumbs-own": ("Crumbs (std.own)", "cb"), "crumbs-unchecked": ("Crumbs (unchecked)", "cb"),
     "c": ("C (gcc -O2)", "c"), "cpp": ("C++ (g++ -O2)", "cpp"), "rust": ("Rust (-O)", "rs"),
     "go": ("Go", "go"), "java": ("Java", "java"), "node": ("Node.js", "js"),
 }
@@ -44,12 +44,14 @@ def build(lang, prog):
     os.makedirs(out_dir, exist_ok=True)
     exe = os.path.join(out_dir, prog)
     t0 = time.perf_counter()
-    if lang in ("crumbs", "crumbs-unchecked", "crumbs-nogc"):
+    if lang in ("crumbs", "crumbs-unchecked", "crumbs-nogc", "crumbs-own"):
         src = os.path.join(src_dir, prog + ".cb")
+        if lang == "crumbs-own":
+            src = os.path.join(src_dir, prog + "_own.cb")          # the version written with owned memory (std.own)
         if lang == "crumbs-nogc" and os.path.exists(os.path.join(src_dir, prog + "_nogc.cb")):
             src = os.path.join(src_dir, prog + "_nogc.cb")        # a version that frees its memory by hand
         cmd = [sys.executable, os.path.join(ROOT, "crumbs.py"), "build", src, "-o", exe]
-        if lang == "crumbs-nogc":
+        if lang in ("crumbs-nogc", "crumbs-own"):
             cmd += ["--no-gc"]
         if lang == "crumbs-unchecked":
             cmd += ["--unchecked", "-O", "3"]
@@ -131,6 +133,8 @@ def main():
         expected = None
         row = {}
         for lang in langs:
+            if lang == "crumbs-own" and not os.path.exists(os.path.join(PROGRAMS, prog, prog + "_own.cb")):
+                continue
             if not os.path.exists(os.path.join(PROGRAMS, prog, prog + "." + LANGS[lang][1])) and lang != "java":
                 if lang not in ("crumbs-unchecked",):
                     continue

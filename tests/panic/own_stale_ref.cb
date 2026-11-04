@@ -1,0 +1,14 @@
+// PANIC: use of a freed value
+import std.own;
+
+fn leak_a_ref() -> own.Ref<i32> {
+    let o = own.new(5);
+    println("{}", *o.ref().get());
+    return o.ref();                 // `o` is freed when the function returns: the Ref outlives its value
+}
+
+fn main() {
+    let r = leak_a_ref();
+    println("{}", r.alive());
+    println("{}", *r.get());
+}

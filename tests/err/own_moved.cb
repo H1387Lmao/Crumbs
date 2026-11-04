@@ -1,0 +1,7 @@
+import std.own;
+fn main() {
+    let a = own.new(1);
+    let b = a;
+    println("{}", *a.at()); // ERROR: use of moved value
+    println("{}", *b.at());
+}

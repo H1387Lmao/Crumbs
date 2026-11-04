@@ -1,0 +1,65 @@
+// std.own: owners free their value at the end of the scope, Refs notice when it is gone, Rc counts its owners.
+import std.own;
+
+struct Guard { name: str }
+drop Guard(self) { println("drop ", self.name); }
+
+struct Node { value: i32, next: own.Own<Node> }
+
+fn sum(n: *Node) -> i32 {
+    let mut total = n.value;
+    if n.next.is_some() { total += sum(n.next.at()); }
+    return total;
+}
+
+fn build(n: i32) -> own.Own<Node> {
+    if n == 0 { return own.none(); }
+    return own.new(Node { value: n, next: build(n - 1) });
+}
+
+fn make_guard(name: str) -> own.Own<Guard> {
+    return own.new(Guard { name: name });
+}
+
+fn main() {
+    // scope end frees the value (its destructor runs right there)
+    {
+        let g = make_guard("inner");
+        println("made ", g.at().name);
+    }
+    println("after inner scope");
+
+    // a chain is freed link by link
+    let list = build(5);
+    println("sum = {}", sum(list.at()));
+
+    // Ref: valid while the owner lives, stale afterwards
+    let mut o = own.new(41);
+    let r = o.ref();
+    *o.at() += 1;
+    println("{} alive={}", *r.get(), r.alive());
+    o.release();
+    println("alive={} owner empty={}", r.alive(), o.is_none());
+    o.set(7);                                  // the owner can be refilled; the old Ref stays stale
+    println("alive={} value={}", r.alive(), *o.at());
+
+    // take moves the value out
+    let mut t = own.new(string_from("moved out"));
+    let s = t.take();
+    println("{} / empty={}", s, t.is_none());
+
+    // moving an owner moves responsibility, the value is freed once
+    let a = make_guard("moved");
+    let b = a;
+    println("moved to b: ", b.at().name);
+
+    // Rc: freed when the last owner goes
+    let x = own.shared(Guard { name: "shared" });
+    println("count {}", x.count());
+    {
+        let y = x.clone();
+        println("count {} {}", x.count(), y.get().name);
+    }
+    println("count {}", x.count());
+    println("end of main");
+}
