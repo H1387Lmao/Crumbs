@@ -1,0 +1,19 @@
+import std.own;
+
+struct Boxed { o: own.Own<i64>, p: *i64 }
+
+// the owner moves out together with the pointer: nothing dangles
+fn make() -> Boxed {
+    let o = own.new(5 as i64);
+    let p = o.at();
+    return Boxed { o: o, p: p };
+}
+
+fn main() {
+    let o = own.new(9 as i64);
+    let p = o.at();
+    *p = *p + 1;
+    println("{}", *o.at());
+    let b = make();
+    println("{}", *b.p);
+}

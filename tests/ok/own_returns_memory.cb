@@ -1,0 +1,43 @@
+// FLAGS: --no-gc
+// Freed blocks of 64 KiB or more give their pages back to the system (Linux: read VmRSS from /proc).
+import std.own;
+import std.fs;
+import std.list;
+
+struct Big { a: [100000]i64 }
+
+fn rss_kb() -> i64 {
+    let lines = fs.read_lines("/proc/self/status") catch |e| { return -1; };
+    let mut i = 0;
+    while i < lines.len {
+        let l = lines.at(i);
+        if l.starts_with("VmRSS") {
+            let mut n = 0 as i64;
+            for c in *l {
+                if c >= '0' && c <= '9' { n = n * 10 + (c - '0') as i64; }
+            }
+            return n;
+        }
+        i += 1;
+    }
+    return -1;
+}
+
+fn main() {
+    let before = rss_kb();
+    let mut held = 0 as i64;
+    {
+        let mut v: list.List<own.Own<Big>> = list.List.new();
+        let mut i = 0;
+        while i < 200 {
+            let b = own.new(Big { a: [0 as i64; 100000] });
+            for k in 0..100000 { b.at().a[k] = 7; }
+            v.push(b);
+            i += 1;
+        }
+        held = rss_kb();
+    }
+    let after = rss_kb();
+    println("grew while held: {}", held - before > 100000);
+    println("returned after free: {}", after - before < 20000);
+}

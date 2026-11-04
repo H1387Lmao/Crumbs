@@ -306,9 +306,9 @@ def main(argv=None):
                        help="treat implicit-conversion and signedness warnings as errors")
         p.add_argument("--entry", default="main", metavar="NAME",
                        help="entry function (default main); `--entry=` builds an object file with no entry point")
-        p.add_argument("--gc", action=argparse.BooleanOptionalAction, default=True,
-                       help="conservative garbage collector for alloc()/String/List (default: on); --no-gc uses plain malloc "
-                            "and you must free() everything")
+        p.add_argument("--gc", action=argparse.BooleanOptionalAction, default=None,
+                       help="conservative garbage collector for alloc()/String/List (default: off; owned memory is the default, see std.own). "
+                            "Without it, String/List/Own free themselves at scope end and alloc() memory is freed by hand")
         p.add_argument("--gc-mode", choices=GC_MODES, default="auto",
                        help="when the collector runs: auto (default) = the allocator starts a collection when the nursery is full; "
                             "thread = a background collector thread collects every --gc-interval ms (for beginners: nothing to manage); "
@@ -363,12 +363,14 @@ def main(argv=None):
 
 def check_gc_flags(a):
     """Reject flag combinations that cannot work; returns an exit code or None."""
+    if a.gc is None:                    # the collector is opt-in; asking for one of its modes turns it on
+        a.gc = a.gc_mode != "auto"
     if not 1 <= a.gc_interval <= 60000:
         print("error: --gc-interval must be between 1 and 60000 milliseconds", file=sys.stderr)
         return 2
     if a.gc_mode != "auto" and not a.gc and not a.no_stdruntime:
         print(f"error: `--gc-mode={a.gc_mode}` needs the collector, but `--no-gc` is set", file=sys.stderr)
-        print("help: drop --no-gc, or use the default --gc-mode=auto", file=sys.stderr)
+        print("help: drop --no-gc, or drop --gc-mode", file=sys.stderr)
         return 2
     return None
 

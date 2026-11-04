@@ -1,0 +1,10 @@
+import std.own;
+
+fn main() {
+    let mut p = null as *i64;
+    {
+        let o = own.new(7 as i64);
+        p = o.at();  // ERROR: pointer into the owned value `o` would outlive it if stored here
+    }
+    println("{}", *p);
+}

@@ -1,4 +1,4 @@
-// FLAGS: --cflag=-DCB_GC_VERIFY --cflag=-DCB_GC_NURSERY=4096 --cflag=-DCB_GC_MID=16384 --cflag=-DCB_GC_MID_EVERY=3 --cflag=-DCB_GC_MAJOR_MIN=65536 --cflag=-DCB_GC_CARD_BUDGET=16
+// FLAGS: --gc --cflag=-DCB_GC_VERIFY --cflag=-DCB_GC_NURSERY=4096 --cflag=-DCB_GC_MID=16384 --cflag=-DCB_GC_MID_EVERY=3 --cflag=-DCB_GC_MAJOR_MIN=65536 --cflag=-DCB_GC_CARD_BUDGET=16
 // Three-generation collector under stress: tiny generation limits make minor, mid and major collections happen
 // constantly, and the build verifies every one of them against a full trace (a missing write barrier aborts).
 // Old objects are made to point at brand-new ones through slices, fields, Strings and lists.

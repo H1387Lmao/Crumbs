@@ -1289,7 +1289,9 @@ static char **cb_argv_v;
    Freed blocks are never returned to the system: they wait on a per-size free list, so a stale reference always reads a
    valid header. With the collector the blocks are ordinary collected blocks (nothing is recycled; the collector reclaims
    a block once the owner is gone and no `Ref` points at it). */
+#include <sys/mman.h>
 typedef struct { uint64_t gen; uint64_t cap; } cb_OwnHdr;
+#define CB_OWN_BIG 65536                                      /* blocks this large give their pages back to the system when freed */
 #ifndef CB_GC
 static __thread void *cb_own_free_list[64];                 /* payload pointers, one list per power-of-two capacity; the next link is stored in the payload */
 #endif
@@ -1305,7 +1307,10 @@ void *cb_own_alloc(int64_t size) {
     void *p = cb_own_free_list[cls];
     if (p) {
         cb_own_free_list[cls] = *(void **)p;
-        memset(p, 0, cap);
+        if (cap >= CB_OWN_BIG) {                              /* the pages were handed back when it was freed: they are already zero */
+            uintptr_t a = ((uintptr_t)p + sizeof(void *) + 4095) & ~(uintptr_t)4095;
+            memset(p, 0, a > (uintptr_t)p + cap ? cap : (size_t)(a - (uintptr_t)p));
+        } else memset(p, 0, cap);
         ((cb_OwnHdr *)p - 1)->gen++;                          /* even -> odd: live again, under a new generation */
         return p;
     }
@@ -1323,7 +1328,13 @@ void cb_own_free(void *p) {
 #ifdef CB_GC
     memset(p, 0, h->cap);                                     /* do not keep what the dead value pointed to alive */
 #else
-    memset(p, 0xDD, h->cap);                                  /* a stale raw pointer reads 0xDD.. instead of old data */
+    if (h->cap >= CB_OWN_BIG) {
+        /* big block: give its whole pages back to the system now. The header and the first page stay mapped, so a stale Ref
+           still reads a valid (odd/even) generation; the returned pages read as zeros until the block is reused. */
+        uintptr_t a = ((uintptr_t)p + sizeof(void *) + 4095) & ~(uintptr_t)4095;
+        uintptr_t b = ((uintptr_t)p + h->cap) & ~(uintptr_t)4095;
+        if (b > a) madvise((void *)a, b - a, MADV_DONTNEED);
+    } else memset(p, 0xDD, h->cap);                           /* a stale raw pointer reads 0xDD.. instead of old data */
     int cls = 63 - __builtin_clzll(h->cap);
     *(void **)p = cb_own_free_list[cls];
     cb_own_free_list[cls] = p;
