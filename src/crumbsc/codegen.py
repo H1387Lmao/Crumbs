@@ -126,6 +126,12 @@ class CodeGen:
             return t.sym.cname
         if k == "ptr":
             return self.ctype(t.inner) + "*"
+        if k == "clo":
+            for p in t.params:
+                self.ctype(p)
+            if t.inner != VOID:
+                self.ctype(t.inner)
+            return "cb_Clo"
         if k == "fn":
             if t.key in self.reg:
                 return self.reg[t.key]
@@ -384,6 +390,22 @@ class CodeGen:
             return f"(({self.ctype(sym.ty)})({sym.csym}))"
         return sym.cname
 
+    def g_Closure(self, e):
+        sym = e.sym
+        if not e.captures:
+            return f"((cb_Clo){{(void *){sym.cname}, 0, 0}})"
+        en = self.tmp("cb_en")
+        parts = [f"struct {sym.cname}_env *{en} = (struct {sym.cname}_env *)cb_own_alloc(sizeof *{en});"]
+        for i, (outer, proxy) in enumerate(e.captures):
+            if proxy.byref:
+                parts.append(f"{en}->c{i} = &{outer.cname};")
+            elif outer.glue:
+                parts.append(f"{en}->c{i} = ({outer.cname}__live = 0, {outer.cname});")
+            else:
+                parts.append(f"{en}->c{i} = {outer.cname};")
+        parts.append(f"(cb_Clo){{(void *){sym.cname}, {en}, {sym.cname}_drop}};")
+        return "({ " + " ".join(parts) + " })"
+
     def g_Ident(self, e):
         if getattr(e, "is_null", False):
             if e.ty.kind == "opt":
@@ -597,6 +619,13 @@ class CodeGen:
                         f'if (CB_UNLIKELY(!{t}.has)) cb_panic({self.loc(e.span)}, "`unwrap` on an empty optional"); {t}.v; }})')
             return f"({{ {self.ctype(obj.ty)} {t} = {x}; {t}.has ? {t}.v : ({self.ex(e.args[0])}); }})"
         args = ", ".join(self.ex(a) for a in e.args)
+        if getattr(e, "indirect", False) == "clo":
+            f = self.tmp("cb_cl")
+            ct = e.callee.ty
+            ret = self.ctype(ct.inner) if ct.inner != VOID else "void"
+            pts = "".join(", " + self.ctype(p) for p in ct.params)
+            return (f"(({{ cb_Clo {f} = {self.ex(e.callee)}; (({ret} (*)(void *{pts})){f}.fn)({f}.env"
+                    + "".join(", " + self.ex(a) for a in e.args) + "); }))")
         if getattr(e, "indirect", False):
             return f"{self.nn(self.ex(e.callee), e.callee.ty, e.span)}({args})"
         return f"{e.sym.cname}({args})"
@@ -877,7 +906,59 @@ class CodeGen:
     def drop_stmt(self, loc):
         if getattr(loc, "region", False):
             return f"if ({loc.cname}__live) {{ cb_region_free({loc.cname}); {loc.cname}__live = 0; }}"
+        if getattr(loc, "autofree", False):
+            return f"if ({loc.cname}__live) {{ cb_mem_free({loc.cname}.ptr); {loc.cname}__live = 0; }}"
         return f"if ({loc.cname}__live) {self.glue_fn(loc.ty)}(&{loc.cname});"
+
+    def find_autofree(self, body):
+        """Marks the locals bound to `alloc(...)` whose memory never escapes: they are only indexed or asked for `.len`
+        (never passed, returned, stored, sliced, captured or freed by hand), so the block can free them itself."""
+        cands, bad = {}, set()
+
+        def root(loc):
+            while getattr(loc, "outer", None) is not None:
+                bad.add(id(loc.outer))                   # seen through a closure's capture
+                loc = loc.outer
+            return loc
+
+        stack = []
+
+        def under_addr():
+            """Is the Index/Field chain ending at the top of `stack` the operand of `&` (a pointer into the memory)?"""
+            for a in reversed(stack):
+                if a.kind in ("Index", "Field"):
+                    continue
+                return a.kind == "Unary" and a.op == "&"
+            return False
+
+        def walk(n, parent):
+            if isinstance(n, list) or isinstance(n, tuple):
+                for x in n:
+                    walk(x, parent)
+                return
+            if not hasattr(n, "kind") or not hasattr(n, "span"):
+                return
+            if n.kind == "Let" and getattr(n, "afree", False) and getattr(n, "local", None) is not None:
+                cands[id(n.local)] = n.local
+            if n.kind == "Ident":
+                loc = getattr(n, "local", None)
+                if loc is not None:
+                    r = root(loc)
+                    ok = parent is not None and ((parent.kind == "Index" and parent.obj is n)
+                                                 or (parent.kind == "Field" and parent.obj is n and parent.name == "len"))
+                    if not ok or under_addr():
+                        bad.add(id(r))
+                return
+            stack.append(n)
+            for k, v in n.__dict__.items():
+                if k not in ("kind", "span", "ty", "local", "desugared") or (k == "desugared" and v is not None):
+                    if isinstance(v, (list, tuple)) or hasattr(v, "kind"):
+                        walk(v, n)
+            stack.pop()
+
+        walk(body, None)
+        for i, loc in cands.items():
+            loc.autofree = i not in bad
 
     def s_Region(self, s):
         name = s.local.cname
@@ -945,6 +1026,8 @@ class CodeGen:
             L.append(f"    for (int64_t i = 0; i < {t.n}; i++) {self.glue_fn(t.inner)}(&p->v[i]);")
         elif t.kind == "opt":
             L.append(f"    if (p->has) {self.glue_fn(t.inner)}(&p->v);")
+        elif t.kind == "clo":
+            L.append("    cb_clo_drop(p);")
         else:
             d = self.ck.drop_fn_of(t.sym)
             if d is not None:
@@ -978,7 +1061,7 @@ class CodeGen:
                 self.emit(f"(void)({self.ex(s.init)});")
             return
         self.emit(f"{self.ctype(s.local.ty)} {s.local.cname} = {self.ex(s.init)};")
-        if s.local.glue:
+        if s.local.glue or getattr(s.local, "autofree", False):
             self.emit(f"bool {s.local.cname}__live = 1;")
             self.dscopes[-1].append(s.local)
 
@@ -1143,6 +1226,8 @@ class CodeGen:
         self.finish_return(f"({self.ctype(self.cur_ret)}){{.err = {self.ex(s.expr)}}}")
 
     def s_For(self, s):
+        if getattr(s, "desugared", None) is not None:
+            return self.s_Block(s.desugared)
         it = s.iter
         var = s.local.cname if s.local is not None else self.tmp("cb_v")
         self.emit("{")
@@ -1214,6 +1299,8 @@ class CodeGen:
     def sig(self, sym):
         ret = self.ctype(sym.ret) if sym.ret != VOID else "void"
         params = ", ".join(f"{self.ctype(t)} {l.cname}" for t, l in zip(sym.params, getattr(sym, "param_locals", [])))
+        if getattr(sym, "closure", None) is not None:
+            params = "void *cb_env" + (", " + params if params else "")
         return f"{'' if sym.export else 'static '}{ret} {sym.cname}({params or 'void'})"
 
     def gen_fn(self, sym):
@@ -1224,6 +1311,13 @@ class CodeGen:
         self.loop_bases = []
         self.try_stack = []
         self.poll()
+        if not self.gc:
+            self.find_autofree(sym.node.body)       # under --gc the collector reclaims it instead
+        clo = getattr(sym, "closure", None)
+        if clo is not None and clo.caps:
+            self.emit(f"struct {sym.cname}_env *cb_e = (struct {sym.cname}_env *)cb_env;")
+        elif clo is not None:
+            self.emit("(void)cb_env;")
         for loc in getattr(sym, "param_locals", []):
             if loc.glue:
                 self.emit(f"bool {loc.cname}__live = 1;")
@@ -1235,7 +1329,23 @@ class CodeGen:
             self.emit(f"return ({self.ctype(sym.ret)}){{0}};" if sym.ret.inner == VOID else "__builtin_unreachable();")
         elif sym.ret != VOID:
             self.emit("__builtin_unreachable();")
-        return f"{self.sig(sym)} {{\n" + "\n".join(self.out) + "\n}\n"
+        text = f"{self.sig(sym)} {{\n" + "\n".join(self.out) + "\n}\n"
+        if clo is not None and clo.caps:
+            text = self.closure_drop(sym, clo) + text
+        return text
+
+    def closure_env(self, sym, clo):
+        fields = " ".join(f"{self.ctype(p.ty)}{'*' if p.byref else ''} c{i};" for i, (_, p) in enumerate(clo.caps.items()))
+        return f"struct {sym.cname}_env {{ {fields} }};"
+
+    def closure_drop(self, sym, clo):
+        L = [f"static void {sym.cname}_drop(void *cb_p) {{", f"    struct {sym.cname}_env *cb_e = (struct {sym.cname}_env *)cb_p;"]
+        for i, (_, p) in enumerate(clo.caps.items()):
+            if not p.byref and self.ck.has_glue(p.ty):
+                L.append(f"    {self.glue_fn(p.ty)}(&cb_e->c{i});")
+        L.append("    cb_own_free(cb_e);")
+        L.append("}")
+        return "\n".join(L) + "\n"
 
     def const_def(self, sym):
         v = sym.value
@@ -1306,7 +1416,12 @@ class CodeGen:
         ck = self.ck
         fns = [s for s in ck.fns if not s.extern]
         bodies = [self.gen_fn(s) for s in fns]
-        protos = [self.sig(s) + ";" for s in fns]
+        protos = [self.sig(s) + ";" + (f"\nstatic void {s.cname}_drop(void *);" if getattr(s, "closure", None) is not None
+                                       and s.closure.caps else "") for s in fns]
+        for s in fns:
+            if getattr(s, "closure", None) is not None and s.closure.caps:
+                for _, p in s.closure.caps.items():
+                    self.ctype(p.ty)
         glue = []                # destructor glue (generating one may require more)
         while self.glue_todo:
             name, t = self.glue_todo.pop(0)
@@ -1442,6 +1557,11 @@ class CodeGen:
                 L.append(f"struct {name} {{ int32_t err; {inner} val; }};")
         L.append("")
 
+        envs = [self.closure_env(s, s.closure) for s in fns if getattr(s, "closure", None) is not None and s.closure.caps]
+        if envs:
+            L.append("/* closure environments */")
+            L += envs
+            L.append("")
         L.append("/* constants */")
         L += consts
         L.append("")

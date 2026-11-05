@@ -128,10 +128,39 @@ def check_for(spec, kind):
     return None
 
 
+def _scan_placeholder(b, i):
+    """From just after a `{`: the index of the matching `}` and of the top-level `:` that starts the spec (-1 if none).
+    Brackets, string and character literals and `::` are skipped, so `{m.get(\"k\"):>4}` splits where it should."""
+    depth, n, colon = 0, len(b), -1
+    while i < n:
+        c = b[i]
+        if c in (34, 39):                               # " or ' : skip the literal
+            q = c
+            i += 1
+            while i < n and b[i] != q:
+                i += 2 if b[i] == 92 else 1
+        elif c in (40, 91, 123):
+            depth += 1
+        elif c in (41, 93):
+            depth -= 1
+        elif c == 125:
+            if depth <= 0:
+                return i, colon
+            depth -= 1
+        elif c == 58 and depth == 0 and colon == -1:
+            if b[i + 1:i + 2] == b":":
+                i += 1
+            else:
+                colon = i
+        i += 1
+    return -1, -1
+
+
 def parse_template(b):
     """Split a Rust-style format string into pieces. `{{` and `}}` are literal braces; `{arg:spec}` is a placeholder whose
-    arg is empty (the next positional argument), an index (`{0}`), or a name / dotted path (`{total}`, `{p.pos.x}`).
-    Returns a list of ("lit", bytes) and ("arg", ref, spec) where ref is None, an int or a str. Raises SpecError."""
+    arg is empty (the next positional argument), an index (`{0}`), a name / dotted path (`{total}`, `{p.pos.x}`) or any
+    expression (`{a + b}`). Returns a list of ("lit", bytes) and ("arg", ref, spec) where ref is None, an int, a str
+    or ("expr", text). Raises SpecError."""
     out, buf, i, n = [], bytearray(), 0, len(b)
     while i < n:
         c = b[i]
@@ -140,11 +169,14 @@ def parse_template(b):
                 buf.append(123)
                 i += 2
                 continue
-            j = b.find(b"}", i)
+            j, colon = _scan_placeholder(b, i + 1)
             if j == -1:
                 raise SpecError("unclosed `{` in the format string", "close it with `}`, or write `{{` for a literal brace")
             inner = b[i + 1:j].decode("utf-8", "replace")
-            ref, _, spec = inner.partition(":")
+            if colon == -1:
+                ref, spec = inner, ""
+            else:
+                ref, spec = b[i + 1:colon].decode("utf-8", "replace"), b[colon + 1:j].decode("utf-8", "replace")
             ref = ref.strip()
             if buf:
                 out.append(("lit", bytes(buf)))
@@ -156,9 +188,7 @@ def parse_template(b):
             elif all(p.isidentifier() for p in ref.split(".")):
                 r = ref
             else:
-                raise SpecError(f"`{{{inner}}}` is not a valid placeholder",
-                                "a placeholder holds nothing, an argument number, or a name: `{}`, `{0}`, `{total}`; "
-                                "put expressions in the argument list: `println(\"{}\", a + b)`")
+                r = ("expr", ref)                      # any other expression: `{a + b}`, `{f(x):>5}`, `{xs[0]}`
             out.append(("arg", r, spec))
             i = j + 1
             continue

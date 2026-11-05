@@ -8,7 +8,8 @@ import re
 from .timing import TIMINGS
 from .diag import suggest
 from .parser import N, Parser
-from .types import (INTS, PRIMS, Ty, I8, I16, I32, I64, U8, U16, U32, U64, F32, F64, BOOL, STR, VOID,
+from .borrowck import BorrowCk
+from .types import (clo as clo_ty, INTS, PRIMS, Ty, I8, I16, I32, I64, U8, U16, U32, U64, F32, F64, BOOL, STR, VOID,
                     ERR, POISON, STRING, REGION, ptr, arr, slc, eu, opt, fnty, same)
 
 BUILTINS = {"print", "println", "format", "panic", "assert", "alloc", "free", "exit", "to_str",
@@ -83,8 +84,53 @@ class Local:
         self.rdepth = 0           # how many `region` blocks enclose its declaration
         self.taint = None         # the region (a handle Local) whose memory this variable may point into
         self.region_handle = False
-        self.sdepth = 0           # how many block scopes enclose its declaration
-        self.own_src = None       # the `Own` local whose value this pointer variable may point into
+        self.captured = False     # a proxy for a variable of an enclosing function, used inside a closure body
+        self.byref = False
+        self.written = False
+        self.outer = None
+
+
+class BckEntry:
+    """A checked function body waiting for the borrow checker (which runs after everything is checked, to use call summaries)."""
+
+    def __init__(self, sym, body, params, context):
+        self.sym, self.body, self.params, self.context = sym, body, list(params), context
+
+
+class ClosureInfo:
+    """One closure expression: the variables it captures (outer Local -> the proxy Local used inside its body)."""
+
+    def __init__(self, move, span):
+        self.move = move
+        self.span = span
+        self.caps = {}
+        self.sym = None
+
+    def capture(self, loc):
+        p = self.caps.get(loc)
+        if p is None:
+            idx = len(self.caps)
+            byref = not self.move
+            cname = f"(*cb_e->c{idx})" if byref else f"(cb_e->c{idx})"
+            p = Local(loc.name, loc.ty, loc.mut, cname, loc.span)
+            p.used = True
+            p.captured = True
+            p.byref = byref
+            p.written = False
+            p.outer = loc
+            p.region_handle = loc.region_handle
+            p.taint = loc.taint
+            loc.used = True
+            self.caps[loc] = p
+        return p
+
+
+class ClosureScope(dict):
+    """The parameter scope of a closure body: looking a name up through it captures the variable."""
+
+    def __init__(self, info):
+        super().__init__()
+        self.clo = info
 
 
 class FnInfo:
@@ -120,6 +166,8 @@ class Checker:
         self.tenv = {}        # type parameter bindings while checking a generic instance
         self.inst_cache = {}
         self.pending = []
+        self.bck_entries = []
+        self.opt_consumed = set()   # `x.unwrap()` receivers already moved (a call can be checked more than once)
         self.n_inst = 0
         self.glue = {}
         self.glue_busy = set()
@@ -142,6 +190,10 @@ class Checker:
             self.declare(m)
             if m.name == "std.list" and m.is_std and not self.nostd and "List" in m.syms:
                 self.prelude_types["List"] = m.syms["List"]
+            if m.name == "std.iter" and m.is_std and not self.nostd:
+                for tn in ("Iter", "Pair", "Indexed"):
+                    if tn in m.syms:
+                        self.prelude_types[tn] = m.syms[tn]
             if m.name == "std.fmt" and m.is_std and not self.nostd and "Display" in m.syms:
                 self.prelude_traits["Display"] = m.syms["Display"]
         for m in self.mods:
@@ -156,6 +208,8 @@ class Checker:
             self.check_bodies(m)
         while self.pending:
             self.check_fn_body(self.pending.pop(0))
+        if self.bck_entries and self.d.error_count == 0:
+            BorrowCk(self).run_all(self.bck_entries)
         self.check_struct_cycles()
         for m in self.mods:
             for alias, imp in m.imports.items():
@@ -329,7 +383,7 @@ class Checker:
             s.method_name = fn.name
             s.has_self = bool(fn.params) and fn.params[0].name == "self"
             s.self_mut = s.has_self and getattr(fn.params[0], "self_mut", False)
-            s.owner_key = key
+            s.self_mut = s.has_self and (getattr(fn.params[0], "self_mut", False) or getattr(fn.params[0], "mut", False))
             if self.define(m, s, fn.span):
                 table[fn.name] = s
                 if not s.tparams:
@@ -394,7 +448,7 @@ class Checker:
                 base += "<" + ",".join(self.canon(a, m, selfc) for a in tn.args) + ">"
             return base
         if k == "TPtr":
-            return "*" + self.canon(tn.inner, m, selfc)
+            return ("*const " if getattr(tn, "ro", False) else "*") + self.canon(tn.inner, m, selfc)
         if k == "TSlice":
             return "[]" + self.canon(tn.inner, m, selfc)
         if k == "TArray":
@@ -406,6 +460,9 @@ class Checker:
         if k == "TFn":
             ret = self.canon(tn.ret, m, selfc) if tn.ret is not None else "void"
             return "fn(" + ",".join(self.canon(x, m, selfc) for x in tn.params) + ")->" + ret
+        if k == "TClo":
+            ret = self.canon(tn.ret, m, selfc) if tn.ret is not None else "void"
+            return "clo(" + ",".join(self.canon(x, m, selfc) for x in tn.params) + ")->" + ret
         return "?"
 
     def tn_text(self, tn):
@@ -413,7 +470,7 @@ class Checker:
         if k == "TName":
             return ".".join(tn.path) + (f"<{', '.join(self.tn_text(a) for a in tn.args)}>" if tn.args else "")
         if k == "TPtr":
-            return "*" + self.tn_text(tn.inner)
+            return ("*const " if getattr(tn, "ro", False) else "*") + self.tn_text(tn.inner)
         if k == "TSlice":
             return "[]" + self.tn_text(tn.inner)
         if k == "TArray":
@@ -424,6 +481,8 @@ class Checker:
             return self.tn_text(tn.inner) + "?"
         if k == "TFn":
             return f"fn({', '.join(self.tn_text(x) for x in tn.params)})" + (f" -> {self.tn_text(tn.ret)}" if tn.ret is not None else "")
+        if k == "TClo":
+            return f"|{', '.join(self.tn_text(x) for x in tn.params)}|" + (f" -> {self.tn_text(tn.ret)}" if tn.ret is not None else "")
         return "?"
 
     def sig_text(self, fn):
@@ -697,13 +756,19 @@ class Checker:
             return POISON
         if k == "TPtr":
             inner = self.resolve_type(tn.inner, m, allow_void=True)
-            return POISON if inner.poison else ptr(inner)
+            return POISON if inner.poison else ptr(inner, getattr(tn, "ro", False))
         if k == "TFn":
             ps = [self.resolve_type(p, m) for p in tn.params]
             ret = self.resolve_type(tn.ret, m, allow_void=True) if tn.ret is not None else VOID
             if ret.poison or any(p.poison for p in ps):
                 return POISON
             return fnty(ps, ret)
+        if k == "TClo":
+            ps = [self.resolve_type(p, m) for p in tn.params]
+            ret = self.resolve_type(tn.ret, m, allow_void=True) if tn.ret is not None else VOID
+            if ret.poison or any(p.poison for p in ps):
+                return POISON
+            return clo_ty(ps, ret)
         if k == "TSlice":
             inner = self.resolve_type(tn.inner, m)
             return POISON if inner.poison else slc(inner)
@@ -1048,9 +1113,15 @@ class Checker:
                             help=f"if this is intentional, rename it to `_{loc.name}`")
 
     def lookup(self, name):
+        crossed = []
         for sc in reversed(self.scopes):
             if name in sc:
-                return sc[name]
+                loc = sc[name]
+                for info in reversed(crossed):         # outermost closure first
+                    loc = info.capture(loc)
+                return loc
+            if isinstance(sc, ClosureScope):
+                crossed.append(sc.clo)
         return None
 
     def alloc_cname(self, name):
@@ -1076,7 +1147,6 @@ class Checker:
                          notes=[f"first declared at line {old.span.line}"],
                          help="use a different name, or assign to the existing variable (declare it with `let mut`)")
         loc = Local(name, ty, mut, self.alloc_cname(name), span, is_param)
-        loc.sdepth = len(self.scopes)
         loc.glue = (not ty.poison) and self.has_glue(ty)
         loc.rdepth = self.fn.rdepth if self.fn is not None else 0
         sc[name] = loc
@@ -1105,8 +1175,11 @@ class Checker:
         s.param_locals = []
         for p, t in zip(it.params, s.params):
             s.param_locals.append(self.declare_local(p.name, t, getattr(p, "mut", False), p.name_span, is_param=True))
+        n_err = self.d.error_count
         self.check_block(it.body)
         self.pop()
+        if self.d.error_count == n_err:           # the borrow checker needs a fully typed body
+            self.bck_entries.append(BckEntry(s, it.body, s.param_locals, self.d.context))
         if s.ret.kind != "eu" and s.ret != VOID and not s.ret.poison and not self.terminates(it.body):
             self.d.error(it.span, f"function `{s.name}` does not return a value on every path",
                          label=f"expected `{s.ret}` to be returned",
@@ -1228,11 +1301,31 @@ class Checker:
             self.unify(tn.inner, ty.inner, sym, b)
         elif k == "TErrUnion" and ty.kind == "eu":
             self.unify(tn.inner, ty.inner, sym, b)
-        elif k == "TFn" and ty.kind == "fn" and len(tn.params) == len(ty.params):
+        elif k in ("TFn", "TClo") and ty.kind == {"TFn": "fn", "TClo": "clo"}[k] and len(tn.params) == len(ty.params):
             for a, p in zip(tn.params, ty.params):
                 self.unify(a, p, sym, b)
             if tn.ret is not None:
                 self.unify(tn.ret, ty.inner, sym, b)
+
+    def clo_hint(self, tn, sym, b):
+        """The closure type a closure argument is checked against: the parameter types known so far (the rest unknown)."""
+        saved = (self.m, self.tenv)
+        self.m, self.tenv = sym.mod, {**saved[1], **b}
+
+        def known(x):
+            if x.kind == "TName" and len(x.path) == 1 and x.path[0] in sym.tparams and x.path[0] not in b and not x.args:
+                return False
+            return all(known(c) for c in (x.args if x.kind == "TName" else [getattr(x, "inner", None)] if hasattr(x, "inner") else [])
+                       if c is not None)
+        try:
+            ps = [self.resolve_type(x, sym.mod) if known(x) else POISON for x in tn.params]
+            if tn.ret is None:
+                ret = VOID
+            else:
+                ret = self.resolve_type(tn.ret, sym.mod, allow_void=True) if known(tn.ret) else POISON
+        finally:
+            self.m, self.tenv = saved
+        return clo_ty(ps, ret)
 
     def is_bare_param(self, tn, sym, b):
         return tn.kind == "TName" and len(tn.path) == 1 and tn.path[0] in sym.tparams and tn.path[0] in b
@@ -1267,11 +1360,16 @@ class Checker:
                 b[n] = t
         else:
             for a, p in zip(e.args, params):
-                if not self.untyped(a):
+                if not self.untyped(a) and a.kind != "Closure":
                     self.unify(p.tyn, self.check(a, None), sym, b)
             for a, p in zip(e.args, params):
-                if self.untyped(a) and not self.is_bare_param(p.tyn, sym, b):
+                if self.untyped(a) and a.kind != "Closure" and not self.is_bare_param(p.tyn, sym, b):
                     self.unify(p.tyn, self.check(a, None), sym, b)
+            for a, p in zip(e.args, params):                    # closures last: their parameter types come from what is already known
+                if a.kind == "Closure" and p.tyn.kind == "TClo":
+                    self.unify(p.tyn, self.check(a, self.clo_hint(p.tyn, sym, b)), sym, b)
+                elif a.kind == "Closure":
+                    self.check(a, None)
             r = sym.node.ret
             if exp is not None and not exp.poison and r is not None:
                 if r.kind == "TErrUnion":
@@ -1299,6 +1397,8 @@ class Checker:
             return True                 # an owned String frees its buffer when it goes out of scope
         if k in ("arr", "opt"):
             return self.has_glue(t.inner)
+        if k == "clo":
+            return True                 # a closure owns its captured environment
         if k != "struct":
             return False
         key = t.key
@@ -1320,6 +1420,10 @@ class Checker:
             return                      # (a `String` converted to a `str` view is a borrow, not a move)
         k = e.kind
         if k == "Ident" and getattr(e, "local", None) is not None:
+            if e.local.captured:
+                self.d.error(e.span, f"cannot move `{e.name}` out of a closure's captured variables",
+                             label="a closure can run more than once", help="clone it, or borrow it with `&`")
+                return
             e.move = True
             self.moved[e.local] = e.span
             return
@@ -1361,6 +1465,7 @@ class Checker:
         if outer:
             frame = {"breaks": [], "conts": []}
             fn.loop_stack[-1] = frame
+            self.opt_consumed = set()
             self.moved = {**m0, **outer}
             body()
             carry = ([] if self.terminates(body_node) else [self.moved]) + frame["conts"]
@@ -1406,6 +1511,14 @@ class Checker:
             help = "this expression produces no value"
         self.d.error(e.span, what, label=f"expected `{exp}`, found `{got}`", help=help)
 
+    def ro_violation(self, e, t, exp):
+        """Reports (and returns True) when a `*const T` would become a writable `*T`."""
+        if t.kind == "ptr" and exp.kind == "ptr" and t.ro and not exp.ro and same(t, exp) and not getattr(e, "recv_ok", False):
+            self.d.error(e.span, "cannot turn a read-only pointer into a writable one", label=f"expected `{exp}`, found `{t}`",
+                         help=f"take `*const {exp.inner}` instead, or cast with `as` if you really must")
+            return True
+        return False
+
     def ptr_ok(self, exp, t):
         """`*T` converts implicitly to `*void` (as in C), never the other way round."""
         return exp.kind == "ptr" and exp.inner == VOID and t.kind == "ptr"
@@ -1430,8 +1543,12 @@ class Checker:
             return exp
         if t.is_numeric and exp.is_numeric and t != exp:
             return exp if self.implicit_conv(e, t, exp) else POISON
+        if self.ro_violation(e, t, exp):
+            return POISON
         if self.ptr_ok(exp, t):
             return exp
+        if exp.kind == "ptr" and t.kind == "ptr" and same(t, exp) and exp.ro and not t.ro:
+            return exp                                       # `*T` -> `*const T` is always fine
         if not same(t, exp):
             self.mismatch(e, exp, t)
             return POISON
@@ -1648,6 +1765,9 @@ class Checker:
         e.opt_method = n
         if n in ("is_some", "is_none"):
             return BOOL
+        if n in ("unwrap", "unwrap_or") and self.has_glue(t):
+            self.consume(c.obj)             # the payload moves out: the optional is spent
+            self.opt_consumed.add(id(c.obj))
         if n == "unwrap_or":
             self.expect(e.args[0], t)
         return t
@@ -1758,6 +1878,11 @@ class Checker:
                                  help="add the value after the string, or name it: `{total}` with `total = ...`" if not pos else None)
                     return False
                 ex = pos[ref]
+            elif isinstance(ref, tuple):                          # an expression written inside the braces
+                ex = self.parse_fmt_expr(ref[1], t)
+                if ex is None:
+                    return False
+                uses[id(ex)] = 1
             elif ref in named:
                 ex = named[ref].expr
             else:                                                 # the variable (or field path) of that name
@@ -1791,6 +1916,42 @@ class Checker:
             return False
         args[tidx:] = [N("FStr", t.span, parts=parts)]
         return True
+
+    def parse_fmt_expr(self, text, at):
+        """Parses the expression written inside `{...}` of a format string; every node gets the string literal's span."""
+        from .parser import Parser, N as Node
+        from .diag import Source, Diagnostics
+        tmp = Diagnostics()
+        src = Source(at.span.src.path, text)
+        try:
+            p = Parser(src, tmp)
+            ex = p.parse_expr()
+            if p.tok.kind != "eof" and not tmp.has_errors:
+                tmp.error(p.tok.span, "unexpected text after the expression")
+        except Exception:
+            ex = None
+            if not tmp.has_errors:
+                tmp.error(at.span, "not a valid expression")
+        if tmp.has_errors or ex is None:
+            self.d.error(at.span, f"`{{{text}}}` is not a valid placeholder", label="in this format string",
+                         help=f"the expression did not parse ({tmp.items[0].msg}); placeholders hold nothing, a number, or an expression: `{{}}`, `{{0}}`, `{{a + b}}`")
+            return None
+
+        def fix(n):
+            if isinstance(n, Node):
+                n.span = at.span
+                for k, v in list(n.__dict__.items()):
+                    if k in ("kind", "span"):
+                        continue
+                    if k.endswith("span"):
+                        setattr(n, k, at.span)
+                    else:
+                        fix(v)
+            elif isinstance(n, (list, tuple)):
+                for x in n:
+                    fix(x)
+        fix(ex)
+        return ex
 
     def ex_FStr(self, e, exp):
         from .fmtspec import parse_spec, check_for, SpecError
@@ -1857,6 +2018,83 @@ class Checker:
         return STR
 
     # ================================================================ names
+    def ex_Closure(self, e, exp):
+        cached = getattr(e, "clo_type", None)
+        if cached is not None:
+            return cached
+        hint = exp if exp is not None and exp.kind == "clo" and len(exp.params) == len(e.params) else None
+        info = ClosureInfo(e.move, e.span)
+        ptys = []
+        for i, p in enumerate(e.params):
+            if p.tyn is not None:
+                t = self.resolve_type(p.tyn, self.m)
+            elif hint is not None and not hint.params[i].poison:
+                t = hint.params[i]
+            else:
+                self.d.error(p.span, f"cannot infer the type of the closure parameter `{p.name}`",
+                             label="type annotations needed", help=f"write `|{p.name}: <type>|`")
+                t = POISON
+            ptys.append(t)
+        if e.ret is not None:
+            rt = self.resolve_type(e.ret, self.m, allow_void=True)
+        elif hint is not None and not hint.inner.poison:
+            rt = hint.inner
+        else:
+            rt = None
+        self.n_inst += 1
+        sym = Sym("fn", "closure", self.m, None, False)
+        sym.cname = f"{self.m.cprefix}__clo{self.n_inst}"
+        sym.params = list(ptys)
+        sym.closure = info
+        info.sym = sym
+        saved = (self.fn, self.scopes, self.moved, self.reinit_ok)
+        scope = ClosureScope(info)
+        self.scopes = self.scopes + [scope]
+        self.moved = {}
+        self.reinit_ok = None
+        sym.ret = rt if rt is not None else VOID
+        self.fn = FnInfo(sym)
+        sym.param_locals = [self.declare_local(p.name, t, False, p.name_span, is_param=True) for p, t in zip(e.params, ptys)]
+        if e.expr_body:
+            if rt is None:
+                t = self.check(e.body, None)
+                rt = POISON if t.poison else t
+                sym.ret = rt
+                self.fn.ret = rt
+            st = N("ExprStmt", e.body.span, expr=e.body) if rt == VOID else N("Return", e.body.span, expr=e.body)
+            body = N("Block", e.body.span, stmts=[st], end_span=e.body.span)
+        else:
+            body = e.body
+        sym.node = N("Fn", e.span, name="closure", params=e.params, ret=e.ret, body=body, pub=False)
+        n_err = self.d.error_count
+        self.check_block(body)
+        self.pop()
+        if self.d.error_count == n_err:
+            self.bck_entries.append(BckEntry(sym, body, sym.param_locals, self.d.context))
+        if sym.ret.kind != "eu" and sym.ret != VOID and not sym.ret.poison and not self.terminates(body):
+            self.d.error(e.span, "this closure does not return a value on every path",
+                         label=f"expected `{sym.ret}` to be returned", help="add a `return` at the end, or make every branch return")
+        self.fn, self.scopes, self.moved, self.reinit_ok = saved
+        # the captures, seen from the enclosing function
+        for outer, proxy in info.caps.items():
+            if outer in self.moved:
+                self.d.error(e.span, f"the closure uses `{outer.name}`, which was moved earlier", label="value used after it was moved",
+                             notes=[f"`{outer.name}` was moved at line {self.moved[outer].line}"])
+            if info.move and outer.glue:
+                self.moved[outer] = e.span
+        sym.mod = self.m
+        sym.export = False
+        sym.extern = False
+        self.fns.append(sym)
+        e.sym = sym
+        e.info = info
+        e.captures = list(info.caps.items())
+        e.local_body = body
+        if sym.ret.poison or any(t.poison for t in ptys):
+            return POISON
+        e.clo_type = clo_ty(ptys, sym.ret)
+        return e.clo_type
+
     def ex_Ident(self, e, exp):
         if e.name == "null" and not self.lookup("null"):
             e.is_null = True
@@ -1875,7 +2113,7 @@ class Checker:
                 self.d.error(e.span, f"the region `{e.name}` can only be used as the last argument of `alloc_in`",
                              help=f"write `alloc_in(T, n, {e.name})`")
                 return POISON
-            if loc in self.moved and e is not self.reinit_ok:
+            if loc in self.moved and e is not self.reinit_ok and id(e) not in self.opt_consumed:
                 self.d.error(e.span, f"use of moved value `{e.name}`", label="value used after it was moved",
                              notes=[f"`{e.name}` was moved at line {self.moved[loc].line}, and its type has a destructor, so it cannot be copied"],
                              help="move it only once, pass a pointer (`&" + e.name + "`) instead, or re-assign it before using it again")
@@ -1992,6 +2230,9 @@ class Checker:
         ot = self.check(e.obj, None)
         if ot.poison:
             return POISON
+        while ot.kind == "ptr" and ot.inner.kind == "ptr":          # `**T`: reach through every pointer
+            e.obj = N("Unary", e.obj.span, op="*", expr=e.obj)
+            ot = self.check(e.obj, None)
         base = ot
         e.mode = "field"
         if ot.kind == "ptr" and (ot.inner.kind in ("struct", "arr", "slice") or ot.inner in (STR, STRING)):
@@ -2085,6 +2326,8 @@ class Checker:
                 self.d.error(e.span, "cannot take the address of a temporary value",
                              help="store it in a `let mut` variable first")
                 return POISON
+            if self.through_ro(e.expr):
+                return ptr(t, True)                  # a pointer into read-only memory is read-only too
             err = None if getattr(e, "auto_ref", False) else self.place_mut(e.expr)
             if err:
                 self.d.error(e.span, "cannot take the address of an immutable binding", label=err[0], help=err[1])
@@ -2104,12 +2347,23 @@ class Checker:
             return True
         return False
 
+    def readonly_self(self, e):
+        """Is `e` the `self` of the method being checked, and was the method declared with plain `self` (not `mut self`)?"""
+        if e.kind != "Ident":
+            return False
+        loc = getattr(e, "local", None)
+        fn = self.fn
+        return (loc is not None and loc.is_param and loc.name == "self" and fn is not None and fn.sym is not None
+                and getattr(fn.sym, "has_self", False) and not getattr(fn.sym, "self_mut", False))
+
     def place_mut(self, e):
         """None if `e` is a mutable place; otherwise (label, help)."""
         k = e.kind
         if k == "Ident":
             loc = e.local
             if loc.mut:
+                if loc.captured:
+                    loc.written = True
                 return None
             if loc.is_param:
                 return (f"`{loc.name}` is a parameter, and parameters are immutable by default",
@@ -2117,6 +2371,12 @@ class Checker:
             return (f"`{loc.name}` is declared without `mut`", f"declare it with `let mut {loc.name}`")
         if k == "Field":
             if e.mode == "ptrfield":
+                if e.obj.ty.kind == "ptr" and e.obj.ty.ro:
+                    return ("this pointer is `*const`, so nothing may be written through it",
+                            "take a `*T` (without `const`) if the function must change the value")
+                if self.readonly_self(e.obj):
+                    return ("this method takes `self`, which only reads the object",
+                            "declare the method with `mut self` so it may change its fields (the caller then needs `let mut`)")
                 return None
             return self.place_mut(e.obj)
         if k == "Index":
@@ -2127,8 +2387,24 @@ class Checker:
                 return ("strings are immutable", "use a `[]u8` slice created with `alloc(u8, n)`")
             return None
         if k == "Unary" and e.op == "*":
+            if e.expr.ty.kind == "ptr" and e.expr.ty.ro:
+                return ("this pointer is `*const`, so nothing may be written through it",
+                        "take a `*T` (without `const`) if the function must change the value")
             return None
         return ("not an assignable place", None)
+
+    def through_ro(self, e):
+        """Does the place `e` lie behind a `*const` pointer (so a pointer to it must be `*const` too)?"""
+        k = e.kind
+        if k == "Field":
+            if e.mode == "ptrfield":
+                return (e.obj.ty.kind == "ptr" and e.obj.ty.ro) or self.readonly_self(e.obj)
+            return self.through_ro(e.obj)
+        if k == "Index":
+            return self.through_ro(e.obj) if e.obj.ty.kind == "arr" else False
+        if k == "Unary" and e.op == "*":
+            return e.expr.ty.kind == "ptr" and e.expr.ty.ro
+        return False
 
     def ex_Binary(self, e, exp):
         op = e.op
@@ -2679,13 +2955,13 @@ class Checker:
             for a in e.args:
                 self.check(a)
             return POISON
-        if t.kind != "fn":
+        if t.kind not in ("fn", "clo"):
             self.d.error(c.span, f"cannot call a value of type `{t}`", label="not a function",
-                         help="only functions and function pointers (`fn(A) -> R`) can be called")
+                         help="only functions, function pointers (`fn(A) -> R`) and closures (`|A| -> R`) can be called")
             for a in e.args:
                 self.check(a)
             return POISON
-        e.indirect = True
+        e.indirect = "clo" if t.kind == "clo" else True
         self.check_args(e, t.params, "this function pointer", sig=str(t))
         return t.inner
 
@@ -2740,50 +3016,10 @@ class Checker:
         elif e.targs:
             self.d.error(e.span, f"function `{sym.name}` is not generic and takes no type arguments")
         e.sym = sym
-        self.mark_own_borrow(e, sym)
         sig = f"fn {sym.name}({', '.join(f'{p.name}: {t}' for p, t in zip(sym.node.params, sym.params))}{', ...' if sym.variadic else ''})" \
               + (f" -> {sym.ret}" if sym.ret != VOID else "")
         self.check_args(e, sym.params, f"function `{sym.name}`", sig=sig, variadic=sym.variadic)
         return sym.ret
-
-    def mark_own_borrow(self, e, sym):
-        """`owner.at()` on a local `std.own` owner borrows from it: remember which local, for the dangling checks below."""
-        if sym.name != "Own.at" or sym.mod.name != "std.own" or not getattr(e, "method_recv", False):
-            return
-        r = e.args[0]
-        while r.kind == "Unary" and r.op in ("&", "*"):
-            r = r.expr
-        loc = getattr(r, "local", None) if r.kind == "Ident" else None
-        if loc is not None and loc.ty.kind == "struct":
-            e.own_src = loc
-
-    def own_src(self, e):
-        """The local `Own` whose payload the pointer value of expression `e` may refer to, or None."""
-        t = getattr(e, "ty", None)
-        if t is None or t.poison or not self.holds_ptr(t):
-            return None
-        if e.kind == "Call":
-            src = getattr(e, "own_src", None)
-            if src is not None:
-                return src
-        if e.kind == "Ident":
-            loc = getattr(e, "local", None)
-            return loc.own_src if loc is not None else None
-        best = None
-        for k, v in e.__dict__.items():
-            if k in ("span", "ty", "local", "sym", "handler", "own_src"):
-                continue
-            for c in (v if isinstance(v, (list, tuple)) else [v]):
-                if isinstance(c, N) and c.kind != "Block" and hasattr(c, "ty"):
-                    r = self.own_src(c)
-                    if r is not None and (best is None or r.sdepth > best.sdepth):
-                        best = r
-        return best
-
-    def dangling_error(self, span, owner, what):
-        self.d.error(span, f"pointer into the owned value `{owner.name}` {what}",
-                     label=f"`{owner.name}` is freed when its scope ends, so this pointer would dangle",
-                     help="move the owner out instead (return it or store it), or keep a checked `Ref` with `.ref()`")
 
     def find_method(self, e):
         """`Type.f(args)` / `value.f(args)`: look the function up among the methods of the type.
@@ -2825,6 +3061,9 @@ class Checker:
             for a in e.args:
                 self.check(a)
             return "bad"
+        while ot.kind == "ptr" and ot.inner.kind == "ptr":          # `**T`: reach through every pointer
+            obj = c.obj = N("Unary", obj.span, op="*", expr=obj)
+            ot = self.check(obj, None)
         if ot.kind == "opt" and c.name in self.OPT_METHODS:
             return "opt"
         base = ot.inner if (ot.kind == "ptr" and ot.inner != VOID) else ot
@@ -2872,6 +3111,14 @@ class Checker:
         by_ptr = p0.tyn.kind == "TPtr"
         if by_ptr:
             if ot.kind == "ptr":
+                obj.recv_ok = True                                      # (a `mut self` call gets its own error below)
+                if meth.self_mut and ot.ro:
+                    self.d.error(obj.span, f"cannot call `{meth.method_name}`, which takes `mut self`, through a `*const` pointer",
+                                 label="this pointer is read-only", help="take a `*T` (without `const`) instead")
+                if meth.self_mut and self.readonly_self(obj):
+                    self.d.error(obj.span, f"cannot call `{meth.method_name}`, which takes `mut self`, on the read-only `self`",
+                                 label="this method was declared with plain `self`",
+                                 help="declare the calling method with `mut self` too")
                 return obj                                          # already a pointer
             if cand != base:                                        # String -> str needs a by-value view, not a pointer
                 return obj
@@ -2879,6 +3126,7 @@ class Checker:
                 pass
             node = N("Unary", obj.span, op="&", expr=obj)
             node.auto_ref = not meth.self_mut                       # `self` may borrow immutable bindings; `mut self` may not
+            node.recv_ok = not meth.self_mut
             return node
         if ot.kind == "ptr":
             return N("Unary", obj.span, op="*", expr=obj)
@@ -3218,6 +3466,9 @@ class Checker:
     def st_Let(self, s):
         ann = self.resolve_type(s.tyn, self.m) if s.tyn else None
         t = self.check(s.init, ann)
+        # `let buf = alloc(T, n)`: a candidate for being freed automatically at the end of its scope (codegen checks it never escapes)
+        s.afree = (s.init.kind == "Call" and getattr(s.init, "builtin", None) == "alloc" and not t.poison
+                   and not self.has_glue(s.init.elem))
         if ann == STR and t == STRING:
             s.init.coerce = True
             t = STR
@@ -3227,6 +3478,8 @@ class Checker:
                 self.coerce(s.init, t, ann)
             elif ann.is_numeric and t.is_numeric and t != ann:
                 self.implicit_conv(s.init, t, ann)
+            elif self.ro_violation(s.init, t, ann):
+                pass
             elif self.ptr_ok(ann, t):
                 pass
             elif not same(t, ann):
@@ -3249,7 +3502,6 @@ class Checker:
         s.local = self.declare_local(s.name, ty, s.mut, s.name_span)
         if not ty.poison and self.holds_ptr(ty):
             s.local.taint = self.taint(s.init)
-            s.local.own_src = self.own_src(s.init)
 
     def cond(self, c):
         t = self.check(c, BOOL)
@@ -3313,6 +3565,9 @@ class Checker:
             s.mode = "range"
         else:
             ot = self.check(it, None)
+            proto = self.iter_protocol(ot)
+            if proto is not None:
+                return self.desugar_for(s, it, proto)
             if ot.poison:
                 vt = POISON
             elif ot.kind in ("arr", "slice"):
@@ -3340,6 +3595,38 @@ class Checker:
             self.pop()
         self.in_loop(s.body, body, True)
 
+    def iter_protocol(self, ot):
+        """How `for x in e` iterates a value of type `ot`: "next" (it is an iterator), "iter" (it has an `iter()` method), or None."""
+        if ot.poison or ot.kind != "struct":
+            return None
+        tbl = self.methods.get(self.type_key(ot), {})
+        nx = tbl.get("next")
+        if nx is not None and nx.has_self:
+            return "next"
+        if "iter" in tbl and tbl["iter"].has_self:
+            return "iter"
+        return None
+
+    def desugar_for(self, s, it, proto):
+        """`for x in e { body }` over an iterator becomes
+            { let mut it = e; loop { let o = it.next(); if o.is_none() { break; } let x = o.unwrap(); { body } } }
+        so the iterator is destroyed on every way out of the loop by the ordinary scope rules."""
+        sp = s.span
+        ident = lambda n: N("Ident", sp, name=n)
+        call = lambda obj, name: N("Call", sp, callee=N("Field", sp, obj=obj, name=name, name_span=sp), args=[], targ=None, targs=None)
+        src = it if proto == "next" else call(it, "iter")
+        var = s.var if s.var != "_" else "cb_x"
+        body = N("Block", sp, stmts=[
+            N("Let", sp, name="cb_o", mut=False, tyn=None, init=call(ident("cb_it"), "next"), name_span=sp),
+            N("If", sp, cond=call(ident("cb_o"), "is_none"), then=N("Block", sp, stmts=[N("Break", sp)], end_span=sp), els=None),
+            N("Let", sp, name=var, mut=False, tyn=None, init=call(ident("cb_o"), "unwrap"), name_span=s.var_span),
+            s.body], end_span=sp)
+        outer = N("Block", sp, stmts=[
+            N("Let", sp, name="cb_it", mut=True, tyn=None, init=src, name_span=sp),
+            N("Loop", sp, body=body)], end_span=sp)
+        s.desugared = outer
+        self.check_block(outer)
+
     # ------------------------------------------------------------ regions (lifetimes)
     def st_Region(self, s):
         fn = self.fn
@@ -3362,7 +3649,7 @@ class Checker:
             return t == REGION and False
         if k in ("enum", "err", "poison"):
             return False
-        if k == "arr":
+        if k in ("arr", "opt"):
             return self.holds_ptr(t.inner)
         if k == "struct":
             return any(self.holds_ptr(ft) for _, ft, _ in t.sym.fields)
@@ -3431,16 +3718,6 @@ class Checker:
                      help="copy what you need out of the region before it ends, or allocate it outside with `alloc`")
 
     def check_escape_store(self, target, value):
-        ov = self.own_src(value)
-        if ov is not None and ov not in self.moved:
-            root = target
-            while root.kind in ("Field", "Index"):
-                root = root.obj
-            rl = getattr(root, "local", None) if root.kind == "Ident" else None
-            if rl is not None and rl is not ov and rl.sdepth < ov.sdepth and not rl.is_param:
-                self.dangling_error(value.span, ov, "would outlive it if stored here")
-            if rl is not None and self.holds_ptr(rl.ty):
-                rl.own_src = ov if (rl.own_src is None or ov.sdepth > rl.own_src.sdepth) else rl.own_src
         tv = self.taint(value)
         if tv is None:
             return
@@ -3470,9 +3747,6 @@ class Checker:
         tx = self.taint(x)
         if tx is not None:
             self.escape_error(x.span, tx, "cannot be returned")
-        ox = self.own_src(x)
-        if ox is not None and ox not in self.moved:
-            self.dangling_error(x.span, ox, "cannot be returned")
         if T == STR and x.kind == "Ident" and getattr(x, "coerce", False) and getattr(x, "local", None) is not None \
                 and x.local.glue:
             self.d.error(x.span, f"cannot return a view of the local `String` `{x.name}`: it is destroyed when the function returns",

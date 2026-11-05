@@ -1,0 +1,14 @@
+struct P { x: i64, y: i64 }
+fn sq(n: i64) -> i64 { return n * n; }
+
+fn main() {
+    let a = 3;
+    let b = 4;
+    let p = P { x: 5, y: 6 };
+    let xs = [10, 20, 30];
+    println("{a + b} {sq(b)} {xs[1]}");
+    println("[{a * b:>5}] [{p.x - p.y:<4}] [{sq(a) + sq(b):03}]");
+    println("{{}} {a:?} {(a + 1) as f64 / 2.0:.2}");
+    let s = format("{a + b}-{sq(a):x}");
+    println(s);
+}

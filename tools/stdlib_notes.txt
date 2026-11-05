@@ -258,3 +258,31 @@ own.Rc.downgrade :: Makes a handle that does not keep the value alive. Use it fo
 own.Rc.weak_count :: How many `Weak` handles point at the value right now. :: `i64` ::
 own.Weak.upgrade :: Turns the handle back into an owner when the value is still alive. Safe to call while other threads drop their owners. :: an `Rc<T>`, or `null` when every owner is gone ::
 own.Weak.clone :: Makes another `Weak` handle to the same value. :: a `Weak<T>` ::
+iter.empty :: An iterator that produces nothing. :: an empty `Iter<T>` ::
+iter.sum :: Adds up every value. :: the total (`0` for an empty iterator) :: it=the values to add
+iter.product :: Multiplies every value together. :: the product (`1` for an empty iterator) :: it=the values to multiply
+iter.sum_f64 :: Adds up every `f64`. :: the total :: it=the values to add
+iter.Iter.next :: Produces the next value. :: the value, or `null` once the iterator is exhausted ::
+iter.Iter.map :: Applies `f` to every value as it is produced. :: a new `Iter<U>` :: f=the conversion
+iter.Iter.take :: Stops after `n` values. :: a new `Iter<T>` :: n=how many values to keep
+iter.Iter.skip :: Throws away the first `n` values. :: a new `Iter<T>` :: n=how many values to skip
+iter.Iter.take_while :: Produces values until `pred` is false for one, then stops. :: a new `Iter<T>` :: pred=looks at each value through a pointer
+iter.Iter.skip_while :: Throws values away until `pred` is false for one, then produces everything. :: a new `Iter<T>` :: pred=looks at each value through a pointer
+iter.Iter.chain :: Produces everything from this iterator, then everything from `other`. :: a new `Iter<T>` :: other=the iterator to continue with
+iter.Iter.enumerate :: Pairs every value with its position (starting at 0). :: a new `Iter<Indexed<T>>` ::
+iter.Iter.zip :: Pairs values from two iterators; stops when either runs out. :: a new `Iter<Pair<T, U>>` :: other=the second iterator
+iter.Iter.count :: Counts the values. :: the number of values ::
+iter.Iter.for_each :: Calls `f` with every value. :: nothing :: f=what to do with each value
+iter.Iter.fold :: Combines all values into one, starting from `init`. :: the final accumulated value :: init=the starting value; f=combines the accumulator and a value
+iter.Iter.collect :: Gathers every value into a list. :: a new `List<T>` ::
+iter.Iter.any :: True when `pred` is true for at least one value (stops at the first). :: `bool` :: pred=looks at each value through a pointer
+iter.Iter.all :: True when `pred` is true for every value (stops at the first failure). :: `bool` :: pred=looks at each value through a pointer
+iter.Iter.nth :: The value at position `n` (starting at 0). :: the value, or `null` if there are fewer :: n=the position
+iter.Iter.last :: The final value. :: the value, or `null` if there were none ::
+iter.Iter.min_by :: The smallest value under `cmp` (the first of equal ones). :: the value, or `null` if there were none :: cmp=negative, zero or positive like `qsort`
+set.HashSet.new :: Creates an empty set of strings. :: a new `HashSet` ::
+set.HashSet.has :: Checks membership. :: `true` if `v` is in the set :: v=the string to look for
+set.HashSet.remove :: Removes a member. :: `true` if it was present :: v=the string to remove
+set.HashSet.len :: Counts the members. :: the number of members ::
+set.HashSet.is_empty :: Checks whether the set has no members. :: `true` when empty ::
+set.HashSet.clear :: Removes every member. :: nothing ::

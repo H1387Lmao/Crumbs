@@ -1,0 +1,33 @@
+0 4 16 36 64 
+5050
+0 5 10 15 
+3 13 23 33 
+1 2 3 10 11 12 
+95 96 97 
+3 2 1 
+pear;fig;banana;
+banana;fig;pear;
+4 3 6
+13
+any long: true, all short: false
+position of fig: 1
+count 2
+0=pear 1=fig 2=banana 
+0:pear 1:fig 2:banana 
+15 3
+4
+3
+0
+true
+ids 1 2 3
+moved
+drop 11
+drop 13
+kept 2
+end of block
+drop 10
+drop 12
+drop 1
+drop 2
+drop 3
+done

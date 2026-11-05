@@ -1,0 +1,19 @@
+struct C { n: i64, k: i64 }
+impl C {
+    pub fn bump(mut self) { self.n += 1; }
+    pub fn get(self) -> i64 { return self.n; }
+}
+
+fn read(c: *const C) -> i64 { return c.n + c.get(); }
+fn bad_field(c: *const C) { c.n = 5; } // ERROR: cannot assign to an immutable place
+fn bad_method(c: *const C) { c.bump(); } // ERROR: through a `*const` pointer
+fn bad_conv(c: *const C) { let _p: *C = c; } // ERROR: cannot turn a read-only pointer into a writable one
+fn bad_deref(p: *const i64) { *p = 3; } // ERROR: cannot assign to an immutable place
+fn bad_inner(c: *const C) { let _q: *i64 = &c.n; } // ERROR: cannot turn a read-only pointer into a writable one
+
+fn main() {
+    let mut c = C { n: 1, k: 2 };
+    let r: *const C = &c;
+    println(read(r));
+    println(read(&c));
+}

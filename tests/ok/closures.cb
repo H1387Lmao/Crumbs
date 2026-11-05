@@ -1,0 +1,54 @@
+// Closures: `|a, b| expr` or `|a: T| -> R { block }`. They capture by reference; `move` copies (or moves) instead.
+struct Noisy { name: str }
+drop Noisy(self) { println("drop {}", self.name); }
+
+struct Button { label: str, on_click: |i32| -> i32 }
+
+fn apply(f: |i32| -> i32, x: i32) -> i32 { return f(x); }
+fn twice(f: |i32| -> i32, x: i32) -> i32 { return f(f(x)); }
+
+fn adder(n: i32) -> |i32| -> i32 {
+    return move |x| x + n;
+}
+
+fn counter() -> || -> i32 {
+    let mut n = 0;
+    return move || -> i32 { n += 1; return n; };
+}
+
+fn main() {
+    let k = 10;
+    let add = |x: i32| -> i32 { return x + k; };
+    println("{}", add(5));
+    println("{} {}", apply(|x| x * 2, 21), twice(|x| x + 3, 1));
+
+    let mut total = 0;
+    let mut bump = |d: i32| { total += d; };
+    bump(2);
+    bump(5);
+    println("total {}", total);
+
+    let add7 = adder(7);
+    println("{}", add7(1));
+    let mut c = counter();
+    println("{} {} {}", c(), c(), c());
+
+    let b = Button { label: "ok", on_click: |n| n * n };
+    println("{} -> {}", b.label, (b.on_click)(9));
+
+    // a captured value with a destructor is destroyed with the closure
+    {
+        let n = Noisy { name: "captured" };
+        let show = move || { println("using {}", n.name); };
+        show();
+        println("end of block");
+    }
+
+    // closures inside closures
+    let base = 100;
+    let outer = |a: i32| -> i32 {
+        let inner = |b: i32| -> i32 { return a + b + base; };
+        return inner(1);
+    };
+    println("{}", outer(20));
+}

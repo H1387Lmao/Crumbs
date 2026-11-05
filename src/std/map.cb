@@ -12,6 +12,8 @@
 // value's destructor. Values with destructors are moved in (`set`) and out (`remove`) or borrowed (`get`);
 // `get_or` needs a copyable value type. The iteration order of `for_each` and `keys` is unspecified.
 
+import std.iter;
+
 pub struct HashMap<V> {
     kk: []String,
     vv: []V,
@@ -184,4 +186,42 @@ impl<V> HashMap<V> {
     pub fn keys(self) -> List<String> { return keys(self); }
     pub fn clear(mut self) { clear(self); }
     pub fn release(mut self) { release(self); }
+}
+
+// ---- iteration ---------------------------------------------------------------------------------
+// the map must not change while an iterator over it is in use
+impl<V> HashMap<V> {
+    // (key, pointer to value) pairs
+    pub fn iter(self) -> iter.Iter<iter.Pair<str, *V>> {
+        let m = self;
+        let mut i = 0 as i64;
+        return iter.Iter { step: move || -> iter.Pair<str, *V>? {
+            while i < m.cap {
+                let j = i;
+                i += 1;
+                if m.st[j] == 1 { return iter.Pair { first: m.kk[j], second: &m.vv[j] }; }
+            }
+            return null;
+        } };
+    }
+
+    // pointers to the values
+    pub fn values(self) -> iter.Iter<*V> {
+        let m = self;
+        let mut i = 0 as i64;
+        return iter.Iter { step: move || -> (*V)? {
+            while i < m.cap {
+                let j = i;
+                i += 1;
+                if m.st[j] == 1 { return &m.vv[j]; }
+            }
+            return null;
+        } };
+    }
+
+    // the value under `key`, inserting `v` first when the key is missing
+    pub fn get_or_insert(mut self, key: str, v: V) -> *V {
+        if !has(self, key) { set(self, key, v); }
+        return get(self, key);
+    }
 }

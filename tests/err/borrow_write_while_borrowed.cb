@@ -1,0 +1,7 @@
+fn main() {
+    let mut x = 1;
+    let p = &x;
+    x = 2;  // ERROR: cannot assign to `x` because it is mutably borrowed
+    *p = 3;
+    println(x);
+}

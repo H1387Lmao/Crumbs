@@ -1,0 +1,19 @@
+import std.list;
+
+// the result of `first` borrows from its parameter, so the borrow of `l` lives as long as `p`
+fn first(l: *list.List<i32>) -> *i32 { return l.at(0); }
+
+// this one hands back a pointer that has nothing to do with its parameter
+fn unrelated(l: *list.List<i32>, other: *i32) -> *i32 { return other; }
+
+fn main() {
+    let mut l: list.List<i32> = list.List.new();
+    l.push(1);
+    let mut k = 5;
+    let q = unrelated(&l, &k);
+    l.push(2);               // fine: `q` does not borrow `l`
+    println(*q);
+    let p = first(&l);
+    l.push(3);  // ERROR: cannot borrow mutably `l` because it is mutably borrowed
+    println(*p);
+}

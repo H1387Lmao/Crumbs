@@ -1,0 +1,33 @@
+// std.set: a set of strings, built on std.map.
+//
+//     import std.set;
+//     let mut seen = set.HashSet.new();
+//     if seen.add("a") { println("new"); }     // add says whether the value was new
+//     println(seen.has("a"));
+//     for k in seen.iter() { println(*k); }
+import std.map;
+
+pub struct HashSet { m: map.HashMap<bool> }
+
+impl HashSet {
+    pub fn new() -> HashSet { return HashSet { m: map.HashMap.new() }; }
+    // true when the value was not in the set yet
+    pub fn add(mut self, v: str) -> bool {
+        if self.m.has(v) { return false; }
+        self.m.set(v, true);
+        return true;
+    }
+    pub fn has(self, v: str) -> bool { return self.m.has(v); }
+    pub fn remove(mut self, v: str) -> bool { return self.m.remove(v).is_some(); }
+    pub fn len(self) -> i64 { return self.m.len(); }
+    pub fn is_empty(self) -> bool { return self.m.is_empty(); }
+    pub fn clear(mut self) { self.m.clear(); }
+    // copies of the members, in no particular order
+    pub fn to_list(self) -> List<String> { return self.m.keys(); }
+    // true when every member of `self` is in `other`
+    pub fn is_subset(self, other: *HashSet) -> bool {
+        let ks = self.m.keys();
+        for i in 0..ks.len { if !other.has(*ks.at(i)) { return false; } }
+        return true;
+    }
+}

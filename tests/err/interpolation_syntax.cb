@@ -2,6 +2,5 @@ fn main() {
     let n = 1;
     println("{n"); // ERROR: unclosed `{` in the format string
     println("a } b"); // ERROR: single `}` in the format string
-    println("{n + 1}"); // ERROR: is not a valid placeholder
     println("{a b}"); // ERROR: is not a valid placeholder
 }

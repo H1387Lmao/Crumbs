@@ -1,0 +1,9 @@
+import std.list;
+
+fn main() {
+    let mut l: list.List<i32> = list.List.new();
+    l.push(1);
+    let p = l.at(0);
+    l.push(2);  // ERROR: cannot borrow mutably `l` because it is borrowed
+    println(*p);
+}

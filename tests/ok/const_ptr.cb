@@ -1,0 +1,15 @@
+struct C { n: i64, inner: [2]i64 }
+
+fn total(c: *const C) -> i64 {
+    let p: *const i64 = &c.inner[1];
+    return c.n + c.inner[0] + *p;
+}
+
+fn main() {
+    let mut c = C { n: 1, inner: [10, 20] };
+    let r: *const C = &c;       // *T converts to *const T
+    println(total(r));
+    println(total(&c));
+    c.n = 5;
+    println(total(&c));
+}

@@ -8,7 +8,7 @@ FLOATS = {"f32", "f64"}
 
 
 class Ty:
-    __slots__ = ("kind", "name", "inner", "n", "sym", "key", "params")
+    __slots__ = ("kind", "name", "inner", "n", "sym", "key", "params", "ro")
 
     def __init__(self, kind, name=None, inner=None, n=None, sym=None, params=None):
         self.kind = kind
@@ -17,6 +17,7 @@ class Ty:
         self.n = n
         self.sym = sym
         self.params = params    # parameter types of a `fn` type
+        self.ro = False         # a `*const T` pointer: same type as `*T` for identity, but nothing may be written through it
         if kind == "prim":
             self.key = name
         elif kind == "ptr":
@@ -31,6 +32,8 @@ class Ty:
             self.key = inner.key + "?"
         elif kind == "fn":
             self.key = "fn(" + ",".join(p.key for p in params) + ")->" + inner.key
+        elif kind == "clo":
+            self.key = "clo(" + ",".join(p.key for p in params) + ")->" + inner.key
         elif kind in ("struct", "enum"):
             self.key = f"{kind}:{sym.full}"
         else:
@@ -47,7 +50,7 @@ class Ty:
         if k == "prim":
             return self.name
         if k == "ptr":
-            return "*" + str(self.inner)
+            return ("*const " if self.ro else "*") + str(self.inner)
         if k == "arr":
             return f"[{self.n}]{self.inner}"
         if k == "slice":
@@ -59,6 +62,9 @@ class Ty:
         if k == "fn":
             ret = "" if self.inner.kind == "prim" and self.inner.name == "void" else f" -> {self.inner}"
             return f"fn({', '.join(str(p) for p in self.params)}){ret}"
+        if k == "clo":
+            ret = "" if self.inner.kind == "prim" and self.inner.name == "void" else f" -> {self.inner}"
+            return f"|{', '.join(str(p) for p in self.params)}|{ret}"
         if k in ("struct", "enum"):
             return self.sym.name
         return self.kind
@@ -110,8 +116,10 @@ POISON = Ty("poison")    # result of an earlier error; compatible with everythin
 NEVER = Ty("never")
 
 
-def ptr(t):
-    return Ty("ptr", inner=t)
+def ptr(t, ro=False):
+    p = Ty("ptr", inner=t)
+    p.ro = ro
+    return p
 
 
 def arr(t, n):
@@ -124,6 +132,10 @@ def slc(t):
 
 def fnty(params, ret):
     return Ty("fn", inner=ret, params=tuple(params))
+
+
+def clo(params, ret):
+    return Ty("clo", inner=ret, params=tuple(params))
 
 
 def eu(t):

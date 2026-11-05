@@ -1,0 +1,26 @@
+fn sum_squares(n: i64) -> i64 {
+    let buf = alloc(i64, n);          // never escapes: freed at the end of the function
+    for i in 0..buf.len { buf[i] = i * i; }
+    let mut t = 0 as i64;
+    for i in 0..buf.len { t += buf[i]; }
+    return t;
+}
+
+fn keep(n: i64) -> []i64 {
+    let buf = alloc(i64, n);          // returned: the caller owns it
+    for i in 0..n { buf[i] = i; }
+    return buf;
+}
+
+fn main() {
+    let mut total = 0 as i64;
+    for r in 0..1000 {
+        let tmp = alloc(u8, 100000);   // freed on every iteration
+        tmp[0] = 1;
+        total += tmp[0] as i64 + sum_squares(10);
+    }
+    println(total);
+    let k = keep(4);
+    println(k[3]);
+    free(k);
+}
