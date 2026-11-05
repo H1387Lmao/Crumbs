@@ -194,6 +194,7 @@ println("hello {name}! {}", 1 + 2);                       // hello world! 3
 println("{n:x} {n:#b} {n:08.3f} {n:+} {:,}", 1234567);    // ff 0b11111111 0255.000 +255 1,234,567
 println("[{name:>8}] [{name:*^9}] [{name:.3}] {pi:.2}");  // [   world] [**world**] [wor] 3.14
 println("{} + {} = {total}", 1, 2, total = 3);             // 1 + 2 = 3
+println("{a * 2} {sq(a) + 1:>4} {xs[0]}");                  // any expression works inside the braces
 let label: String = format("{}-{:03}", name, 7);           // world-007
 ```
 
@@ -340,8 +341,36 @@ its own mutable copy (the caller's value is unchanged).
 
 **Function pointers.** `fn(i32, i32) -> i32` is a type. Named functions are values (`let f = add;`), can be stored in
 arrays and struct fields, passed around, compared and set to `null`; call them like any function: `ops.apply(3, 4)`,
-`table[i](x)`. Calling a `null` function pointer panics. There are no closures: a callback that needs state takes a
-`*void` user-data argument. Function pointers convert to and from `*void` with `as`.
+`table[i](x)`. Calling a `null` function pointer panics. Function pointers convert to and from `*void` with `as`. For callbacks
+that need state, use a closure.
+
+**Closures.** `|a, b| expr` (or `|a: i32| -> i32 { ... }`) makes a closure; `|i32, i32| -> i32` is its type (`||` for none).
+A closure captures the variables it uses by reference, or by value with `move |x| ...` (moved values are owned by the closure and
+destroyed with it). Closures are move-only values, cannot move out of what they capture, and cannot borrow locals past their scope
+(the borrow checker rejects returning one). Generic functions infer through them: `fn apply<T, U>(x: T, f: |T| -> U) -> U`.
+
+```
+let mut total = 0;
+let add = |n: i32| { total += n; };
+add(2); add(3);
+println(total);                        // 5
+let k = 10;
+let mul = move |x: i32| x * k;         // k copied in
+```
+
+**Iterators.** `Iter<T>` (std.iter, no import needed) is a lazy stream built from closures, with `map`, `filter`, `take`, `skip`,
+`take_while`, `skip_while`, `step_by`, `chain`, `zip`, `enumerate`, `inspect` and the consumers `collect`, `fold`, `count`, `any`,
+`all`, `find`, `position`, `nth`, `last`, `min_by`, `max_by`, `for_each`, plus `iter.range(lo, hi)`, `range_incl`, `range_step`,
+`repeat`, `bytes`, `slice_iter`, `sum` and `product`. `for x in e` accepts an `Iter`, anything with `next(self) -> T?`, or anything with
+`iter()` (a `List`, a `HashMap`):
+
+```
+for n in iter.range(0, 10).filter(|n| *n % 2 == 0).map(|n| n * n) { println(n); }
+let lens = words.iter().map(|w| w.len).collect();     // List<i64>
+```
+
+**Read-only pointers.** `*const T` is a pointer nothing may be written through: no assigning to its fields or `*p`, no `mut self`
+methods, and a pointer taken into it (`&p.x`) is `*const` as well. A `*T` converts to `*const T` implicitly, never the reverse.
 
 ```
 struct Ops { name: str, apply: fn(i32, i32) -> i32 }
@@ -505,14 +534,17 @@ println(*p);
 ```
 
 Raw pointers that come from `alloc`, from pointer parameters or through `*p` carry no borrows, so they stay the unchecked escape hatch (and
-`std.own` handles check themselves when used). Limits: the check is local to one function; a pointer stored inside a struct keeps its borrow
-only while that struct variable is used; `extern fn` calls are not checked for aliasing.
+`std.own` handles check themselves when used). Across functions the checker uses summaries: it works out for each function which
+parameters its result borrows from (or stores a borrow into), so `let p = first(&l); l.push(1); use(p)` is caught too. Errors point at both
+the borrow and the conflicting use. Limits: a pointer stored inside a struct keeps its borrow only while that struct variable is used;
+`extern fn` calls are not checked for aliasing.
 
 ## Owned memory (the default, `std.own`)
 
 Without `--gc` memory is owned: values are freed deterministically at the end of their scope, with a borrow checker and without `free()`.
 `String` and `List` already work this way; `std.own` gives the same thing to any value. Programs that would rather not think about who frees
-what can build with `--gc` (the conservative collector below). `alloc()` memory is raw: free it with `free`, or wrap it in an owner.
+what can build with `--gc` (the conservative collector below). `alloc()` memory is raw: free it with `free`, or wrap it in an owner. When a `let buf = alloc(T, n)` never escapes its function (it is
+only indexed and asked for `.len`: not passed, returned, stored, sliced, captured or freed by hand) the compiler frees it at the end of its scope.
 
 * `own.new(v)` returns an `Own<T>`, the single owner of a heap value. Owners move like `String`s, and the value is destroyed and its memory
   freed at the end of the owner's scope, so allocation costs what `malloc` costs. Nothing pauses and nothing is traced.
@@ -582,4 +614,4 @@ Not supported: `#include` (use `import`, or `include "x.h";` for C headers). Mac
 
 ## Known limits (it is a toy)
 No generic enums, trait objects, generic traits or closures; no `if` expressions; the collector is conservative and stop-the-world (generational, so most pauses are short). Slices are mutable views even of
-immutable arrays. Format strings take values from the argument list or named variables, not arbitrary expressions in braces; `{:width$}` dynamic widths do not exist; `Display` is static (no `dyn Display`). The generated C needs GCC/Clang (statement expressions, overflow builtins).
+immutable arrays. Format placeholders take any expression (`{a + b:>5}`) but not `if`/blocks; `{:width$}` dynamic widths do not exist; `Display` is static (no `dyn Display`). The generated C needs GCC/Clang (statement expressions, overflow builtins).
