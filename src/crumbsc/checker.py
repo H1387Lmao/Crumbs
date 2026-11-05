@@ -3466,6 +3466,9 @@ class Checker:
     def st_Let(self, s):
         ann = self.resolve_type(s.tyn, self.m) if s.tyn else None
         t = self.check(s.init, ann)
+        # `let buf = alloc(T, n)`: a candidate for being freed automatically at the end of its scope (codegen checks it never escapes)
+        s.afree = (s.init.kind == "Call" and getattr(s.init, "builtin", None) == "alloc" and not t.poison
+                   and not self.has_glue(s.init.elem))
         if ann == STR and t == STRING:
             s.init.coerce = True
             t = STR

@@ -906,7 +906,59 @@ class CodeGen:
     def drop_stmt(self, loc):
         if getattr(loc, "region", False):
             return f"if ({loc.cname}__live) {{ cb_region_free({loc.cname}); {loc.cname}__live = 0; }}"
+        if getattr(loc, "autofree", False):
+            return f"if ({loc.cname}__live) {{ cb_mem_free({loc.cname}.ptr); {loc.cname}__live = 0; }}"
         return f"if ({loc.cname}__live) {self.glue_fn(loc.ty)}(&{loc.cname});"
+
+    def find_autofree(self, body):
+        """Marks the locals bound to `alloc(...)` whose memory never escapes: they are only indexed or asked for `.len`
+        (never passed, returned, stored, sliced, captured or freed by hand), so the block can free them itself."""
+        cands, bad = {}, set()
+
+        def root(loc):
+            while getattr(loc, "outer", None) is not None:
+                bad.add(id(loc.outer))                   # seen through a closure's capture
+                loc = loc.outer
+            return loc
+
+        stack = []
+
+        def under_addr():
+            """Is the Index/Field chain ending at the top of `stack` the operand of `&` (a pointer into the memory)?"""
+            for a in reversed(stack):
+                if a.kind in ("Index", "Field"):
+                    continue
+                return a.kind == "Unary" and a.op == "&"
+            return False
+
+        def walk(n, parent):
+            if isinstance(n, list) or isinstance(n, tuple):
+                for x in n:
+                    walk(x, parent)
+                return
+            if not hasattr(n, "kind") or not hasattr(n, "span"):
+                return
+            if n.kind == "Let" and getattr(n, "afree", False) and getattr(n, "local", None) is not None:
+                cands[id(n.local)] = n.local
+            if n.kind == "Ident":
+                loc = getattr(n, "local", None)
+                if loc is not None:
+                    r = root(loc)
+                    ok = parent is not None and ((parent.kind == "Index" and parent.obj is n)
+                                                 or (parent.kind == "Field" and parent.obj is n and parent.name == "len"))
+                    if not ok or under_addr():
+                        bad.add(id(r))
+                return
+            stack.append(n)
+            for k, v in n.__dict__.items():
+                if k not in ("kind", "span", "ty", "local", "desugared") or (k == "desugared" and v is not None):
+                    if isinstance(v, (list, tuple)) or hasattr(v, "kind"):
+                        walk(v, n)
+            stack.pop()
+
+        walk(body, None)
+        for i, loc in cands.items():
+            loc.autofree = i not in bad
 
     def s_Region(self, s):
         name = s.local.cname
@@ -1009,7 +1061,7 @@ class CodeGen:
                 self.emit(f"(void)({self.ex(s.init)});")
             return
         self.emit(f"{self.ctype(s.local.ty)} {s.local.cname} = {self.ex(s.init)};")
-        if s.local.glue:
+        if s.local.glue or getattr(s.local, "autofree", False):
             self.emit(f"bool {s.local.cname}__live = 1;")
             self.dscopes[-1].append(s.local)
 
@@ -1259,6 +1311,8 @@ class CodeGen:
         self.loop_bases = []
         self.try_stack = []
         self.poll()
+        if not self.gc:
+            self.find_autofree(sym.node.body)       # under --gc the collector reclaims it instead
         clo = getattr(sym, "closure", None)
         if clo is not None and clo.caps:
             self.emit(f"struct {sym.cname}_env *cb_e = (struct {sym.cname}_env *)cb_env;")
