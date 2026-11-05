@@ -642,8 +642,11 @@ class Parser:
         t = self.tok
         if t.kind == "op" and t.val == "*":
             self.advance()
+            ro = self.is_kw("const")
+            if ro:
+                self.advance()
             inner = self.parse_type()
-            return N("TPtr", self.sp(t), inner=inner)
+            return N("TPtr", self.sp(t), inner=inner, ro=ro)
         if t.kind == "kw" and t.val == "fn":
             self.advance()
             self.expect_op("(", "in function type")

@@ -8,7 +8,7 @@ FLOATS = {"f32", "f64"}
 
 
 class Ty:
-    __slots__ = ("kind", "name", "inner", "n", "sym", "key", "params")
+    __slots__ = ("kind", "name", "inner", "n", "sym", "key", "params", "ro")
 
     def __init__(self, kind, name=None, inner=None, n=None, sym=None, params=None):
         self.kind = kind
@@ -17,6 +17,7 @@ class Ty:
         self.n = n
         self.sym = sym
         self.params = params    # parameter types of a `fn` type
+        self.ro = False         # a `*const T` pointer: same type as `*T` for identity, but nothing may be written through it
         if kind == "prim":
             self.key = name
         elif kind == "ptr":
@@ -49,7 +50,7 @@ class Ty:
         if k == "prim":
             return self.name
         if k == "ptr":
-            return "*" + str(self.inner)
+            return ("*const " if self.ro else "*") + str(self.inner)
         if k == "arr":
             return f"[{self.n}]{self.inner}"
         if k == "slice":
@@ -115,8 +116,10 @@ POISON = Ty("poison")    # result of an earlier error; compatible with everythin
 NEVER = Ty("never")
 
 
-def ptr(t):
-    return Ty("ptr", inner=t)
+def ptr(t, ro=False):
+    p = Ty("ptr", inner=t)
+    p.ro = ro
+    return p
 
 
 def arr(t, n):

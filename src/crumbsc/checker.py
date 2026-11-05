@@ -448,7 +448,7 @@ class Checker:
                 base += "<" + ",".join(self.canon(a, m, selfc) for a in tn.args) + ">"
             return base
         if k == "TPtr":
-            return "*" + self.canon(tn.inner, m, selfc)
+            return ("*const " if getattr(tn, "ro", False) else "*") + self.canon(tn.inner, m, selfc)
         if k == "TSlice":
             return "[]" + self.canon(tn.inner, m, selfc)
         if k == "TArray":
@@ -470,7 +470,7 @@ class Checker:
         if k == "TName":
             return ".".join(tn.path) + (f"<{', '.join(self.tn_text(a) for a in tn.args)}>" if tn.args else "")
         if k == "TPtr":
-            return "*" + self.tn_text(tn.inner)
+            return ("*const " if getattr(tn, "ro", False) else "*") + self.tn_text(tn.inner)
         if k == "TSlice":
             return "[]" + self.tn_text(tn.inner)
         if k == "TArray":
@@ -756,7 +756,7 @@ class Checker:
             return POISON
         if k == "TPtr":
             inner = self.resolve_type(tn.inner, m, allow_void=True)
-            return POISON if inner.poison else ptr(inner)
+            return POISON if inner.poison else ptr(inner, getattr(tn, "ro", False))
         if k == "TFn":
             ps = [self.resolve_type(p, m) for p in tn.params]
             ret = self.resolve_type(tn.ret, m, allow_void=True) if tn.ret is not None else VOID
@@ -1511,6 +1511,14 @@ class Checker:
             help = "this expression produces no value"
         self.d.error(e.span, what, label=f"expected `{exp}`, found `{got}`", help=help)
 
+    def ro_violation(self, e, t, exp):
+        """Reports (and returns True) when a `*const T` would become a writable `*T`."""
+        if t.kind == "ptr" and exp.kind == "ptr" and t.ro and not exp.ro and same(t, exp) and not getattr(e, "recv_ok", False):
+            self.d.error(e.span, "cannot turn a read-only pointer into a writable one", label=f"expected `{exp}`, found `{t}`",
+                         help=f"take `*const {exp.inner}` instead, or cast with `as` if you really must")
+            return True
+        return False
+
     def ptr_ok(self, exp, t):
         """`*T` converts implicitly to `*void` (as in C), never the other way round."""
         return exp.kind == "ptr" and exp.inner == VOID and t.kind == "ptr"
@@ -1535,8 +1543,12 @@ class Checker:
             return exp
         if t.is_numeric and exp.is_numeric and t != exp:
             return exp if self.implicit_conv(e, t, exp) else POISON
+        if self.ro_violation(e, t, exp):
+            return POISON
         if self.ptr_ok(exp, t):
             return exp
+        if exp.kind == "ptr" and t.kind == "ptr" and same(t, exp) and exp.ro and not t.ro:
+            return exp                                       # `*T` -> `*const T` is always fine
         if not same(t, exp):
             self.mismatch(e, exp, t)
             return POISON
@@ -2314,6 +2326,8 @@ class Checker:
                 self.d.error(e.span, "cannot take the address of a temporary value",
                              help="store it in a `let mut` variable first")
                 return POISON
+            if self.through_ro(e.expr):
+                return ptr(t, True)                  # a pointer into read-only memory is read-only too
             err = None if getattr(e, "auto_ref", False) else self.place_mut(e.expr)
             if err:
                 self.d.error(e.span, "cannot take the address of an immutable binding", label=err[0], help=err[1])
@@ -2357,6 +2371,9 @@ class Checker:
             return (f"`{loc.name}` is declared without `mut`", f"declare it with `let mut {loc.name}`")
         if k == "Field":
             if e.mode == "ptrfield":
+                if e.obj.ty.kind == "ptr" and e.obj.ty.ro:
+                    return ("this pointer is `*const`, so nothing may be written through it",
+                            "take a `*T` (without `const`) if the function must change the value")
                 if self.readonly_self(e.obj):
                     return ("this method takes `self`, which only reads the object",
                             "declare the method with `mut self` so it may change its fields (the caller then needs `let mut`)")
@@ -2370,8 +2387,24 @@ class Checker:
                 return ("strings are immutable", "use a `[]u8` slice created with `alloc(u8, n)`")
             return None
         if k == "Unary" and e.op == "*":
+            if e.expr.ty.kind == "ptr" and e.expr.ty.ro:
+                return ("this pointer is `*const`, so nothing may be written through it",
+                        "take a `*T` (without `const`) if the function must change the value")
             return None
         return ("not an assignable place", None)
+
+    def through_ro(self, e):
+        """Does the place `e` lie behind a `*const` pointer (so a pointer to it must be `*const` too)?"""
+        k = e.kind
+        if k == "Field":
+            if e.mode == "ptrfield":
+                return (e.obj.ty.kind == "ptr" and e.obj.ty.ro) or self.readonly_self(e.obj)
+            return self.through_ro(e.obj)
+        if k == "Index":
+            return self.through_ro(e.obj) if e.obj.ty.kind == "arr" else False
+        if k == "Unary" and e.op == "*":
+            return e.expr.ty.kind == "ptr" and e.expr.ty.ro
+        return False
 
     def ex_Binary(self, e, exp):
         op = e.op
@@ -3078,6 +3111,10 @@ class Checker:
         by_ptr = p0.tyn.kind == "TPtr"
         if by_ptr:
             if ot.kind == "ptr":
+                obj.recv_ok = True                                      # (a `mut self` call gets its own error below)
+                if meth.self_mut and ot.ro:
+                    self.d.error(obj.span, f"cannot call `{meth.method_name}`, which takes `mut self`, through a `*const` pointer",
+                                 label="this pointer is read-only", help="take a `*T` (without `const`) instead")
                 if meth.self_mut and self.readonly_self(obj):
                     self.d.error(obj.span, f"cannot call `{meth.method_name}`, which takes `mut self`, on the read-only `self`",
                                  label="this method was declared with plain `self`",
@@ -3089,6 +3126,7 @@ class Checker:
                 pass
             node = N("Unary", obj.span, op="&", expr=obj)
             node.auto_ref = not meth.self_mut                       # `self` may borrow immutable bindings; `mut self` may not
+            node.recv_ok = not meth.self_mut
             return node
         if ot.kind == "ptr":
             return N("Unary", obj.span, op="*", expr=obj)
@@ -3437,6 +3475,8 @@ class Checker:
                 self.coerce(s.init, t, ann)
             elif ann.is_numeric and t.is_numeric and t != ann:
                 self.implicit_conv(s.init, t, ann)
+            elif self.ro_violation(s.init, t, ann):
+                pass
             elif self.ptr_ok(ann, t):
                 pass
             elif not same(t, ann):
