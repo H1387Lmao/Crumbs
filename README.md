@@ -514,6 +514,22 @@ Written in Crumbs and imported with `import std.name;` (`String`, `str`, `List<T
 helpers: they bind libc and pthread with plain `extern fn` / `extern struct` / `extern const` declarations, exactly like user code does.
 (The only runtime hooks they call are the collector's thread notifications in `std.thread`.)
 
+**Argument parsing (`std.args`).** Declare flags, options (with defaults or required), positionals and nested subcommands; get generated
+`--help` / `--version`, `-vv` counting, `-ofile` / `--out=file` forms, `--` and "did you mean" hints. `parse_or_exit` prints and exits for
+you; `parse` returns a `Matches` to inspect (`ok()`, `message()`, `value`, `values`, `int`, `flag`, `count`, `subcommand()`, `sub()`).
+See `examples/argparse.cb`.
+
+```
+let mut app = args.Command.new("tool", "does useful things");
+app.flag("verbose", 'v', "talk more");
+let mut build = args.Command.new("build", "compile");
+build.option_default("jobs", 'j', "N", "parallel jobs", "4");
+build.positional("target", "what to build", true);
+app.subcommand(build);
+let argv = env.args();
+let m = app.parse_or_exit(argv.view());
+```
+
 ## Borrow checker
 
 Every function body is checked after type checking for the aliasing mistakes that `&` makes possible. A *borrow* is `&place` (exclusive:

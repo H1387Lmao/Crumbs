@@ -4,7 +4,8 @@
 //     let mut seen = set.HashSet.new();
 //     if seen.add("a") { println("new"); }     // add says whether the value was new
 //     println(seen.has("a"));
-//     for k in seen.iter() { println(*k); }
+//     let all = seen.to_list();                 // copies of the members
+//     println(all.len);
 import std.map;
 
 pub struct HashSet { m: map.HashMap<bool> }

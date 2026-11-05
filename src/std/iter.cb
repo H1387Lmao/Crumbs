@@ -1,11 +1,15 @@
-// std.iter: lazy iterators built from closures. No import is needed.
+// std.iter: lazy iterators built from closures. `Iter<T>` and its methods need no import; `import std.iter;` gives the
+// constructors such as `iter.range`.
 //
-//     let evens = (1..=10)                              // ranges: iter.range(lo, hi) / iter.range_incl(lo, hi)
+//     import std.iter;
+//     // ranges: iter.range(lo, hi) / iter.range_incl(lo, hi)
 //     for n in iter.range(0, 10).filter(|n| *n % 2 == 0).map(|n| n * n) { println(n); }
 //
-//     let words = List.from(["a", "bb", "ccc"]);
+//     let mut words: List<str> = List.new();
+//     words.push("a"); words.push("bb"); words.push("ccc");
 //     let lens = words.iter().map(|w| w.len).collect();     // List<i64>
-//     let total = words.iter().fold(0, |acc, w| acc + w.len);
+//     let total = words.iter().fold(0 as i64, |acc, w| acc + w.len);
+//     println(lens.len + total);
 //
 // An `Iter<T>` produces values one at a time with `next()`, which gives `T?` (nothing when it is exhausted). The adapters
 // (`map`, `filter`, `take`, `zip`, ...) consume the iterator and return a new one that does its work only when it is
