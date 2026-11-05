@@ -1,0 +1,486 @@
+// std.args: a command-line argument parser with flags, options, positionals and nested subcommands.
+//
+//     import std.args;
+//     import std.env;
+//
+//     let mut app = args.Command.new("tool", "does useful things");
+//     app.version("1.2.0");
+//     app.flag("verbose", 'v', "talk more");                    // -v, --verbose, may repeat: -vv
+//     app.option("config", 'c', "FILE", "configuration file");  // -c FILE, -cFILE, --config FILE, --config=FILE
+//
+//     let mut build = args.Command.new("build", "compile the project");
+//     build.option_default("jobs", 'j', "N", "parallel jobs", "4");
+//     build.positional("target", "what to build", true);        // required
+//     build.positional_rest("extra", "more targets");           // collects whatever is left
+//     app.subcommand(build);
+//
+//     let argv = env.args();
+//     let m = app.parse_or_exit(argv.view());                    // prints help / errors and exits for you
+//     if m.flag("verbose") { println("verbose"); }
+//     if m.subcommand() == "build" {
+//         let b = m.sub();
+//         println("jobs {b.value(\"jobs\")}, target {b.value(\"target\")}");
+//     }
+//
+// `parse` gives a `Matches` that you check with `ok()` (the message is in `message()`); `help` and `--version` are built in:
+// `-h` / `--help` print generated help, and `m.wants_help()` / `m.wants_version()` tell you when `parse` stopped for them.
+// A bare `--` ends option parsing: everything after it is positional. Values may be repeated (`-I a -I b`): `values(name)`
+// lists them all, `value(name)` gives the last. A value starting with `-` is accepted after `=` or as a short attached value.
+import std.map;
+
+extern fn write(fd: i32, buf: *u8, n: i64) -> i64;
+
+struct Spec {
+    name: String,
+    short: u8,             // 0 for none
+    help: String,
+    meta: String,          // the value's placeholder in help: `FILE`
+    takes: bool,           // an option (takes a value); false for a flag
+    positional: bool,
+    rest: bool,            // a positional that collects everything left over
+    required: bool,
+    default: String,
+    has_default: bool,
+}
+
+pub struct Command {
+    name: String,
+    about: String,
+    ver: String,
+    specs: List<Spec>,
+    subs: List<Command>,
+    sub_required: bool,
+}
+
+pub struct Matches {
+    cmd: String,                         // the command's name
+    err: String,                         // empty when parsing worked
+    help: bool,
+    ver: bool,
+    help_text: String,                   // the help of the command that failed or was asked for
+    vals: map.HashMap<List<String>>,     // option/flag name -> every value given (flags: one entry per occurrence)
+    pos: List<String>,                   // positionals in order (all of them, including named ones)
+    sub_name: String,
+    subm: List<Matches>,                 // zero or one entry: the subcommand's matches
+}
+
+impl Command {
+    pub fn new(name: str, about: str) -> Command {
+        return Command { name: String.from(name), about: String.from(about), ver: String.empty(),
+                         specs: List.new(), subs: List.new(), sub_required: false };
+    }
+
+    pub fn version(mut self, v: str) { self.ver = String.from(v); }
+
+    // a switch without a value: `-v`, `--verbose`; `short` 0 for none
+    pub fn flag(mut self, name: str, short: u8, help: str) {
+        self.specs.push(Spec { name: String.from(name), short: short, help: String.from(help), meta: String.empty(),
+                               takes: false, positional: false, rest: false, required: false,
+                               default: String.empty(), has_default: false });
+    }
+
+    // an option that takes a value
+    pub fn option(mut self, name: str, short: u8, meta: str, help: str) {
+        self.specs.push(Spec { name: String.from(name), short: short, help: String.from(help), meta: String.from(meta),
+                               takes: true, positional: false, rest: false, required: false,
+                               default: String.empty(), has_default: false });
+    }
+
+    pub fn option_default(mut self, name: str, short: u8, meta: str, help: str, default: str) {
+        self.specs.push(Spec { name: String.from(name), short: short, help: String.from(help), meta: String.from(meta),
+                               takes: true, positional: false, rest: false, required: false,
+                               default: String.from(default), has_default: true });
+    }
+
+    // an option that must be given
+    pub fn option_required(mut self, name: str, short: u8, meta: str, help: str) {
+        self.specs.push(Spec { name: String.from(name), short: short, help: String.from(help), meta: String.from(meta),
+                               takes: true, positional: false, rest: false, required: true,
+                               default: String.empty(), has_default: false });
+    }
+
+    // the next positional argument (they are matched in the order declared)
+    pub fn positional(mut self, name: str, help: str, required: bool) {
+        self.specs.push(Spec { name: String.from(name), short: 0, help: String.from(help), meta: String.empty(),
+                               takes: true, positional: true, rest: false, required: required,
+                               default: String.empty(), has_default: false });
+    }
+
+    // a final positional that collects every remaining argument
+    pub fn positional_rest(mut self, name: str, help: str) {
+        self.specs.push(Spec { name: String.from(name), short: 0, help: String.from(help), meta: String.empty(),
+                               takes: true, positional: true, rest: true, required: false,
+                               default: String.empty(), has_default: false });
+    }
+
+    // adds a subcommand (moved in); with `require_subcommand` the parent cannot be used alone
+    pub fn subcommand(mut self, c: Command) { self.subs.push(c); }
+    pub fn require_subcommand(mut self) { self.sub_required = true; }
+}
+
+// ---- help -------------------------------------------------------------------------------------
+
+fn pad(s: String, n: i64) -> String {
+    let mut out = s;
+    while out.len < n { out.push(' '); }
+    return out;
+}
+
+fn left_col(sp: *Spec) -> String {
+    let mut s = String.empty();
+    if sp.short != 0 {
+        s.push('-'); s.push(sp.short); s.append(", ");
+    } else { s.append("    "); }
+    s.append("--"); s.append(sp.name);
+    if sp.takes { s.append(" <"); s.append(sp.meta); s.append(">"); }
+    return s;
+}
+
+fn usage_line(c: *Command, path: str) -> String {
+    let mut s = String.from("Usage: ");
+    s.append(path);
+    s.append(" [OPTIONS]");
+    for i in 0..c.specs.len {
+        let sp = c.specs.at(i);
+        if !sp.positional { continue; }
+        s.append(" ");
+        if sp.required { s.append("<"); } else { s.append("["); }
+        s.append(sp.name);
+        if sp.rest { s.append("..."); }
+        if sp.required { s.append(">"); } else { s.append("]"); }
+    }
+    if c.subs.len > 0 { s.append(c.sub_required ? " <COMMAND>" : " [COMMAND]"); }
+    return s;
+}
+
+// help text for `c`, whose full invocation name (e.g. "tool build") is `path`
+pub fn help_text(c: *Command, path: str) -> String {
+    let mut out = String.empty();
+    out.append(c.name);
+    if c.ver.len > 0 { out.append(" "); out.append(c.ver); }
+    out.append("\n");
+    if c.about.len > 0 { out.append(c.about); out.append("\n"); }
+    out.append("\n");
+    out.append(usage_line(c, path));
+    out.append("\n");
+
+    let mut width = 12 as i64;                                  // "-h, --help" and friends
+    for i in 0..c.specs.len {
+        let sp = c.specs.at(i);
+        if sp.positional { if sp.name.len + 2 > width { width = sp.name.len + 2; } }
+        else { let l = left_col(sp); if l.len + 2 > width { width = l.len + 2; } }
+    }
+    for i in 0..c.subs.len { if c.subs.at(i).name.len + 2 > width { width = c.subs.at(i).name.len + 2; } }
+
+    let mut any_pos = false;
+    for i in 0..c.specs.len { if c.specs.at(i).positional { any_pos = true; } }
+    if any_pos {
+        out.append("\nArguments:\n");
+        for i in 0..c.specs.len {
+            let sp = c.specs.at(i);
+            if !sp.positional { continue; }
+            out.append("  "); out.append(pad(String.from(sp.name), width)); out.append(sp.help);
+            if sp.required { out.append(" (required)"); }
+            out.append("\n");
+        }
+    }
+    if c.subs.len > 0 {
+        out.append("\nCommands:\n");
+        for i in 0..c.subs.len {
+            let s = c.subs.at(i);
+            out.append("  "); out.append(pad(String.from(s.name), width)); out.append(s.about); out.append("\n");
+        }
+    }
+    out.append("\nOptions:\n");
+    for i in 0..c.specs.len {
+        let sp = c.specs.at(i);
+        if sp.positional { continue; }
+        out.append("  "); out.append(pad(left_col(sp), width)); out.append(sp.help);
+        if sp.has_default { out.append(" [default: "); out.append(sp.default); out.append("]"); }
+        if sp.required { out.append(" (required)"); }
+        out.append("\n");
+    }
+    out.append("  "); out.append(pad(String.from("-h, --help"), width)); out.append("print this help\n");
+    if c.ver.len > 0 { out.append("  "); out.append(pad(String.from("-V, --version"), width)); out.append("print the version\n"); }
+    return out;
+}
+
+// ---- parsing ----------------------------------------------------------------------------------
+
+fn empty_matches(name: str) -> Matches {
+    return Matches { cmd: String.from(name), err: String.empty(), help: false, ver: false, help_text: String.empty(),
+                     vals: map.HashMap.new(), pos: List.new(), sub_name: String.empty(), subm: List.new() };
+}
+
+fn fail(m: *Matches, c: *Command, path: str, msg: str) {
+    m.err = String.from(msg);
+    m.help_text = help_text(c, path);
+}
+
+fn add_value(m: *Matches, name: str, v: str) {
+    let fresh: List<String> = List.new();
+    let slot = m.vals.get_or_insert(name, fresh);
+    slot.push(String.from(v));
+}
+
+fn find_long(c: *Command, name: str) -> i64 {
+    for i in 0..c.specs.len {
+        let sp = c.specs.at(i);
+        if !sp.positional && sp.name == name { return i; }
+    }
+    return -1;
+}
+
+fn find_short(c: *Command, ch: u8) -> i64 {
+    for i in 0..c.specs.len {
+        let sp = c.specs.at(i);
+        if !sp.positional && sp.short == ch { return i; }
+    }
+    return -1;
+}
+
+// closest declared name within a small edit distance, or "" (for "did you mean")
+fn distance(a: str, b: str) -> i64 {
+    let n = a.len;
+    let m = b.len;
+    let prev = alloc(i64, m + 1);
+    let cur = alloc(i64, m + 1);
+    for j in 0..m + 1 { prev[j] = j; }
+    for i in 1..n + 1 {
+        cur[0] = i;
+        for j in 1..m + 1 {
+            let cost = a[i - 1] == b[j - 1] ? 0 : 1;
+            let mut best = prev[j - 1] + cost;
+            if prev[j] + 1 < best { best = prev[j] + 1; }
+            if cur[j - 1] + 1 < best { best = cur[j - 1] + 1; }
+            cur[j] = best;
+        }
+        for j in 0..m + 1 { prev[j] = cur[j]; }
+    }
+    let d = prev[m];
+    free(prev);
+    free(cur);
+    return d;
+}
+
+fn suggest(c: *Command, name: str, subs: bool) -> String {
+    let mut best = String.empty();
+    let mut bd = 3 as i64;
+    if subs {
+        for i in 0..c.subs.len {
+            let d = distance(name, c.subs.at(i).name);
+            if d < bd { bd = d; best = String.from(c.subs.at(i).name); }
+        }
+    } else {
+        for i in 0..c.specs.len {
+            let sp = c.specs.at(i);
+            if sp.positional { continue; }
+            let d = distance(name, sp.name);
+            if d < bd { bd = d; best = String.from(sp.name); }
+        }
+    }
+    return best;
+}
+
+fn parse_into(c: *Command, path: str, argv: []String, start: i64, m: *Matches) {
+    let mut i = start;
+    let mut only_pos = false;
+    let mut npos = 0 as i64;
+    while i < argv.len {
+        let a: str = argv[i];
+        i += 1;
+        if !only_pos && a == "--" { only_pos = true; continue; }
+        if !only_pos && a.len > 2 && a[0] == '-' && a[1] == '-' {
+            let body = a[2..a.len];
+            let eq = body.find("=");
+            let name = eq >= 0 ? body[0..eq] : body;
+            if name == "help" { m.help = true; m.help_text = help_text(c, path); return; }
+            if name == "version" && c.ver.len > 0 { m.ver = true; return; }
+            let k = find_long(c, name);
+            if k < 0 {
+                let mut msg = format("unknown option `--{name}`");
+                let s = suggest(c, name, false);
+                if s.len > 0 { msg.append(format(" (did you mean `--{s}`?)")); }
+                fail(m, c, path, msg);
+                return;
+            }
+            let sp = c.specs.at(k);
+            if !sp.takes {
+                if eq >= 0 { fail(m, c, path, format("the flag `--{name}` does not take a value")); return; }
+                add_value(m, sp.name, "true");
+            } else if eq >= 0 {
+                add_value(m, sp.name, body[eq + 1..body.len]);
+            } else {
+                if i >= argv.len { fail(m, c, path, format("the option `--{name}` needs a value")); return; }
+                add_value(m, sp.name, argv[i]);
+                i += 1;
+            }
+            continue;
+        }
+        if !only_pos && a.len > 1 && a[0] == '-' {
+            // a cluster of short flags, optionally ending in an option with its value: -vvc file, -cfile
+            let mut j = 1 as i64;
+            while j < a.len {
+                let ch = a[j];
+                j += 1;
+                if ch == 'h' && find_short(c, 'h') < 0 { m.help = true; m.help_text = help_text(c, path); return; }
+                if ch == 'V' && c.ver.len > 0 && find_short(c, 'V') < 0 { m.ver = true; return; }
+                let k = find_short(c, ch);
+                if k < 0 { fail(m, c, path, format("unknown option `-{ch:c}`")); return; }
+                let sp = c.specs.at(k);
+                if !sp.takes { add_value(m, sp.name, "true"); continue; }
+                if j < a.len {
+                    add_value(m, sp.name, a[j..a.len]);
+                } else {
+                    if i >= argv.len { fail(m, c, path, format("the option `-{ch:c}` needs a value")); return; }
+                    add_value(m, sp.name, argv[i]);
+                    i += 1;
+                }
+                j = a.len;
+            }
+            continue;
+        }
+        // a plain word: a subcommand (first positional slot, when there are subcommands) or a positional
+        if c.subs.len > 0 && npos == 0 && !only_pos {
+            let mut found = -1 as i64;
+            for k in 0..c.subs.len { if c.subs.at(k).name == a { found = k; } }
+            if found < 0 {
+                let mut declared = 0 as i64;
+                for k in 0..c.specs.len { if c.specs.at(k).positional { declared += 1; } }
+                if declared == 0 {
+                    let mut msg = format("unknown command `{a}`");
+                    let s = suggest(c, a, true);
+                    if s.len > 0 { msg.append(format(" (did you mean `{s}`?)")); }
+                    fail(m, c, path, msg);
+                    return;
+                }
+            } else {
+                let sub = c.subs.at(found);
+                m.sub_name = String.from(sub.name);
+                let mut child = empty_matches(sub.name);
+                let child_path = format("{path} {a}");
+                parse_into(sub, child_path, argv, i, &child);
+                // a help / version request or an error in the child bubbles up with the child's help text
+                if child.help || child.ver || child.err.len > 0 {
+                    m.help = child.help; m.ver = child.ver;
+                    m.err = String.from(child.err); m.help_text = String.from(child.help_text);
+                }
+                m.subm.push(child);
+                i = argv.len;
+                break;
+            }
+        }
+        m.pos.push(String.from(a));
+        npos += 1;
+    }
+
+    // after the loop: arguments checks (skipped when the subcommand already reported something)
+    if m.err.len > 0 || m.help || m.ver { return; }
+    let mut slot = 0 as i64;
+    for k in 0..c.specs.len {
+        let sp = c.specs.at(k);
+        if sp.positional {
+            if sp.rest {
+                while slot < m.pos.len { add_value(m, sp.name, *m.pos.at(slot)); slot += 1; }
+            } else if slot < m.pos.len {
+                add_value(m, sp.name, *m.pos.at(slot));
+                slot += 1;
+            } else if sp.required {
+                fail(m, c, path, format("missing the required argument `{sp.name}`"));
+                return;
+            }
+        } else if sp.takes && !m.vals.has(sp.name) {
+            if sp.required { fail(m, c, path, format("missing the required option `--{sp.name}`")); return; }
+            if sp.has_default { add_value(m, sp.name, sp.default); }
+        }
+    }
+    if slot < m.pos.len {
+        fail(m, c, path, format("unexpected argument `{*m.pos.at(slot)}`"));
+        return;
+    }
+    if c.sub_required && m.sub_name.len == 0 {
+        fail(m, c, path, "a command is required");
+    }
+}
+
+impl Command {
+    // parses `argv` (element 0 is the program name: pass `env.args().view()`); never exits
+    pub fn parse(self, argv: []String) -> Matches {
+        let mut m = empty_matches(self.name);
+        parse_into(self, self.name, argv, 1, &m);
+        return m;
+    }
+
+    // parses; on `--help` / `--version` prints and exits 0, on a mistake prints the error and exits 2
+    pub fn parse_or_exit(self, argv: []String) -> Matches {
+        let m = self.parse(argv);
+        if m.help { write(1, cstr(m.help_text), m.help_text.len); exit(0); }
+        if m.ver { let v = format("{self.name} {self.ver}\n"); write(1, cstr(v), v.len); exit(0); }
+        if m.err.len > 0 {
+            let msg = format("error: {m.err}\n\n{m.help_text}");
+            write(2, cstr(msg), msg.len);
+            exit(2);
+        }
+        return m;
+    }
+
+    // the generated help for this command
+    pub fn help(self) -> String { return help_text(self, self.name); }
+}
+
+// ---- reading results ---------------------------------------------------------------------------
+impl Matches {
+    pub fn ok(self) -> bool { return self.err.len == 0 && !self.help && !self.ver; }
+    pub fn message(self) -> str { return self.err; }
+    pub fn wants_help(self) -> bool { return self.help; }
+    pub fn wants_version(self) -> bool { return self.ver; }
+    // the help text to show for a request (`-h`) or a mistake
+    pub fn help_message(self) -> str { return self.help_text; }
+
+    // was the flag given (or the option / positional supplied)?
+    pub fn has(self, name: str) -> bool { return self.vals.has(name); }
+    pub fn flag(self, name: str) -> bool { return self.vals.has(name); }
+    // how many times a flag was given: `-vvv` is 3
+    pub fn count(self, name: str) -> i64 {
+        let p = self.vals.get(name);
+        if p == null { return 0; }
+        return p.len;
+    }
+    // the last value given (or the default), "" when absent
+    pub fn value(self, name: str) -> str {
+        let p = self.vals.get(name);
+        if p == null || p.len == 0 { return ""; }
+        return *p.at(p.len - 1);
+    }
+    // every value given, in order
+    pub fn values(self, name: str) -> []str {
+        let p = self.vals.get(name);
+        if p == null { return slice_of(null as *str, 0); }
+        let out = alloc(str, p.len);
+        for i in 0..p.len { out[i] = *p.at(i); }
+        return out;
+    }
+    // the value parsed as an integer; `fallback` when absent or not a number
+    pub fn int(self, name: str, fallback: i64) -> i64 {
+        let s = self.value(name);
+        if s.len == 0 { return fallback; }
+        let mut v = 0 as i64;
+        let mut neg = false;
+        let mut i = 0 as i64;
+        if s[0] == '-' { neg = true; i = 1; }
+        if i >= s.len { return fallback; }
+        while i < s.len {
+            if s[i] < '0' || s[i] > '9' { return fallback; }
+            v = v * 10 + (s[i] - '0') as i64;
+            i += 1;
+        }
+        return neg ? -v : v;
+    }
+
+    // every positional argument, in order
+    pub fn positionals(self) -> *const List<String> { return &self.pos; }
+    // the chosen subcommand's name, "" when none
+    pub fn subcommand(self) -> str { return self.sub_name; }
+    // the chosen subcommand's matches (only valid when `subcommand()` is not empty)
+    pub fn sub(self) -> *Matches { return self.subm.at(0); }
+}
