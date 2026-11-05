@@ -59,7 +59,8 @@
   {
    "title": "Other",
    "modules": [
-    "iter"
+    "iter",
+    "set"
    ]
   }
  ],
@@ -3605,6 +3606,51 @@
         "V"
        ],
        "returns_doc": "nothing"
+      },
+      {
+       "name": "iter",
+       "tparams": [],
+       "params": [],
+       "returns": "iter.Iter<iter.Pair<str, *V>>",
+       "receiver": "self",
+       "doc": "(key, pointer to value) pairs",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ]
+      },
+      {
+       "name": "values",
+       "tparams": [],
+       "params": [],
+       "returns": "iter.Iter<*V>",
+       "receiver": "self",
+       "doc": "pointers to the values",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ]
+      },
+      {
+       "name": "get_or_insert",
+       "tparams": [],
+       "params": [
+        {
+         "name": "key",
+         "type": "str"
+        },
+        {
+         "name": "v",
+         "type": "V"
+        }
+       ],
+       "returns": "*V",
+       "receiver": "mut self",
+       "doc": "the value under `key`, inserting `v` first when the key is missing",
+       "fallible": false,
+       "impl_tparams": [
+        "V"
+       ]
       }
      ]
     }
@@ -7769,6 +7815,143 @@
      "returns_doc": "the total"
     }
    ]
+  },
+  {
+   "id": "set",
+   "name": "set",
+   "import": "std.set",
+   "summary": "a set of strings, built on std.map.",
+   "description": "",
+   "example": "import std.set;\nlet mut seen = set.HashSet.new();\nif seen.add(\"a\") { println(\"new\"); }     // add says whether the value was new\nprintln(seen.has(\"a\"));\nfor k in seen.iter() { println(*k); }",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "HashSet",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "",
+     "fields": [
+      {
+       "name": "m",
+       "type": "map.HashMap<bool>"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [],
+       "returns": "HashSet",
+       "receiver": null,
+       "doc": "Creates an empty set of strings.",
+       "fallible": false,
+       "returns_doc": "a new `HashSet`"
+      },
+      {
+       "name": "add",
+       "tparams": [],
+       "params": [
+        {
+         "name": "v",
+         "type": "str"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "mut self",
+       "doc": "true when the value was not in the set yet",
+       "fallible": false
+      },
+      {
+       "name": "has",
+       "tparams": [],
+       "params": [
+        {
+         "name": "v",
+         "type": "str",
+         "doc": "the string to look for"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Checks membership.",
+       "fallible": false,
+       "returns_doc": "`true` if `v` is in the set"
+      },
+      {
+       "name": "remove",
+       "tparams": [],
+       "params": [
+        {
+         "name": "v",
+         "type": "str",
+         "doc": "the string to remove"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "mut self",
+       "doc": "Removes a member.",
+       "fallible": false,
+       "returns_doc": "`true` if it was present"
+      },
+      {
+       "name": "len",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Counts the members.",
+       "fallible": false,
+       "returns_doc": "the number of members"
+      },
+      {
+       "name": "is_empty",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Checks whether the set has no members.",
+       "fallible": false,
+       "returns_doc": "`true` when empty"
+      },
+      {
+       "name": "clear",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Removes every member.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "to_list",
+       "tparams": [],
+       "params": [],
+       "returns": "List<String>",
+       "receiver": "self",
+       "doc": "copies of the members, in no particular order",
+       "fallible": false
+      },
+      {
+       "name": "is_subset",
+       "tparams": [],
+       "params": [
+        {
+         "name": "other",
+         "type": "*HashSet"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "true when every member of `self` is in `other`",
+       "fallible": false
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": []
   }
  ]
 }

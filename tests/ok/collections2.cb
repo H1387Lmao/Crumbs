@@ -1,0 +1,24 @@
+import std.map;
+import std.set;
+
+fn main() {
+    let mut m: map.HashMap<i64> = map.HashMap.new();
+    m.set("a", 1); m.set("b", 2); m.set("c", 3);
+    let total = m.values().fold(0 as i64, |acc, v| acc + *v);
+    println(total);
+    let mut n = 0 as i64;
+    for p in m.iter() { n += *p.second; }
+    println(n);
+    println(*m.get_or_insert("z", 9));
+    println(*m.get_or_insert("z", 10));
+    println(m.len());
+
+    let mut s = set.HashSet.new();
+    println(s.add("x"));
+    println(s.add("x"));
+    s.add("y");
+    println(s.len());
+    println(s.has("y"));
+    println(s.remove("y"));
+    println(s.has("y"));
+}

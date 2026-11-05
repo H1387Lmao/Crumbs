@@ -280,3 +280,9 @@ iter.Iter.all :: True when `pred` is true for every value (stops at the first fa
 iter.Iter.nth :: The value at position `n` (starting at 0). :: the value, or `null` if there are fewer :: n=the position
 iter.Iter.last :: The final value. :: the value, or `null` if there were none ::
 iter.Iter.min_by :: The smallest value under `cmp` (the first of equal ones). :: the value, or `null` if there were none :: cmp=negative, zero or positive like `qsort`
+set.HashSet.new :: Creates an empty set of strings. :: a new `HashSet` ::
+set.HashSet.has :: Checks membership. :: `true` if `v` is in the set :: v=the string to look for
+set.HashSet.remove :: Removes a member. :: `true` if it was present :: v=the string to remove
+set.HashSet.len :: Counts the members. :: the number of members ::
+set.HashSet.is_empty :: Checks whether the set has no members. :: `true` when empty ::
+set.HashSet.clear :: Removes every member. :: nothing ::
