@@ -1866,6 +1866,11 @@ class Checker:
                                  help="add the value after the string, or name it: `{total}` with `total = ...`" if not pos else None)
                     return False
                 ex = pos[ref]
+            elif isinstance(ref, tuple):                          # an expression written inside the braces
+                ex = self.parse_fmt_expr(ref[1], t)
+                if ex is None:
+                    return False
+                uses[id(ex)] = 1
             elif ref in named:
                 ex = named[ref].expr
             else:                                                 # the variable (or field path) of that name
@@ -1899,6 +1904,42 @@ class Checker:
             return False
         args[tidx:] = [N("FStr", t.span, parts=parts)]
         return True
+
+    def parse_fmt_expr(self, text, at):
+        """Parses the expression written inside `{...}` of a format string; every node gets the string literal's span."""
+        from .parser import Parser, N as Node
+        from .diag import Source, Diagnostics
+        tmp = Diagnostics()
+        src = Source(at.span.src.path, text)
+        try:
+            p = Parser(src, tmp)
+            ex = p.parse_expr()
+            if p.tok.kind != "eof" and not tmp.has_errors:
+                tmp.error(p.tok.span, "unexpected text after the expression")
+        except Exception:
+            ex = None
+            if not tmp.has_errors:
+                tmp.error(at.span, "not a valid expression")
+        if tmp.has_errors or ex is None:
+            self.d.error(at.span, f"`{{{text}}}` is not a valid placeholder", label="in this format string",
+                         help=f"the expression did not parse ({tmp.items[0].msg}); placeholders hold nothing, a number, or an expression: `{{}}`, `{{0}}`, `{{a + b}}`")
+            return None
+
+        def fix(n):
+            if isinstance(n, Node):
+                n.span = at.span
+                for k, v in list(n.__dict__.items()):
+                    if k in ("kind", "span"):
+                        continue
+                    if k.endswith("span"):
+                        setattr(n, k, at.span)
+                    else:
+                        fix(v)
+            elif isinstance(n, (list, tuple)):
+                for x in n:
+                    fix(x)
+        fix(ex)
+        return ex
 
     def ex_FStr(self, e, exp):
         from .fmtspec import parse_spec, check_for, SpecError
