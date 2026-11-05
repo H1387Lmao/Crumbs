@@ -1,0 +1,82 @@
+// Iterators: `for x in e` takes an Iter, anything with `next(self) -> T?`, or anything with `iter()` (a List gives pointers).
+import std.iter;
+
+struct Noisy { id: i32 }
+drop Noisy(self) { println("drop {}", self.id); }
+
+struct Countdown { n: i64 }
+impl Countdown {
+    pub fn next(mut self) -> i64? {
+        if self.n <= 0 { return null; }
+        let v = self.n;
+        self.n -= 1;
+        return v;
+    }
+}
+
+fn main() {
+    // sources and adapters
+    for n in iter.range(0, 10).filter(|n| *n % 2 == 0).map(|n| n * n) { print(n, " "); }
+    println("");
+    println("{}", iter.sum(iter.range_incl(1, 100)));
+    for n in iter.range_step(0, 20, 5) { print(n, " "); }
+    println("");
+    for n in iter.range(0, 100).skip(3).step_by(10).take(4) { print(n, " "); }
+    println("");
+    for n in iter.range(1, 4).chain(iter.range(10, 13)) { print(n, " "); }
+    println("");
+    for n in iter.range(0, 100).skip_while(|n| *n < 95).take_while(|n| *n < 98) { print(n, " "); }
+    println("");
+
+    // your own iterator
+    for n in (Countdown { n: 3 }) { print(n, " "); }
+    println("");
+
+    // lists
+    let mut words: List<String> = List.new();
+    words.push(string_from("pear"));
+    words.push(string_from("fig"));
+    words.push(string_from("banana"));
+    for w in words.iter() { print(*w, ";"); }
+    println("");
+    for w in words.iter_rev() { print(*w, ";"); }
+    println("");
+    let lens = words.iter().map(|w| w.len).collect();
+    println("{} {} {}", lens.get(0), lens.get(1), lens.get(2));
+    println("{}", words.iter().fold(0 as i64, |acc, w| acc + w.len));
+    println("any long: {}, all short: {}", words.iter().any(|w| w.len > 5), words.iter().all(|w| w.len < 5));
+    println("position of fig: {}", words.iter().position(|w| w.len == 3));
+    println("count {}", words.iter().filter(|w| w.len > 3).count());
+
+    // enumerate / zip
+    for p in words.iter().enumerate() { print(p.index, "=", *p.value, " "); }
+    println("");
+    for p in iter.range(0, 5).zip(words.iter()) { print(p.first, ":", *p.second, " "); }
+    println("");
+
+    // find, nth, last, min/max
+    let found = iter.range(0, 50).find(|n| *n * *n > 200);
+    println("{} {}", found.unwrap(), iter.range(0, 5).nth(3).unwrap());
+    println("{}", iter.range(0, 5).last().unwrap());
+    println("{}", iter.range(0, 9).max_by(|a, b| (*a % 4) as i32 - (*b % 4) as i32).unwrap());
+    println("{}", iter.range(0, 9).min_by(|a, b| (*a % 4) as i32 - (*b % 4) as i32).unwrap());
+    println("{}", iter.range(5, 5).last().is_none());
+
+    // values with destructors are dropped exactly once, also when the iterator is not finished
+    {
+        let mut things: List<Noisy> = List.new();
+        things.push(Noisy { id: 1 });
+        things.push(Noisy { id: 2 });
+        things.push(Noisy { id: 3 });
+        let ids = things.iter().map(|t| t.id).collect();
+        println("ids {} {} {}", ids.get(0), ids.get(1), ids.get(2));
+        for t in things.iter() {
+            if t.id == 2 { break; }
+        }
+        println("moved");
+        let kept = iter.range(10, 14).map(|i| Noisy { id: i as i32 }).filter(|n| n.id % 2 == 0).collect();
+        println("kept {}", kept.len);
+        println("end of block");
+    }
+    println("done");
+}

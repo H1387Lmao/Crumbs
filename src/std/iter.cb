@@ -1,0 +1,403 @@
+// std.iter: lazy iterators built from closures. No import is needed.
+//
+//     let evens = (1..=10)                              // ranges: iter.range(lo, hi) / iter.range_incl(lo, hi)
+//     for n in iter.range(0, 10).filter(|n| *n % 2 == 0).map(|n| n * n) { println(n); }
+//
+//     let words = List.from(["a", "bb", "ccc"]);
+//     let lens = words.iter().map(|w| w.len).collect();     // List<i64>
+//     let total = words.iter().fold(0, |acc, w| acc + w.len);
+//
+// An `Iter<T>` produces values one at a time with `next()`, which gives `T?` (nothing when it is exhausted). The adapters
+// (`map`, `filter`, `take`, `zip`, ...) consume the iterator and return a new one that does its work only when it is
+// asked for the next value; the consumers (`collect`, `fold`, `count`, `any`, ...) drive it to the end. Whatever an
+// iterator still holds is destroyed with it. `for x in e` accepts an `Iter<T>`, any value with a `next(self) -> T?` method,
+// or any value with an `iter()` method, such as a `List`, which yields pointers to its elements.
+import std.list;
+
+pub struct Iter<T> { step: || -> T? }
+
+pub struct Pair<A, B> { first: A, second: B }
+pub struct Indexed<T> { index: i64, value: T }
+
+// ---- sources -------------------------------------------------------------------------------
+
+// an iterator that calls `f` for each value until it gives nothing
+pub fn from_fn<T>(f: || -> T?) -> Iter<T> { return Iter { step: f }; }
+
+pub fn empty<T>() -> Iter<T> { return Iter { step: || -> T? { return null; } }; }
+
+// lo, lo+1, ..., hi-1
+pub fn range(lo: i64, hi: i64) -> Iter<i64> {
+    let mut i = lo;
+    return Iter { step: move || -> i64? {
+        if i >= hi { return null; }
+        let v = i;
+        i += 1;
+        return v;
+    } };
+}
+
+// lo, lo+1, ..., hi
+pub fn range_incl(lo: i64, hi: i64) -> Iter<i64> { return range(lo, hi + 1); }
+
+// lo, lo+step, ... while below hi (step must be positive)
+pub fn range_step(lo: i64, hi: i64, step: i64) -> Iter<i64> {
+    let mut i = lo;
+    return Iter { step: move || -> i64? {
+        if i >= hi { return null; }
+        let v = i;
+        i += step;
+        return v;
+    } };
+}
+
+// a copyable value, n times
+pub fn repeat<T>(v: T, n: i64) -> Iter<T> {
+    let mut left = n;
+    return Iter { step: move || -> T? {
+        if left <= 0 { return null; }
+        left -= 1;
+        return v;
+    } };
+}
+
+// the bytes of a string
+pub fn bytes(s: str) -> Iter<u8> {
+    let mut i = 0 as i64;
+    return Iter { step: move || -> u8? {
+        if i >= s.len { return null; }
+        let b = s[i];
+        i += 1;
+        return b;
+    } };
+}
+
+// the elements of a slice, as pointers
+pub fn slice_iter<T>(xs: []T) -> Iter<*T> {
+    let mut i = 0 as i64;
+    return Iter { step: move || -> (*T)? {
+        if i >= xs.len { return null; }
+        let p = &xs[i];
+        i += 1;
+        return p;
+    } };
+}
+
+// ---- adapters and consumers -----------------------------------------------------------------
+impl<T> Iter<T> {
+    pub fn next(self) -> T? { return (self.step)(); }
+
+    // ---- adapters (they consume the iterator) ----
+    pub fn map<U>(mut self: Iter<T>, f: |T| -> U) -> Iter<U> {
+        return Iter { step: move || -> U? {
+            let v = self.next();
+            if v.is_none() { return null; }
+            return f(v.unwrap());
+        } };
+    }
+
+    // keeps the values for which `pred` (which looks at them through a pointer) is true
+    pub fn filter(mut self: Iter<T>, pred: |*T| -> bool) -> Iter<T> {
+        return Iter { step: move || -> T? {
+            loop {
+                let v = self.next();
+                if v.is_none() { return null; }
+                let mut x = v.unwrap();
+                if pred(&x) { return x; }
+            }
+        } };
+    }
+
+    pub fn take(mut self: Iter<T>, n: i64) -> Iter<T> {
+        let mut left = n;
+        return Iter { step: move || -> T? {
+            if left <= 0 { return null; }
+            left -= 1;
+            return self.next();
+        } };
+    }
+
+    pub fn skip(mut self: Iter<T>, n: i64) -> Iter<T> {
+        let mut left = n;
+        return Iter { step: move || -> T? {
+            while left > 0 {
+                left -= 1;
+                let dropped = self.next();
+                if dropped.is_none() { return null; }
+            }
+            return self.next();
+        } };
+    }
+
+    pub fn take_while(mut self: Iter<T>, pred: |*T| -> bool) -> Iter<T> {
+        let mut done = false;
+        return Iter { step: move || -> T? {
+            if done { return null; }
+            let v = self.next();
+            if v.is_none() { done = true; return null; }
+            let mut x = v.unwrap();
+            if pred(&x) { return x; }
+            done = true;
+            return null;
+        } };
+    }
+
+    pub fn skip_while(mut self: Iter<T>, pred: |*T| -> bool) -> Iter<T> {
+        let mut started = false;
+        return Iter { step: move || -> T? {
+            loop {
+                let v = self.next();
+                if v.is_none() { return null; }
+                let mut x = v.unwrap();
+                if started { return x; }
+                if !pred(&x) { started = true; return x; }
+            }
+        } };
+    }
+
+    // every n-th value, starting with the first
+    pub fn step_by(mut self: Iter<T>, n: i64) -> Iter<T> {
+        let mut first = true;
+        return Iter { step: move || -> T? {
+            if first { first = false; return self.next(); }
+            let mut k = 1 as i64;
+            while k < n {
+                let dropped = self.next();
+                if dropped.is_none() { return null; }
+                k += 1;
+            }
+            return self.next();
+        } };
+    }
+
+    pub fn chain(mut self: Iter<T>, mut other: Iter<T>) -> Iter<T> {
+        let mut first_done = false;
+        return Iter { step: move || -> T? {
+            if !first_done {
+                let v = self.next();
+                if v.is_some() { return v; }
+                first_done = true;
+            }
+            return other.next();
+        } };
+    }
+
+    pub fn enumerate(mut self: Iter<T>) -> Iter<Indexed<T>> {
+        let mut i = 0 as i64;
+        return Iter { step: move || -> Indexed<T>? {
+            let v = self.next();
+            if v.is_none() { return null; }
+            let idx = i;
+            i += 1;
+            return Indexed { index: idx, value: v.unwrap() };
+        } };
+    }
+
+    pub fn zip<U>(mut self: Iter<T>, mut other: Iter<U>) -> Iter<Pair<T, U>> {
+        return Iter { step: move || -> Pair<T, U>? {
+            let a = self.next();
+            if a.is_none() { return null; }
+            let b = other.next();
+            if b.is_none() { return null; }
+            return Pair { first: a.unwrap(), second: b.unwrap() };
+        } };
+    }
+
+    // calls `f` on a pointer to each value as it goes by, then passes it on
+    pub fn inspect(mut self: Iter<T>, f: |*T|) -> Iter<T> {
+        return Iter { step: move || -> T? {
+            let v = self.next();
+            if v.is_none() { return null; }
+            let mut x = v.unwrap();
+            f(&x);
+            return x;
+        } };
+    }
+
+    // ---- consumers ----
+    pub fn count(mut self: Iter<T>) -> i64 {
+        let mut n = 0 as i64;
+        loop {
+            let v = self.next();
+            if v.is_none() { break; }
+            n += 1;
+        }
+        return n;
+    }
+
+    pub fn for_each(mut self: Iter<T>, f: |T|) {
+        loop {
+            let v = self.next();
+            if v.is_none() { break; }
+            f(v.unwrap());
+        }
+    }
+
+    pub fn fold<A>(mut self: Iter<T>, init: A, f: |A, T| -> A) -> A {
+        let mut acc = init;
+        loop {
+            let v = self.next();
+            if v.is_none() { break; }
+            acc = f(acc, v.unwrap());
+        }
+        return acc;
+    }
+
+    pub fn collect(mut self: Iter<T>) -> list.List<T> {
+        let mut out: list.List<T> = list.List.new();
+        loop {
+            let v = self.next();
+            if v.is_none() { break; }
+            out.push(v.unwrap());
+        }
+        return out;
+    }
+
+    pub fn any(mut self: Iter<T>, pred: |*T| -> bool) -> bool {
+        loop {
+            let v = self.next();
+            if v.is_none() { return false; }
+            let mut x = v.unwrap();
+            if pred(&x) { return true; }
+        }
+    }
+
+    pub fn all(mut self: Iter<T>, pred: |*T| -> bool) -> bool {
+        loop {
+            let v = self.next();
+            if v.is_none() { return true; }
+            let mut x = v.unwrap();
+            if !pred(&x) { return false; }
+        }
+    }
+
+    // the first value for which `pred` is true
+    pub fn find(mut self: Iter<T>, pred: |*T| -> bool) -> T? {
+        loop {
+            let v = self.next();
+            if v.is_none() { return null; }
+            let mut x = v.unwrap();
+            if pred(&x) { return x; }
+        }
+    }
+
+    // the index of the first value for which `pred` is true, or -1
+    pub fn position(mut self: Iter<T>, pred: |*T| -> bool) -> i64 {
+        let mut i = 0 as i64;
+        loop {
+            let v = self.next();
+            if v.is_none() { return -1; }
+            let mut x = v.unwrap();
+            if pred(&x) { return i; }
+            i += 1;
+        }
+    }
+
+    pub fn nth(mut self: Iter<T>, n: i64) -> T? {
+        let mut i = 0 as i64;
+        while i < n {
+            let dropped = self.next();
+            if dropped.is_none() { return null; }
+            i += 1;
+        }
+        return self.next();
+    }
+
+    pub fn last(mut self: Iter<T>) -> T? {
+        let mut best: T? = null;
+        loop {
+            let v = self.next();
+            if v.is_none() { break; }
+            best = v;
+        }
+        return best;
+    }
+
+    // the largest / smallest value under `cmp` (<0, 0, >0 like qsort); the first of equals wins
+    pub fn max_by(mut self: Iter<T>, cmp: |*T, *T| -> i32) -> T? {
+        let mut best: T? = null;
+        loop {
+            let v = self.next();
+            if v.is_none() { break; }
+            if best.is_none() { best = v; }
+            else {
+                let mut x = v.unwrap();
+                let mut b = best.unwrap();
+                if cmp(&x, &b) > 0 { best = x; } else { best = b; }
+            }
+        }
+        return best;
+    }
+
+    pub fn min_by(mut self: Iter<T>, cmp: |*T, *T| -> i32) -> T? {
+        let mut best: T? = null;
+        loop {
+            let v = self.next();
+            if v.is_none() { break; }
+            if best.is_none() { best = v; }
+            else {
+                let mut x = v.unwrap();
+                let mut b = best.unwrap();
+                if cmp(&x, &b) < 0 { best = x; } else { best = b; }
+            }
+        }
+        return best;
+    }
+}
+
+// ---- numbers ---------------------------------------------------------------------------------
+pub fn sum(mut it: Iter<i64>) -> i64 {
+    let mut s = 0 as i64;
+    loop {
+        let v = it.next();
+        if v.is_none() { break; }
+        s += v.unwrap();
+    }
+    return s;
+}
+
+pub fn product(mut it: Iter<i64>) -> i64 {
+    let mut p = 1 as i64;
+    loop {
+        let v = it.next();
+        if v.is_none() { break; }
+        p *= v.unwrap();
+    }
+    return p;
+}
+
+pub fn sum_f64(mut it: Iter<f64>) -> f64 {
+    let mut s = 0.0 as f64;
+    loop {
+        let v = it.next();
+        if v.is_none() { break; }
+        s += v.unwrap();
+    }
+    return s;
+}
+
+// ---- lists give out iterators ------------------------------------------------------------------
+impl<T> list.List<T> {
+    // pointers to the elements, front to back; the list must not change while the iterator is in use
+    pub fn iter(self) -> Iter<*T> {
+        let l = self;
+        let mut i = 0 as i64;
+        return Iter { step: move || -> (*T)? {
+            if i >= l.len { return null; }
+            let p = &l.items[i];
+            i += 1;
+            return p;
+        } };
+    }
+
+    // pointers to the elements, back to front
+    pub fn iter_rev(self) -> Iter<*T> {
+        let l = self;
+        let mut i = l.len;
+        return Iter { step: move || -> (*T)? {
+            if i <= 0 { return null; }
+            i -= 1;
+            return &l.items[i];
+        } };
+    }
+}

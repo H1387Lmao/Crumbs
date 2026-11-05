@@ -1,0 +1,9 @@
+fn leak() -> || -> i32 {
+    let x = 5;
+    return || -> i32 { return x; };  // ERROR: this closure borrows the local `x` and cannot be returned
+}
+
+fn main() {
+    let f = leak();
+    println("{}", f());
+}

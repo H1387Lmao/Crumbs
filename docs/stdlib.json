@@ -55,6 +55,12 @@
     "thread",
     "async"
    ]
+  },
+  {
+   "title": "Other",
+   "modules": [
+    "iter"
+   ]
   }
  ],
  "modules": [
@@ -7041,6 +7047,726 @@
      "doc": "Allocates the task object for an `async fn` that returns `void!`. The compiler calls this for you.",
      "fallible": false,
      "returns_doc": "a `*TryJob`"
+    }
+   ]
+  },
+  {
+   "id": "iter",
+   "name": "iter",
+   "import": "std.iter",
+   "summary": "lazy iterators built from closures. No import is needed.",
+   "description": "An `Iter<T>` produces values one at a time with `next()`, which gives `T?` (nothing when it is exhausted). The adapters\n(`map`, `filter`, `take`, `zip`, ...) consume the iterator and return a new one that does its work only when it is\nasked for the next value; the consumers (`collect`, `fold`, `count`, `any`, ...) drive it to the end. Whatever an\niterator still holds is destroyed with it. `for x in e` accepts an `Iter<T>`, any value with a `next(self) -> T?` method,\nor any value with an `iter()` method, such as a `List`, which yields pointers to its elements.",
+   "example": "let evens = (1..=10)                              // ranges: iter.range(lo, hi) / iter.range_incl(lo, hi)\nfor n in iter.range(0, 10).filter(|n| *n % 2 == 0).map(|n| n * n) { println(n); }\n\nlet words = List.from([\"a\", \"bb\", \"ccc\"]);\nlet lens = words.iter().map(|w| w.len).collect();     // List<i64>\nlet total = words.iter().fold(0, |acc, w| acc + w.len);",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "Iter",
+     "kind": "struct",
+     "tparams": [
+      "T"
+     ],
+     "doc": "",
+     "fields": [
+      {
+       "name": "step",
+       "type": "|| -> T?"
+      }
+     ],
+     "methods": [
+      {
+       "name": "next",
+       "tparams": [],
+       "params": [],
+       "returns": "T?",
+       "receiver": "self",
+       "doc": "Produces the next value.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the value, or `null` once the iterator is exhausted"
+      },
+      {
+       "name": "map",
+       "tparams": [
+        "U"
+       ],
+       "params": [
+        {
+         "name": "f",
+         "type": "|T| -> U",
+         "doc": "the conversion"
+        }
+       ],
+       "returns": "Iter<U>",
+       "receiver": "mut self",
+       "doc": "Applies `f` to every value as it is produced.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `Iter<U>`"
+      },
+      {
+       "name": "filter",
+       "tparams": [],
+       "params": [
+        {
+         "name": "pred",
+         "type": "|*T| -> bool"
+        }
+       ],
+       "returns": "Iter<T>",
+       "receiver": "mut self",
+       "doc": "keeps the values for which `pred` (which looks at them through a pointer) is true",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ]
+      },
+      {
+       "name": "take",
+       "tparams": [],
+       "params": [
+        {
+         "name": "n",
+         "type": "i64",
+         "doc": "how many values to keep"
+        }
+       ],
+       "returns": "Iter<T>",
+       "receiver": "mut self",
+       "doc": "Stops after `n` values.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `Iter<T>`"
+      },
+      {
+       "name": "skip",
+       "tparams": [],
+       "params": [
+        {
+         "name": "n",
+         "type": "i64",
+         "doc": "how many values to skip"
+        }
+       ],
+       "returns": "Iter<T>",
+       "receiver": "mut self",
+       "doc": "Throws away the first `n` values.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `Iter<T>`"
+      },
+      {
+       "name": "take_while",
+       "tparams": [],
+       "params": [
+        {
+         "name": "pred",
+         "type": "|*T| -> bool",
+         "doc": "looks at each value through a pointer"
+        }
+       ],
+       "returns": "Iter<T>",
+       "receiver": "mut self",
+       "doc": "Produces values until `pred` is false for one, then stops.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `Iter<T>`"
+      },
+      {
+       "name": "skip_while",
+       "tparams": [],
+       "params": [
+        {
+         "name": "pred",
+         "type": "|*T| -> bool",
+         "doc": "looks at each value through a pointer"
+        }
+       ],
+       "returns": "Iter<T>",
+       "receiver": "mut self",
+       "doc": "Throws values away until `pred` is false for one, then produces everything.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `Iter<T>`"
+      },
+      {
+       "name": "step_by",
+       "tparams": [],
+       "params": [
+        {
+         "name": "n",
+         "type": "i64"
+        }
+       ],
+       "returns": "Iter<T>",
+       "receiver": "mut self",
+       "doc": "every n-th value, starting with the first",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ]
+      },
+      {
+       "name": "chain",
+       "tparams": [],
+       "params": [
+        {
+         "name": "mut other",
+         "type": "Iter<T>"
+        }
+       ],
+       "returns": "Iter<T>",
+       "receiver": "mut self",
+       "doc": "Produces everything from this iterator, then everything from `other`.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `Iter<T>`"
+      },
+      {
+       "name": "enumerate",
+       "tparams": [],
+       "params": [],
+       "returns": "Iter<Indexed<T>>",
+       "receiver": "mut self",
+       "doc": "Pairs every value with its position (starting at 0).",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `Iter<Indexed<T>>`"
+      },
+      {
+       "name": "zip",
+       "tparams": [
+        "U"
+       ],
+       "params": [
+        {
+         "name": "mut other",
+         "type": "Iter<U>"
+        }
+       ],
+       "returns": "Iter<Pair<T, U>>",
+       "receiver": "mut self",
+       "doc": "Pairs values from two iterators; stops when either runs out.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `Iter<Pair<T, U>>`"
+      },
+      {
+       "name": "inspect",
+       "tparams": [],
+       "params": [
+        {
+         "name": "f",
+         "type": "|*T|"
+        }
+       ],
+       "returns": "Iter<T>",
+       "receiver": "mut self",
+       "doc": "calls `f` on a pointer to each value as it goes by, then passes it on",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ]
+      },
+      {
+       "name": "count",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "mut self",
+       "doc": "Counts the values.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the number of values"
+      },
+      {
+       "name": "for_each",
+       "tparams": [],
+       "params": [
+        {
+         "name": "f",
+         "type": "|T|",
+         "doc": "what to do with each value"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Calls `f` with every value.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "fold",
+       "tparams": [
+        "A"
+       ],
+       "params": [
+        {
+         "name": "init",
+         "type": "A",
+         "doc": "the starting value"
+        },
+        {
+         "name": "f",
+         "type": "|A",
+         "doc": "combines the accumulator and a value"
+        },
+        {
+         "name": "T| -> A",
+         "type": ""
+        }
+       ],
+       "returns": "A",
+       "receiver": "mut self",
+       "doc": "Combines all values into one, starting from `init`.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the final accumulated value"
+      },
+      {
+       "name": "collect",
+       "tparams": [],
+       "params": [],
+       "returns": "list.List<T>",
+       "receiver": "mut self",
+       "doc": "Gathers every value into a list.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "a new `List<T>`"
+      },
+      {
+       "name": "any",
+       "tparams": [],
+       "params": [
+        {
+         "name": "pred",
+         "type": "|*T| -> bool",
+         "doc": "looks at each value through a pointer"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "mut self",
+       "doc": "True when `pred` is true for at least one value (stops at the first).",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "all",
+       "tparams": [],
+       "params": [
+        {
+         "name": "pred",
+         "type": "|*T| -> bool",
+         "doc": "looks at each value through a pointer"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "mut self",
+       "doc": "True when `pred` is true for every value (stops at the first failure).",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "`bool`"
+      },
+      {
+       "name": "find",
+       "tparams": [],
+       "params": [
+        {
+         "name": "pred",
+         "type": "|*T| -> bool"
+        }
+       ],
+       "returns": "T?",
+       "receiver": "mut self",
+       "doc": "the first value for which `pred` is true",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ]
+      },
+      {
+       "name": "position",
+       "tparams": [],
+       "params": [
+        {
+         "name": "pred",
+         "type": "|*T| -> bool"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "mut self",
+       "doc": "the index of the first value for which `pred` is true, or -1",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ]
+      },
+      {
+       "name": "nth",
+       "tparams": [],
+       "params": [
+        {
+         "name": "n",
+         "type": "i64",
+         "doc": "the position"
+        }
+       ],
+       "returns": "T?",
+       "receiver": "mut self",
+       "doc": "The value at position `n` (starting at 0).",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the value, or `null` if there are fewer"
+      },
+      {
+       "name": "last",
+       "tparams": [],
+       "params": [],
+       "returns": "T?",
+       "receiver": "mut self",
+       "doc": "The final value.",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the value, or `null` if there were none"
+      },
+      {
+       "name": "max_by",
+       "tparams": [],
+       "params": [
+        {
+         "name": "cmp",
+         "type": "|*T"
+        },
+        {
+         "name": "*T| -> i32",
+         "type": ""
+        }
+       ],
+       "returns": "T?",
+       "receiver": "mut self",
+       "doc": "the largest / smallest value under `cmp` (<0, 0, >0 like qsort); the first of equals wins",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ]
+      },
+      {
+       "name": "min_by",
+       "tparams": [],
+       "params": [
+        {
+         "name": "cmp",
+         "type": "|*T",
+         "doc": "negative, zero or positive like `qsort`"
+        },
+        {
+         "name": "*T| -> i32",
+         "type": ""
+        }
+       ],
+       "returns": "T?",
+       "receiver": "mut self",
+       "doc": "The smallest value under `cmp` (the first of equal ones).",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ],
+       "returns_doc": "the value, or `null` if there were none"
+      }
+     ]
+    },
+    {
+     "name": "Pair",
+     "kind": "struct",
+     "tparams": [
+      "A",
+      "B"
+     ],
+     "doc": "",
+     "fields": [
+      {
+       "name": "first",
+       "type": "A"
+      },
+      {
+       "name": "second",
+       "type": "B"
+      }
+     ],
+     "methods": []
+    },
+    {
+     "name": "Indexed",
+     "kind": "struct",
+     "tparams": [
+      "T"
+     ],
+     "doc": "",
+     "fields": [
+      {
+       "name": "index",
+       "type": "i64"
+      },
+      {
+       "name": "value",
+       "type": "T"
+      }
+     ],
+     "methods": []
+    },
+    {
+     "name": "list.List",
+     "kind": "builtin",
+     "tparams": [],
+     "doc": "",
+     "fields": [],
+     "methods": [
+      {
+       "name": "iter",
+       "tparams": [],
+       "params": [],
+       "returns": "Iter<*T>",
+       "receiver": "self",
+       "doc": "pointers to the elements, front to back; the list must not change while the iterator is in use",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ]
+      },
+      {
+       "name": "iter_rev",
+       "tparams": [],
+       "params": [],
+       "returns": "Iter<*T>",
+       "receiver": "self",
+       "doc": "pointers to the elements, back to front",
+       "fallible": false,
+       "impl_tparams": [
+        "T"
+       ]
+      }
+     ],
+     "ext": true
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "from_fn",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "f",
+       "type": "|| -> T?"
+      }
+     ],
+     "returns": "Iter<T>",
+     "receiver": null,
+     "doc": "an iterator that calls `f` for each value until it gives nothing",
+     "fallible": false
+    },
+    {
+     "name": "empty",
+     "tparams": [
+      "T"
+     ],
+     "params": [],
+     "returns": "Iter<T>",
+     "receiver": null,
+     "doc": "An iterator that produces nothing.",
+     "fallible": false,
+     "returns_doc": "an empty `Iter<T>`"
+    },
+    {
+     "name": "range",
+     "tparams": [],
+     "params": [
+      {
+       "name": "lo",
+       "type": "i64"
+      },
+      {
+       "name": "hi",
+       "type": "i64"
+      }
+     ],
+     "returns": "Iter<i64>",
+     "receiver": null,
+     "doc": "lo, lo+1, ..., hi-1",
+     "fallible": false
+    },
+    {
+     "name": "range_incl",
+     "tparams": [],
+     "params": [
+      {
+       "name": "lo",
+       "type": "i64"
+      },
+      {
+       "name": "hi",
+       "type": "i64"
+      }
+     ],
+     "returns": "Iter<i64>",
+     "receiver": null,
+     "doc": "lo, lo+1, ..., hi",
+     "fallible": false
+    },
+    {
+     "name": "range_step",
+     "tparams": [],
+     "params": [
+      {
+       "name": "lo",
+       "type": "i64"
+      },
+      {
+       "name": "hi",
+       "type": "i64"
+      },
+      {
+       "name": "step",
+       "type": "i64"
+      }
+     ],
+     "returns": "Iter<i64>",
+     "receiver": null,
+     "doc": "lo, lo+step, ... while below hi (step must be positive)",
+     "fallible": false
+    },
+    {
+     "name": "repeat",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "v",
+       "type": "T"
+      },
+      {
+       "name": "n",
+       "type": "i64"
+      }
+     ],
+     "returns": "Iter<T>",
+     "receiver": null,
+     "doc": "a copyable value, n times",
+     "fallible": false
+    },
+    {
+     "name": "bytes",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str"
+      }
+     ],
+     "returns": "Iter<u8>",
+     "receiver": null,
+     "doc": "the bytes of a string",
+     "fallible": false
+    },
+    {
+     "name": "slice_iter",
+     "tparams": [
+      "T"
+     ],
+     "params": [
+      {
+       "name": "xs",
+       "type": "[]T"
+      }
+     ],
+     "returns": "Iter<*T>",
+     "receiver": null,
+     "doc": "the elements of a slice, as pointers",
+     "fallible": false
+    },
+    {
+     "name": "sum",
+     "tparams": [],
+     "params": [
+      {
+       "name": "mut it",
+       "type": "Iter<i64>"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "Adds up every value.",
+     "fallible": false,
+     "returns_doc": "the total (`0` for an empty iterator)"
+    },
+    {
+     "name": "product",
+     "tparams": [],
+     "params": [
+      {
+       "name": "mut it",
+       "type": "Iter<i64>"
+      }
+     ],
+     "returns": "i64",
+     "receiver": null,
+     "doc": "Multiplies every value together.",
+     "fallible": false,
+     "returns_doc": "the product (`1` for an empty iterator)"
+    },
+    {
+     "name": "sum_f64",
+     "tparams": [],
+     "params": [
+      {
+       "name": "mut it",
+       "type": "Iter<f64>"
+      }
+     ],
+     "returns": "f64",
+     "receiver": null,
+     "doc": "Adds up every `f64`.",
+     "fallible": false,
+     "returns_doc": "the total"
     }
    ]
   }

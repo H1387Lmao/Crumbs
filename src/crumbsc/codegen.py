@@ -624,8 +624,8 @@ class CodeGen:
             ct = e.callee.ty
             ret = self.ctype(ct.inner) if ct.inner != VOID else "void"
             pts = "".join(", " + self.ctype(p) for p in ct.params)
-            return (f"({{ cb_Clo {f} = {self.ex(e.callee)}; (({ret} (*)(void *{pts})){f}.fn)({f}.env"
-                    + "".join(", " + self.ex(a) for a in e.args) + "); })")
+            return (f"(({{ cb_Clo {f} = {self.ex(e.callee)}; (({ret} (*)(void *{pts})){f}.fn)({f}.env"
+                    + "".join(", " + self.ex(a) for a in e.args) + "); }))")
         if getattr(e, "indirect", False):
             return f"{self.nn(self.ex(e.callee), e.callee.ty, e.span)}({args})"
         return f"{e.sym.cname}({args})"
@@ -1174,6 +1174,8 @@ class CodeGen:
         self.finish_return(f"({self.ctype(self.cur_ret)}){{.err = {self.ex(s.expr)}}}")
 
     def s_For(self, s):
+        if getattr(s, "desugared", None) is not None:
+            return self.s_Block(s.desugared)
         it = s.iter
         var = s.local.cname if s.local is not None else self.tmp("cb_v")
         self.emit("{")

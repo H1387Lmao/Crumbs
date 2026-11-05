@@ -36,7 +36,8 @@ class CompileError(Exception):
 
 
 class Diag:
-    def __init__(self, level, span, msg, label=None, help=None, notes=None):
+    def __init__(self, level, span, msg, label=None, help=None, notes=None, extra=None):
+        self.extra = extra or []      # more (span, label) pairs shown below the main one
         self.level = level
         self.span = span
         self.msg = msg
@@ -57,9 +58,9 @@ class Diagnostics:
     def has_error_on(self, span):
         return any(d.level == "error" and d.span.line == span.line and d.span.src is span.src for d in self.items)
 
-    def error(self, span, msg, label=None, help=None, notes=None):
+    def error(self, span, msg, label=None, help=None, notes=None, extra=None):
         if not self._dup("error", span, msg):
-            self.items.append(Diag("error", span, msg, label, help, (notes or []) + ([self.context] if self.context else [])))
+            self.items.append(Diag("error", span, msg, label, help, (notes or []) + ([self.context] if self.context else []), extra))
 
     def warn(self, span, msg, label=None, help=None, notes=None):
         if not self._dup("warning", span, msg):
@@ -103,6 +104,20 @@ class Diagnostics:
             carets = " " * start + "^" * width
             lab = (" " + d.label) if d.label else ""
             out.append(f"{pad} {paint('|', '1;34')} {paint(carets + lab, tint)}")
+            for xsp, xlabel in d.extra:
+                if xsp.src is not sp.src:
+                    continue
+                xraw = xsp.src.lines[xsp.line - 1] if xsp.line - 1 < len(xsp.src.lines) else ""
+                xshown = xraw.expandtabs(4)
+                xs = len(xraw[: xsp.col - 1].expandtabs(4))
+                xw = max(1, min(len(xraw[: xsp.col - 1 + xsp.length].expandtabs(4)) - xs, max(1, len(xshown) - xs)))
+                xgw = len(str(xsp.line))
+                if xgw > gw:
+                    pad = " " * xgw
+                    gw = xgw
+                out.append(f"{pad} {paint('...', '1;34')}" if abs(xsp.line - sp.line) > 1 else f"{pad} {paint('|', '1;34')}")
+                out.append(f"{paint(str(xsp.line).rjust(gw), '1;34')} {paint('|', '1;34')} {xshown}")
+                out.append(f"{pad} {paint('|', '1;34')} {paint(' ' * xs + '-' * xw + ' ' + xlabel, '1;34')}")
             if sp.line in getattr(sp.src, "expanded", {}):
                 out.append(f"{pad} {paint('=', '1;34')} {paint('note', '1')}: this line was changed by macro expansion; it was: {sp.src.expanded[sp.line].strip()}")
             for n in d.notes:

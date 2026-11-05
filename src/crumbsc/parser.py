@@ -655,6 +655,11 @@ class Parser:
             self.expect_op(")", "after the parameter types of a function type")
             ret = self.parse_ret_type() if self.accept_op("->") else None
             return N("TFn", self.sp(t), params=ps, ret=ret)
+        if t.kind == "op" and t.val == "(":                          # a parenthesised type: `(*T)?`
+            self.advance()
+            inner = self.parse_type()
+            self.expect_op(")", "after the type")
+            return inner
         if t.kind == "op" and t.val in ("|", "||"):                  # closure type: `|A, B| -> R`
             self.advance()
             ps = []

@@ -15,14 +15,26 @@ Raw pointers that come out of `alloc`, from a pointer parameter, or through `*p`
 """
 from .parser import N
 
+OWNING_BORROWS = {"Own.at"}
+
 SKIP = {"span", "ty", "local", "sym", "handler", "orig_args", "eu_ty", "opty", "elem", "region_local", "name_span", "tyn", "targ", "targs"}
 
 
 class Loan:
-    __slots__ = ("owner", "path", "excl", "span", "via_own", "closure")
+    """`kind` is "borrow" for a real loan on a local, or "into" / "through" for what a parameter's value stands for while a
+    function is analysed: "into" = the value carries whatever the caller's argument carried (the pointer points into the
+    caller's storage), "through" = it carries what the argument's referent holds (a pointer read out of that storage)."""
+    __slots__ = ("owner", "path", "excl", "span", "via_own", "closure", "kind")
 
-    def __init__(self, owner, path, excl, span, via_own=False, closure=False):
-        self.owner, self.path, self.excl, self.span, self.via_own, self.closure = owner, path, excl, span, via_own, closure
+    def __init__(self, owner, path, excl, span, via_own=False, closure=False, kind="borrow"):
+        self.owner, self.path, self.excl, self.span, self.via_own, self.closure, self.kind = owner, path, excl, span, via_own, closure, kind
+
+
+class ParamOwner:
+    """Stands in for the owner of a parameter's referent (it is never accessed or dropped by the function being analysed)."""
+
+    def __init__(self, index, name):
+        self.index, self.name, self.glue, self.captured = index, name, False, False
 
 
 def overlap(a, b):
@@ -36,10 +48,35 @@ class BorrowCk:
         self.d = ck.d
 
     # ------------------------------------------------------------------ entry
-    def run(self, body, params):
+    def run_all(self, entries):
+        """Analyse every function body. A function's summary says which of its parameters its result can carry borrows
+        from; callers use it instead of assuming the worst. Summaries grow until nothing changes (calls may be mutually
+        dependent), then one more pass reports the errors."""
+        for ent in entries:
+            ent.sym.summary = frozenset()
+        for _ in range(6):
+            changed = False
+            for ent in entries:
+                got = self.analyze(ent, report=False) | ent.sym.summary
+                if got != ent.sym.summary:
+                    ent.sym.summary = got
+                    changed = True
+            if not changed:
+                break
+        for ent in entries:
+            self.d.context = ent.context
+            self.analyze(ent, report=True)
+        self.d.context = None
+
+    def analyze(self, ent, report):
+        self.report = report
+        self.summary = set()
+        body, params = ent.body, ent.params
         self.last = {}          # Local -> last tick at which it is used
         self.decl = {}          # Local -> tick of its declaration
         self.loops = []         # (start tick, end tick)
+        self.uses = {}          # Local -> [(tick, span)]
+        self.addr = 0
         for p in params:
             self.decl[p] = 0
         self.phase = 1
@@ -53,7 +90,30 @@ class BorrowCk:
         self.tick = 0
         self.holds = {}         # Local -> [Loan] held by that variable
         self.moved = set()
+        for i, p in enumerate(params):
+            if self.holds_ptr(p.ty):
+                self.holds[p] = [Loan(ParamOwner(i, p.name), (), False, p.span, kind="into")]
         self.walk(body)
+        sym = ent.sym
+        if sym.name in OWNING_BORROWS and sym.mod.name == "std.own":
+            # `Own.at` hands out the pointer the owner stores: the result is a borrow of the owner, not of something it was given
+            self.summary = {("into", i) if k == "through" else (k, i) for k, i in self.summary}
+        return frozenset(self.summary)
+
+    def mark_use(self, loc, span):
+        self.last[loc] = self.tick
+        self.uses.setdefault(loc, []).append((self.tick, span))
+
+    def next_use(self, loc):
+        """Where `loc` is used next after the current point (for error messages)."""
+        for t, sp in self.uses.get(loc, []):
+            if t > self.tick:
+                return sp
+        return None
+
+    def err(self, *a, **kw):
+        if self.report:
+            self.d.error(*a, **kw)
 
     # ------------------------------------------------------------------ helpers
     def kids(self, n):
@@ -123,9 +183,17 @@ class BorrowCk:
     def conflict(self, loc, kind, ln, holder, span):
         what = {"read": "use", "write": "assign to", "move": "move out of", "excl": "borrow mutably", "shared": "borrow"}[kind]
         state = "mutably borrowed" if ln.excl else "borrowed"
-        self.d.error(span, f"cannot {what} `{loc.name}` because it is {state}",
-                     label=f"`{loc.name}` is {state} by `{holder.name}` (line {ln.span.line}), which is used again later",
-                     help=f"finish using `{holder.name}` before this, or make a copy of what you need")
+        how = "mutable" if ln.excl else "shared"
+        extra = [(ln.span, f"{how} borrow of `{loc.name}` starts here" + (", held by the closure" if ln.closure else f", and is kept in `{holder.name}`"))]
+        later = self.next_use(holder)
+        if later is not None:
+            extra.append((later, f"`{holder.name}` is used here, so the borrow is still alive"))
+        self.err(span, f"cannot {what} `{loc.name}` because it is {state}",
+                 label={"read": f"`{loc.name}` is read here", "write": f"`{loc.name}` is assigned here",
+                        "move": f"`{loc.name}` is moved here", "excl": f"`{loc.name}` is borrowed mutably here",
+                        "shared": f"`{loc.name}` is borrowed here"}[kind] + f" while the {how} borrow is alive",
+                 extra=extra,
+                 help=f"finish using `{holder.name}` before this, or make a copy of what you need")
 
     # ------------------------------------------------------------------ the walk
     def walk(self, n):
@@ -144,7 +212,7 @@ class BorrowCk:
             return []
         self.tick += 1
         if self.phase == 1:
-            self.last[loc] = self.tick
+            self.mark_use(loc, n.span)
             self.decl.setdefault(loc, self.tick)
             return []
         if getattr(n, "move", False):
@@ -167,7 +235,7 @@ class BorrowCk:
             self.walk_index_parts(n)
             self.tick += 1
             if self.phase == 1:
-                self.last[loc] = self.tick
+                self.mark_use(loc, n.span)
                 self.decl.setdefault(loc, self.tick)
                 return []
             self.access(loc, path, "move" if getattr(n, "move", False) else "read", n.span)
@@ -175,7 +243,19 @@ class BorrowCk:
         carried = []
         for c in self.kids(n):
             carried += self.walk(c)
-        return carried if self.holds_ptr(getattr(n, "ty", None)) else []
+        if not self.holds_ptr(getattr(n, "ty", None)):
+            return []
+        return carried if self.addr else self.read_through(carried)
+
+    def read_through(self, loans):
+        """The loans of a value read out of the storage that pointers with `loans` point to."""
+        out = []
+        for ln in loans:
+            if isinstance(ln.owner, ParamOwner):
+                out.append(Loan(ln.owner, (), False, ln.span, kind="through"))
+            elif ln.kind == "borrow":
+                out += self.holds.get(ln.owner, [])
+        return out
 
     def base_ident(self, n):
         while n.kind in ("Field", "Index"):
@@ -199,15 +279,31 @@ class BorrowCk:
                 self.walk_index_parts(n.expr)
                 self.tick += 1
                 if self.phase == 1:
-                    self.last[loc] = self.tick
+                    self.mark_use(loc, n.span)
                     self.decl.setdefault(loc, self.tick)
                     return []
                 self.access(loc, path, "excl" if excl else "shared", n.span)
                 return [Loan(loc, path, excl, n.span, via_own=self.is_own(loc.ty))]
+        if n.op == "&":
+            return self.place_loans(n.expr)
         carried = []
         for c in self.kids(n):
             carried += self.walk(c)
-        return carried if self.holds_ptr(getattr(n, "ty", None)) else []
+        if not self.holds_ptr(getattr(n, "ty", None)):
+            return []
+        if n.op == "*":
+            return self.read_through(carried)
+        return carried
+
+    def place_loans(self, e):
+        """The loans that a pointer to place `e` carries when the place lives behind a pointer: those of the pointer."""
+        if e.kind in ("Field", "Index"):
+            if e.kind == "Index":
+                self.walk(e.idx)
+            return self.place_loans(e.obj)
+        if e.kind == "Unary" and e.op == "*":
+            return self.walk(e.expr)
+        return self.walk(e)
 
     def is_own(self, t):
         return t.kind == "struct" and t.sym.name.startswith("Own") and "own" in t.sym.full
@@ -224,13 +320,13 @@ class BorrowCk:
 
     def w_Call(self, n):
         c = n.callee
-        carried_args = []
-        skip_callee = getattr(n, "method_recv", False) or c.kind != "Ident" or getattr(c, "local", None) is None
-        per_arg = []
-        if not skip_callee:
+        indirect = getattr(n, "indirect", False)
+        callee_loans = []
+        if indirect:
+            callee_loans = self.walk(c)                         # a closure or function pointer value, with whatever it carries
+        elif not (getattr(n, "method_recv", False) or c.kind != "Ident" or getattr(c, "local", None) is None):
             self.walk(c)
-        for a in n.args:
-            per_arg.append(self.walk(a))
+        per_arg = [self.walk(a) for a in n.args]
         if self.is_checked(getattr(n, "ty", None)):
             return []
         sym = getattr(n, "sym", None)
@@ -240,12 +336,23 @@ class BorrowCk:
                     for l1 in per_arg[i]:
                         for l2 in per_arg[j]:
                             if l1.owner is l2.owner and overlap(l1.path, l2.path) and (l1.excl or l2.excl):
-                                self.d.error(l2.span, f"cannot borrow `{l1.owner.name}` twice in one call",
-                                             label=f"`{l1.owner.name}` is also borrowed at line {l1.span.line} in this call",
-                                             help="borrow it once, or borrow different fields")
-        for p in per_arg:
-            carried_args += p
-        return carried_args if self.holds_ptr(getattr(n, "ty", None)) else []
+                                self.err(l2.span, f"cannot borrow `{l1.owner.name}` twice in one call",
+                                         label=f"`{l1.owner.name}` is also borrowed at line {l1.span.line} in this call",
+                                         help="borrow it once, or borrow different fields")
+        if not self.holds_ptr(getattr(n, "ty", None)):
+            return []
+        if getattr(sym, "extern", False) and not indirect:
+            return []                                           # raw pointers handed out by C
+        summary = getattr(sym, "summary", None)
+        carried = list(callee_loans)
+        if indirect or summary is None or getattr(n, "builtin", None):
+            for p in per_arg:                                   # an unknown callee (closure, function pointer, builtin): assume the worst
+                carried += p
+            return carried
+        for kind, i in summary:
+            if i < len(per_arg):
+                carried += per_arg[i] if kind == "into" else self.read_through(per_arg[i])
+        return carried
 
     def w_Assign(self, n):
         t = n.target
@@ -256,7 +363,7 @@ class BorrowCk:
             self.walk_index_parts(t)
             self.tick += 1
             if self.phase == 1:
-                self.last[loc] = self.tick
+                self.mark_use(loc, t.span)
                 self.decl.setdefault(loc, self.tick)
                 return []
             if n.op == "=":
@@ -278,7 +385,7 @@ class BorrowCk:
             self.walk_index_parts(n.expr)
             self.tick += 1
             if self.phase == 1:
-                self.last[loc] = self.tick
+                self.mark_use(loc, n.expr.span)
                 self.decl.setdefault(loc, self.tick)
                 return []
             self.access(loc, path, "write", n.expr.span)
@@ -322,7 +429,7 @@ class BorrowCk:
         else:
             msg = f"`{owner.name}` does not live long enough"
             label = f"`{holder.name}` borrows `{owner.name}` here but is used after `{owner.name}` goes out of scope"
-        self.d.error(ln.span, msg, label=label, help="move the owner out instead, or keep the borrow inside this scope")
+        self.err(ln.span, msg, label=label, help="move the owner out instead, or keep the borrow inside this scope")
 
     def w_Return(self, n):
         if getattr(n, "expr", None) is None:
@@ -330,18 +437,21 @@ class BorrowCk:
         carried = self.walk(n.expr)
         if self.phase == 2:
             for ln in carried:
+                if isinstance(ln.owner, ParamOwner):
+                    self.summary.add((ln.kind, ln.owner.index))
+                    continue
                 if ln.owner in self.moved:
                     continue
                 if ln.via_own:
-                    self.d.error(ln.span, f"pointer into the owned value `{ln.owner.name}` cannot be returned",
+                    self.err(ln.span, f"pointer into the owned value `{ln.owner.name}` cannot be returned",
                                  label=f"`{ln.owner.name}` is freed when its scope ends, so this pointer would dangle",
                                  help="move the owner out instead (return it or store it), or keep a checked `Ref` with `.ref()`")
                 elif ln.closure:
-                    self.d.error(ln.span, f"this closure borrows the local `{ln.owner.name}` and cannot be returned",
+                    self.err(ln.span, f"this closure borrows the local `{ln.owner.name}` and cannot be returned",
                                  label=f"`{ln.owner.name}` is destroyed when the function returns, so the closure would dangle",
                                  help="write `move |..| ...` to give the closure its own copy")
                 else:
-                    self.d.error(ln.span, f"cannot return a reference to the local `{ln.owner.name}`",
+                    self.err(ln.span, f"cannot return a reference to the local `{ln.owner.name}`",
                                  label=f"`{ln.owner.name}` is destroyed when the function returns, so this would dangle",
                                  help="return the value itself, or allocate it with `alloc` / `own.new`")
                 break
@@ -351,6 +461,8 @@ class BorrowCk:
         return self.loop(n)
 
     def w_For(self, n):
+        if getattr(n, "desugared", None) is not None:
+            return self.walk(n.desugared)
         return self.loop(n)
 
     def w_Loop(self, n):
@@ -376,7 +488,7 @@ class BorrowCk:
         for outer, proxy in n.captures:
             self.tick += 1
             if self.phase == 1:
-                self.last[outer] = self.tick
+                self.mark_use(outer, n.span)
                 self.decl.setdefault(outer, self.tick)
                 continue
             if proxy.byref:
