@@ -514,6 +514,17 @@ Written in Crumbs and imported with `import std.name;` (`String`, `str`, `List<T
 helpers: they bind libc and pthread with plain `extern fn` / `extern struct` / `extern const` declarations, exactly like user code does.
 (The only runtime hooks they call are the collector's thread notifications in `std.thread`.)
 
+**Regular expressions (`std.regex`).** `Regex.new(pattern)` compiles classes, `\d \w \s \b`, anchors, groups (capturing, `(?:`, named
+`(?<name>`), alternation, greedy and lazy repeats `* + ? {n,m}` and a leading `(?i)`. Matching is bounded by pattern size times text size, so
+nothing blows up exponentially (there are no backreferences or lookaround). It offers `is_match`, `find`, `find_all`, `captures`
+(`get`, `named`), `replace` / `replace_all` (`$1`, `${name}`) and `split`.
+
+```
+let re = regex.Regex.new("(?<year>\\d{4})-(\\d{2})");
+let c = re.captures("on 2024-05-17");
+println(c.named("on 2024-05-17", "year"));      // 2024
+```
+
 ## Borrow checker
 
 Every function body is checked after type checking for the aliasing mistakes that `&` makes possible. A *borrow* is `&place` (exclusive:
