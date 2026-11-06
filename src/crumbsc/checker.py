@@ -3614,14 +3614,22 @@ class Checker:
         sp = s.span
         ident = lambda n: N("Ident", sp, name=n)
         call = lambda obj, name: N("Call", sp, callee=N("Field", sp, obj=obj, name=name, name_span=sp), args=[], targ=None, targs=None)
-        src = it if proto == "next" else call(it, "iter")
+        pre = []
+        if proto == "next":
+            src = it
+        elif it.kind in ("Ident", "Field", "Index"):
+            src = call(it, "iter")
+        else:
+            # a temporary (`for w in text.split(" ")`): keep it alive in a hidden local, since the iterator borrows it
+            pre.append(N("Let", sp, name="cb_src", mut=False, tyn=None, init=it, name_span=sp))
+            src = call(ident("cb_src"), "iter")
         var = s.var if s.var != "_" else "cb_x"
         body = N("Block", sp, stmts=[
             N("Let", sp, name="cb_o", mut=False, tyn=None, init=call(ident("cb_it"), "next"), name_span=sp),
             N("If", sp, cond=call(ident("cb_o"), "is_none"), then=N("Block", sp, stmts=[N("Break", sp)], end_span=sp), els=None),
             N("Let", sp, name=var, mut=False, tyn=None, init=call(ident("cb_o"), "unwrap"), name_span=s.var_span),
             s.body], end_span=sp)
-        outer = N("Block", sp, stmts=[
+        outer = N("Block", sp, stmts=pre + [
             N("Let", sp, name="cb_it", mut=True, tyn=None, init=src, name_span=sp),
             N("Loop", sp, body=body)], end_span=sp)
         s.desugared = outer

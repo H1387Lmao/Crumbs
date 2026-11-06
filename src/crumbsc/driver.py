@@ -46,7 +46,7 @@ GC_MODES = ("auto", "thread", "manual")
 
 
 def compile_to_c(path, include_dirs=(), color=None, quiet_warnings=False, strict=False, entry="main", gc=True,
-                 nostd=False, overflow_panic=False, defines=None, gc_mode="auto", gc_interval=100):
+                 nostd=False, overflow_panic=False, defines=None, gc_mode="auto", gc_interval=100, pyext=None, hold=None):
     """Returns (c_source or None, diagnostics, link plan)."""
     d = Diagnostics()
     predefined = {}
@@ -72,7 +72,9 @@ def compile_to_c(path, include_dirs=(), color=None, quiet_warnings=False, strict
     ck = Checker(mods, d, C_RESERVED, strict=strict, entry_name=entry, nostd=nostd, gc_mode=gc_mode if gc else "off").run()
     if d.has_errors:
         return None, d, plan
-    cg = CodeGen(ck, gc=gc, nostd=nostd, overflow_panic=overflow_panic, gc_mode=gc_mode, gc_interval=gc_interval)
+    cg = CodeGen(ck, gc=gc, nostd=nostd, overflow_panic=overflow_panic, gc_mode=gc_mode, gc_interval=gc_interval, pyext=pyext)
+    if hold is not None:
+        hold["cg"] = cg
     return cg.generate(mods[-1].src.path), d, plan
 
 
@@ -249,6 +251,91 @@ def build(args, run_after=False):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def python_info(python):
+    """(include dir, extension suffix) of a Python interpreter."""
+    exe = shutil.which(python) or python
+    code = "import sysconfig;print(sysconfig.get_paths()['include']);print(sysconfig.get_config_var('EXT_SUFFIX'))"
+    try:
+        r = subprocess.run([exe, "-c", code], capture_output=True, text=True)
+    except OSError as e:
+        raise RuntimeError(f"cannot run `{python}`: {e}")
+    if r.returncode != 0 or len(r.stdout.split()) < 2:
+        raise RuntimeError(f"`{python}` did not report its include directory: {r.stderr.strip()}")
+    inc, suffix = r.stdout.split()[:2]
+    if not os.path.exists(os.path.join(inc, "Python.h")):
+        raise RuntimeError(f"{inc}/Python.h is missing: install the development headers of that Python (python3-dev)")
+    return inc, suffix
+
+
+def build_pyext(args):
+    """`crumbs pyext FILE`: compile to a Python extension module (`NAME.cpython-3XX-....so` plus a `NAME.pyi` stub)."""
+    import re as _re
+    stem = os.path.splitext(os.path.basename(args.file))[0]
+    modname = args.module or _re.sub(r"\W", "_", stem)
+    if not modname.isidentifier():
+        print(f"error: `{modname}` is not a valid Python module name (use --module NAME)", file=sys.stderr)
+        return 1
+    try:
+        inc, suffix = python_info(args.python)
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    args.entry = ""
+    verbose_header(args)
+    hold = {}
+    c_src, d, plan = compile_to_c(args.file, args.include, strict=args.strict_casts, entry="", gc=args.gc,
+                                 nostd=False, overflow_panic=args.overflow_panic, defines=parse_defines(args),
+                                 gc_mode=args.gc_mode, gc_interval=args.gc_interval, pyext=modname, hold=hold)
+    verbose_front(args)
+    report(d, args.no_warn)
+    if c_src is None:
+        return 1
+    cg = hold["cg"]
+    for name, why in cg.py_notes:
+        if name:
+            print(f"note: `{name}` is not exposed to Python: {why}", file=sys.stderr)
+        else:
+            print(f"error: {why}", file=sys.stderr)
+    if any(not n for n, _ in cg.py_notes):
+        return 1
+    cc = find_cc(args.cc)
+    if not cc:
+        print("error: no C compiler found (looked for gcc, clang, cc); set --cc or $CC", file=sys.stderr)
+        return 1
+    out = args.output or (modname + suffix)
+    tmpdir = tempfile.mkdtemp(prefix="crumbs-")
+    try:
+        c_path = args.keep_c or os.path.join(tmpdir, modname + ".c")
+        with open(c_path, "w") as f:
+            f.write(c_src)
+        try:
+            cmd = cc_command(cc, c_path, out, args.opt, args.unchecked, ["-shared", "-fPIC", f"-I{inc}", "-Wno-deprecated-declarations"] + (args.cflag or []),
+                             plan, libs=args.lib or [], libdirs=args.libdir or [], files=args.link or [], pkgs=args.pkg or [])
+        except RuntimeError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        if args.verbose:
+            print(f"[crumbs] cc        {' '.join(shlex.quote(c) for c in cmd)}", file=sys.stderr)
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            print("internal error: the C compiler rejected the generated code (this is a Crumbs bug, or a `link` problem):", file=sys.stderr)
+            print(r.stderr, file=sys.stderr)
+            print(f"generated C kept at {c_path}", file=sys.stderr)
+            if not args.keep_c:
+                keep = os.path.join(os.getcwd(), modname + ".failed.c")
+                shutil.copy(c_path, keep)
+                print(f"(copied to {keep})", file=sys.stderr)
+            return 2
+        if not args.no_stub:
+            stub_path = os.path.join(os.path.dirname(os.path.abspath(out)), modname + ".pyi")
+            with open(stub_path, "w") as f:
+                f.write(cg.py_stub)
+        print(f"built {out}  (import {modname})")
+        return 0
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def parse_defines(a):
     out = {}
     for item in getattr(a, "define", []) or []:
@@ -336,6 +423,13 @@ def main(argv=None):
     common(p)
     cc_opts(p)
     p.add_argument("-o", "--output")
+    p = sub.add_parser("pyext", help="compile to a Python extension module (an importable .so)")
+    common(p)
+    cc_opts(p)
+    p.add_argument("-o", "--output", help="output file (default NAME.cpython-3XX-<platform>.so in the current directory)")
+    p.add_argument("--module", metavar="NAME", help="the Python module name (default: the file's name); must match the .so file name")
+    p.add_argument("--python", default="python3", metavar="EXE", help="the Python to build for (default python3)")
+    p.add_argument("--no-stub", action="store_true", help="do not write the NAME.pyi type stub")
     p = sub.add_parser("run", help="compile and run")
     common(p)
     cc_opts(p)
@@ -382,6 +476,8 @@ def _dispatch(a):
         return bad
     if a.cmd == "pp":
         return preprocess_only(a)
+    if a.cmd == "pyext":
+        return build_pyext(a)
     if a.cmd in ("check", "emit"):
         verbose_header(a)
     if a.cmd == "check":

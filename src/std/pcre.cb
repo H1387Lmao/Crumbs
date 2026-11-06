@@ -1,0 +1,239 @@
+// std.pcre: the PCRE2 regex library (with its JIT compiler) behind the same interface as std.regex.
+//
+//     import std.pcre;
+//     let mut re = pcre.Regex.new("(?<year>\\d{4})-(\\d{2})-(\\d{2})");
+//     if !re.ok() { println(re.message()); }
+//     let text = "released 2024-05-17";
+//     let c = re.captures(text);
+//     println(c.named(text, "year"));                       // 2024
+//     println(re.replace_all(text, "$3/$2/$1"));            // released 17/05/2024
+//
+// PCRE2 (https://github.com/PCRE2Project/pcre2) is a mature C engine used by grep, PHP, nginx and many others. Its JIT turns
+// a pattern into machine code, which is several times faster than `std.regex` on large inputs, and it has the full Perl
+// syntax: backreferences, lookahead and lookbehind, atomic groups, possessive quantifiers, Unicode classes with `(*UTF)`,
+// `\K`, recursion. The price is the usual backtracking one: a pathological pattern can run for a very long time (the JIT stops
+// with an error after a stack or match limit, reported by `message()` of the failed call, and the search then finds nothing).
+//
+// The results are the `Match` and `Captures` values of std.regex, so code can switch between the two engines by changing the
+// module name. It needs libpcre2-8 (`apt install libpcre2-dev`); the link flag comes from this file.
+import std.regex;
+
+include "pcre2.h";
+define "PCRE2_CODE_UNIT_WIDTH=8";
+link pkg "libpcre2-8";
+
+extern struct Pcre2Code;
+extern struct Pcre2MatchData;
+
+extern const PCRE2_CASELESS: u32;
+extern const PCRE2_MULTILINE: u32;
+extern const PCRE2_DOTALL: u32;
+extern const PCRE2_EXTENDED: u32;
+extern const PCRE2_ANCHORED: u32;
+extern const PCRE2_INFO_CAPTURECOUNT: u32;
+extern const PCRE2_INFO_NAMECOUNT: u32;
+extern const PCRE2_INFO_NAMEENTRYSIZE: u32;
+extern const PCRE2_INFO_NAMETABLE: u32;
+extern const PCRE2_JIT_COMPLETE: u32;
+extern const PCRE2_ERROR_NOMATCH: i32;
+
+extern "pcre2_compile_8" fn c_compile(pattern: *u8, len: u64, options: u32, errcode: *i32, erroffset: *u64, ctx: *void) -> *Pcre2Code;
+extern "pcre2_code_free_8" fn c_code_free(code: *Pcre2Code);
+extern "pcre2_jit_compile_8" fn c_jit_compile(code: *Pcre2Code, options: u32) -> i32;
+extern "pcre2_match_data_create_from_pattern_8" fn c_md_create(code: *Pcre2Code, ctx: *void) -> *Pcre2MatchData;
+extern "pcre2_match_data_free_8" fn c_md_free(md: *Pcre2MatchData);
+extern "pcre2_jit_match_8" fn c_jit_match(code: *Pcre2Code, subject: *u8, len: u64, start: u64, options: u32, md: *Pcre2MatchData, ctx: *void) -> i32;
+extern "pcre2_match_8" fn c_match(code: *Pcre2Code, subject: *u8, len: u64, start: u64, options: u32, md: *Pcre2MatchData, ctx: *void) -> i32;
+extern "pcre2_get_ovector_pointer_8" fn c_ovector(md: *Pcre2MatchData) -> *u64;
+extern "pcre2_get_error_message_8" fn c_error_message(code: i32, buf: *u8, len: u64) -> i32;
+extern "pcre2_pattern_info_8" fn c_pattern_info(code: *Pcre2Code, what: u32, out: *void) -> i32;
+
+const UNSET: u64 = 18446744073709551615;     // PCRE2_UNSET
+
+pub struct Regex {
+    code: *Pcre2Code,
+    md: *Pcre2MatchData,
+    err: String,
+    jitted: bool,
+    ngroups: i64,                    // including group 0
+    names: List<String>,             // by group index; "" for unnamed
+    ov: []u64,                       // the match data's offsets (2 per group)
+}
+
+drop Regex(self) {
+    if self.md != null { c_md_free(self.md); }
+    if self.code != null { c_code_free(self.code); }
+}
+
+fn error_text(code: i32) -> String {
+    let buf = alloc(u8, 256);
+    let n = c_error_message(code, buf.ptr, 256);
+    let mut out = String.empty();
+    if n > 0 { out.append(from_cstr(buf.ptr)); }
+    free(buf);
+    return out;
+}
+
+impl Regex {
+    // compiles `pattern` (and JIT-compiles it where the CPU allows); check `ok()` before using it
+    pub fn new(pattern: str) -> Regex { return Regex.with_options(pattern, 0); }
+
+    // `options`: pcre.CASELESS, pcre.MULTILINE (^ $ match at lines), pcre.DOTALL (`.` matches newline), pcre.EXTENDED, or'ed
+    pub fn with_options(pattern: str, options: u32) -> Regex {
+        let mut re = Regex { code: null, md: null, err: String.empty(), jitted: false, ngroups: 1, names: List.new(), ov: slice_of(null as *u64, 0) };
+        let mut ec = 0 as i32;
+        let mut eo = 0 as u64;
+        let code = c_compile(pattern.ptr, pattern.len as u64, options, &ec, &eo, null);
+        if code == null {
+            re.err = format("{error_text(ec)} (at position {eo})");
+            return re;
+        }
+        re.code = code;
+        re.jitted = c_jit_compile(code, PCRE2_JIT_COMPLETE) == 0;
+        re.md = c_md_create(code, null);
+        let mut cc = 0 as u32;
+        c_pattern_info(code, PCRE2_INFO_CAPTURECOUNT, &cc as *void);
+        re.ngroups = cc as i64 + 1;
+        re.ov = slice_of(c_ovector(re.md), 2 * re.ngroups);
+        for i in 0..re.ngroups { re.names.push(String.empty()); }
+        // the name table: `namecount` entries of `entrysize` bytes, each a 2-byte big-endian group number then the name
+        let mut nc = 0 as u32;
+        let mut es = 0 as u32;
+        let mut tbl = null as *u8;
+        c_pattern_info(code, PCRE2_INFO_NAMECOUNT, &nc as *void);
+        c_pattern_info(code, PCRE2_INFO_NAMEENTRYSIZE, &es as *void);
+        c_pattern_info(code, PCRE2_INFO_NAMETABLE, &tbl as *void);
+        let table = slice_of(tbl, nc as i64 * es as i64);
+        for k in 0..nc as i64 {
+            let base = k * es as i64;
+            let g = (table[base] as i64) * 256 + table[base + 1] as i64;
+            if g < re.ngroups { re.names.set(g, String.from(from_cstr(&table[base + 2]))); }
+        }
+        return re;
+    }
+
+    pub fn ok(self) -> bool { return self.code != null; }
+    pub fn message(self) -> str { return self.err; }
+    // true when the pattern was compiled to machine code
+    pub fn is_jit(self) -> bool { return self.jitted; }
+    pub fn group_count(self) -> i64 { return self.ngroups - 1; }
+
+    // runs the engine from byte `from`; the offsets are left in the match data
+    fn exec(self, s: str, from: i64) -> bool {
+        if self.code == null || from > s.len { return false; }
+        let rc = self.jitted ? c_jit_match(self.code, s.ptr, s.len as u64, from as u64, 0, self.md, null)
+                             : c_match(self.code, s.ptr, s.len as u64, from as u64, 0, self.md, null);
+        return rc >= 0;
+    }
+
+    pub fn is_match(self, s: str) -> bool { return self.exec(s, 0); }
+
+    pub fn find(self, s: str) -> regex.Match { return self.find_from(s, 0); }
+
+    pub fn find_from(self, s: str, from: i64) -> regex.Match {
+        if !self.exec(s, from) { return regex.Match { found: false, start: 0, end: 0 }; }
+        return regex.Match { found: true, start: self.ov[0] as i64, end: self.ov[1] as i64 };
+    }
+
+    pub fn captures(self, s: str) -> regex.Captures { return self.captures_from(s, 0); }
+
+    pub fn captures_from(self, s: str, from: i64) -> regex.Captures {
+        let mut out = regex.Captures { found: false, pos: List.new(), names: List.new() };
+        for i in 0..self.names.len { out.names.push(String.from(*self.names.at(i))); }
+        if !self.exec(s, from) { return out; }
+        out.found = true;
+        for i in 0..self.ngroups * 2 {
+            let v = self.ov[i];
+            if v == UNSET { out.pos.push(-1); } else { out.pos.push(v as i64); }
+        }
+        return out;
+    }
+
+    pub fn find_all(self, s: str) -> List<regex.Match> {
+        let mut out: List<regex.Match> = List.new();
+        let mut at = 0 as i64;
+        while at <= s.len {
+            if !self.exec(s, at) { break; }
+            let st = self.ov[0] as i64;
+            let en = self.ov[1] as i64;
+            out.push(regex.Match { found: true, start: st, end: en });
+            at = en > st ? en : en + 1;
+        }
+        return out;
+    }
+
+    // `$1`, `${name}` and `$$` in `rep` are expanded from the last match
+    fn expand(self, out: *String, s: str, rep: str) {
+        let mut i = 0 as i64;
+        while i < rep.len {
+            let c = rep[i];
+            if c != '$' || i + 1 >= rep.len { out.push(c); i += 1; continue; }
+            let d = rep[i + 1];
+            if d == '$' { out.push('$'); i += 2; continue; }
+            let mut g = -1 as i64;
+            if d >= '0' && d <= '9' {
+                g = 0;
+                i += 1;
+                while i < rep.len && rep[i] >= '0' && rep[i] <= '9' { g = g * 10 + (rep[i] - '0') as i64; i += 1; }
+            } else if d == '{' {
+                let st = i + 2;
+                let mut e = st;
+                while e < rep.len && rep[e] != '}' { e += 1; }
+                if e >= rep.len { out.push(c); i += 1; continue; }
+                let name = rep[st..e];
+                for k in 0..self.names.len { if self.names.at(k).len > 0 && *self.names.at(k) == name { g = k; } }
+                i = e + 1;
+            } else { out.push(c); i += 1; continue; }
+            if g >= 0 && g < self.ngroups && self.ov[2 * g] != UNSET {
+                out.append(s[self.ov[2 * g] as i64..self.ov[2 * g + 1] as i64]);
+            }
+        }
+    }
+
+    fn replace_impl(self, s: str, rep: str, all: bool) -> String {
+        let mut out = String.empty();
+        let mut at = 0 as i64;
+        let mut copied = 0 as i64;
+        while at <= s.len {
+            if !self.exec(s, at) { break; }
+            let st = self.ov[0] as i64;
+            let en = self.ov[1] as i64;
+            out.append(s[copied..st]);
+            self.expand(&out, s, rep);
+            copied = en;
+            at = en > st ? en : en + 1;
+            if !all { break; }
+        }
+        out.append(s[copied..s.len]);
+        return out;
+    }
+
+    pub fn replace(self, s: str, rep: str) -> String { return self.replace_impl(s, rep, false); }
+    pub fn replace_all(self, s: str, rep: str) -> String { return self.replace_impl(s, rep, true); }
+
+    pub fn split(self, s: str) -> List<String> {
+        let mut out: List<String> = List.new();
+        let ms = self.find_all(s);
+        let mut prev = 0 as i64;
+        for i in 0..ms.len {
+            let m = ms.at(i);
+            if m.end == m.start && (m.start == 0 || m.start >= s.len) { continue; }
+            out.push(String.from(s[prev..m.start]));
+            prev = m.end;
+        }
+        out.push(String.from(s[prev..s.len]));
+        return out;
+    }
+}
+
+pub fn matches(pattern: str, s: str) -> bool {
+    let re = Regex.new(pattern);
+    return re.ok() && re.is_match(s);
+}
+
+pub fn escape(s: str) -> String { return regex.escape(s); }
+
+pub fn caseless() -> u32 { return PCRE2_CASELESS; }
+pub fn multiline() -> u32 { return PCRE2_MULTILINE; }
+pub fn dotall() -> u32 { return PCRE2_DOTALL; }
+pub fn extended() -> u32 { return PCRE2_EXTENDED; }

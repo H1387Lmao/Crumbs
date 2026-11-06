@@ -139,6 +139,26 @@ def test_docs_fresh():
     report("docs/stdlib.json is up to date", ok, why or r.stderr)
 
 
+def test_pyext(path):
+    """Builds `path` as a Python extension and runs `test_<name>.py` against it."""
+    import shutil, sysconfig, tempfile
+    name = os.path.relpath(path, HERE)
+    if not os.path.exists(os.path.join(sysconfig.get_paths()["include"], "Python.h")):
+        print(f"  skip  {name} (no Python.h)")
+        return
+    mod = os.path.splitext(os.path.basename(path))[0]
+    tmp = tempfile.mkdtemp(prefix="pyext-")
+    try:
+        r = run(["pyext", path, "--no-warn", "--python", sys.executable], cwd=tmp)
+        if r.returncode != 0:
+            return report(name, False, r.stdout + r.stderr)
+        t = subprocess.run([sys.executable, os.path.join(os.path.dirname(path), f"test_{mod}.py")], cwd=tmp,
+                           capture_output=True, text=True, env={**os.environ, "PYTHONPATH": tmp})
+        report(name, t.returncode == 0 and t.stdout.strip() == "ok", t.stdout + t.stderr)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     only = sys.argv[1:]
     build_fixtures()
@@ -163,6 +183,10 @@ def main():
     for p in sorted(glob.glob(os.path.join(HERE, "panic", "*.cb"))):
         if sel(p):
             test_panic(p)
+    if not only or "pyext" in " ".join(only):
+        print("== python extensions")
+        for p in sorted(glob.glob(os.path.join(HERE, "pyext", "*.cb"))):
+            test_pyext(p)
     if not only or "cookie" in " ".join(only):
         print("== cookie build tool")
         sys.path.insert(0, HERE)

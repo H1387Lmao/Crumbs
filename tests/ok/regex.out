@@ -1,0 +1,30 @@
+[2024-05-17] 9..19
+05 2024 4
+released 17/05/2024, patched 02/06/2024
+released <2024-05-17>, patched 2024-06-02
+2
+[] 0..0
+true
+false
+true
+true
+false
+6
+4
+d
+false
+false
+missing `)` to close the group (at position 4)
+true
+1\+1=2\?
+3
+-a-b-c-
+*a -> false nothing to repeat (at position 0)
+[a- -> false missing `]` to close the class (at position 3)
+a{,3} -> true 
+\q -> false unknown escape (at position 2)
+a** -> true 
+(?=x) -> false unsupported group syntax (only `(?:`, `(?<name>` and a leading `(?i)` exist) (at position 2)
+z{3,2} -> false the repeat range runs backwards (at position 6)
+^* -> false nothing to repeat (at position 2)
+true
