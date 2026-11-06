@@ -1,0 +1,33 @@
+import std.pcre;
+
+fn main() {
+    let mut re = pcre.Regex.new("(?<year>\\d{4})-(\\d{2})-(\\d{2})");
+    let text = "released 2024-05-17, patched 2024-06-02";
+    let m = re.find(text);
+    println("[{m.text(text)}] {m.start}..{m.end}");
+    let c = re.captures(text);
+    println("{c.get(text, 2)} {c.named(text, \"year\")} {c.len()} {re.group_count()}");
+    println(re.replace_all(text, "$3/$2/${year}"));
+    println(re.find_all(text).len);
+    println(re.is_jit());
+
+    // things the pure-Crumbs engine does not have
+    let mut dup = pcre.Regex.new("\\b(\\w+) \\1\\b");
+    println(dup.find("this is is a test").text("this is is a test"));
+    let mut look = pcre.Regex.new("\\w+(?=@)");
+    let addr = "mail bob@example.com now";
+    println(look.find(addr).text(addr));
+    let mut cs = pcre.Regex.with_options("hello", pcre.caseless());
+    println(cs.is_match("HeLLo"));
+    let mut ml = pcre.Regex.with_options("^b$", pcre.multiline());
+    println(ml.is_match("a\nb\nc"));
+    let mut poss = pcre.Regex.new("a++a");
+    println(poss.is_match("aaaa"));
+    let mut sp = pcre.Regex.new("\\s*,\\s*");
+    println(sp.split("a , b,c ,d").len);
+
+    let mut bad = pcre.Regex.new("(a|b");
+    println(bad.ok());
+    println(bad.message());
+    println(pcre.matches("a.c", "xabcx"));
+}
