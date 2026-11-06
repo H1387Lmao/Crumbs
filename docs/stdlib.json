@@ -61,6 +61,7 @@
    "modules": [
     "args",
     "iter",
+    "regex",
     "set"
    ]
   }
@@ -8341,6 +8342,534 @@
      "doc": "Adds up every `f64`.",
      "fallible": false,
      "returns_doc": "the total"
+    }
+   ]
+  },
+  {
+   "id": "regex",
+   "name": "regex",
+   "import": "std.regex",
+   "summary": "regular expressions over bytes, matched in time proportional to (pattern size x text size): no pattern can",
+   "description": "blow up exponentially.\n\nSyntax: literals, `.` (any byte but newline), classes `[a-z0-9_]` / `[^\"]`, escapes `\\d \\w \\s \\D \\W \\S \\b \\B \\n \\t \\r`\nand `\\.`-style escapes of punctuation, anchors `^ $`, groups `( )`, non-capturing `(?: )`, named `(?<name> )` or\n`(?P<name> )`, alternation `|`, repeats `* + ? {n} {n,} {n,m}` and their lazy forms `*? +? ?? {n,m}?`. A pattern that\nstarts with `(?i)` ignores ASCII case. Matching is leftmost, with the first alternative / greedy choice winning. There\nare no backreferences or lookaround (they are what makes matching exponential). In replacements `$1` / `${name}` insert a\ngroup and `$$` a dollar sign.",
+   "example": "import std.regex;\nlet re = regex.Regex.new(\"(?<year>\\\\d{4})-(\\\\d{2})-(\\\\d{2})\");\nif !re.ok() { println(re.message()); }\nlet text = \"released 2024-05-17, patched 2024-06-02\";\nlet m = re.find(text);                              // first match: m.found, m.start, m.end\nprintln(m.text(text));                              // 2024-05-17\nlet c = re.captures(text);\nprintln(c.get(text, 2));                            // 05\nprintln(c.named(text, \"year\"));                     // 2024\nprintln(re.replace_all(text, \"$3/$2/$1\"));          // released 17/05/2024, patched 02/06/2024\nprintln(regex.Regex.new(\"[,;] *\").split(\"a, b;c\").len);   // 3",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "Match",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "",
+     "fields": [
+      {
+       "name": "found",
+       "type": "bool"
+      },
+      {
+       "name": "start",
+       "type": "i64"
+      },
+      {
+       "name": "end",
+       "type": "i64"
+      }
+     ],
+     "methods": [
+      {
+       "name": "text",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str"
+        }
+       ],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "the matched part of `s` (the string that was searched)",
+       "fallible": false
+      },
+      {
+       "name": "len",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "The length of the matched text.",
+       "fallible": false,
+       "returns_doc": "the number of bytes, 0 when nothing matched"
+      }
+     ]
+    },
+    {
+     "name": "Captures",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "",
+     "fields": [
+      {
+       "name": "found",
+       "type": "bool"
+      },
+      {
+       "name": "pos",
+       "type": "List<i64>"
+      },
+      {
+       "name": "names",
+       "type": "List<String>"
+      }
+     ],
+     "methods": [
+      {
+       "name": "len",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "number of groups, counting group 0 (the whole match)",
+       "fallible": false
+      },
+      {
+       "name": "has",
+       "tparams": [],
+       "params": [
+        {
+         "name": "i",
+         "type": "i64"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "did group `i` take part in the match?",
+       "fallible": false
+      },
+      {
+       "name": "start",
+       "tparams": [],
+       "params": [
+        {
+         "name": "i",
+         "type": "i64",
+         "doc": "the group number (0 is the whole match)"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Where a group's text starts.",
+       "fallible": false,
+       "returns_doc": "the byte offset, or -1 if the group did not take part"
+      },
+      {
+       "name": "end",
+       "tparams": [],
+       "params": [
+        {
+         "name": "i",
+         "type": "i64",
+         "doc": "the group number (0 is the whole match)"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Where a group's text ends.",
+       "fallible": false,
+       "returns_doc": "the byte offset after the last byte, or -1 if the group did not take part"
+      },
+      {
+       "name": "get",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str"
+        },
+        {
+         "name": "i",
+         "type": "i64"
+        }
+       ],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "the text of group `i` (\"\" when it did not take part)",
+       "fallible": false
+      },
+      {
+       "name": "index_of",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "the index of a named group, or -1",
+       "fallible": false
+      },
+      {
+       "name": "named",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the string that was searched"
+        },
+        {
+         "name": "name",
+         "type": "str",
+         "doc": "the group name"
+        }
+       ],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "The text of a named group.",
+       "fallible": false,
+       "returns_doc": "the text, or \"\" when the name is unknown or the group did not take part"
+      }
+     ]
+    },
+    {
+     "name": "Regex",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "",
+     "fields": [
+      {
+       "name": "pattern",
+       "type": "String"
+      },
+      {
+       "name": "err",
+       "type": "String"
+      },
+      {
+       "name": "icase",
+       "type": "bool"
+      },
+      {
+       "name": "ngroups",
+       "type": "i64"
+      },
+      {
+       "name": "op",
+       "type": "List<i64>"
+      },
+      {
+       "name": "xa",
+       "type": "List<i64>"
+      },
+      {
+       "name": "xb",
+       "type": "List<i64>"
+      },
+      {
+       "name": "classes",
+       "type": "List<Class>"
+      },
+      {
+       "name": "names",
+       "type": "List<String>"
+      },
+      {
+       "name": "nodes",
+       "type": "List<Node>"
+      },
+      {
+       "name": "pos",
+       "type": "i64"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [
+        {
+         "name": "pattern",
+         "type": "str"
+        }
+       ],
+       "returns": "Regex",
+       "receiver": null,
+       "doc": "compiles `pattern`; check `ok()` before using it (a failed pattern matches nothing)",
+       "fallible": false
+      },
+      {
+       "name": "ok",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Tells whether the pattern compiled.",
+       "fallible": false,
+       "returns_doc": "`true` when it can be used"
+      },
+      {
+       "name": "message",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "why compiling failed (\"\" when it worked)",
+       "fallible": false
+      },
+      {
+       "name": "group_count",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "number of capture groups, not counting the whole match",
+       "fallible": false
+      },
+      {
+       "name": "is_match",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to search"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Checks whether the pattern matches anywhere.",
+       "fallible": false,
+       "returns_doc": "`true` if it does"
+      },
+      {
+       "name": "find",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to search"
+        }
+       ],
+       "returns": "Match",
+       "receiver": "self",
+       "doc": "Finds the first (leftmost) match.",
+       "fallible": false,
+       "returns_doc": "a `Match`; check `found`"
+      },
+      {
+       "name": "find_from",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str"
+        },
+        {
+         "name": "from",
+         "type": "i64"
+        }
+       ],
+       "returns": "Match",
+       "receiver": "self",
+       "doc": "the first match starting at or after byte `from`",
+       "fallible": false
+      },
+      {
+       "name": "captures",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to search"
+        }
+       ],
+       "returns": "Captures",
+       "receiver": "self",
+       "doc": "Finds the first match with its groups.",
+       "fallible": false,
+       "returns_doc": "a `Captures`; check `found`"
+      },
+      {
+       "name": "captures_from",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to search"
+        },
+        {
+         "name": "from",
+         "type": "i64",
+         "doc": "the first byte to consider"
+        }
+       ],
+       "returns": "Captures",
+       "receiver": "self",
+       "doc": "Like `captures`, but starts looking at byte `from`.",
+       "fallible": false,
+       "returns_doc": "a `Captures`; check `found`"
+      },
+      {
+       "name": "find_all",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str"
+        }
+       ],
+       "returns": "List<Match>",
+       "receiver": "self",
+       "doc": "every non-overlapping match, left to right (an empty match advances by one byte)",
+       "fallible": false
+      },
+      {
+       "name": "expand",
+       "tparams": [],
+       "params": [
+        {
+         "name": "out",
+         "type": "*String"
+        },
+        {
+         "name": "s",
+         "type": "str"
+        },
+        {
+         "name": "rep",
+         "type": "str"
+        },
+        {
+         "name": "sr",
+         "type": "*Searcher"
+        }
+       ],
+       "returns": "",
+       "receiver": "self",
+       "doc": "`$1`, `${name}` and `$$` in `rep` are expanded from the match",
+       "fallible": false
+      },
+      {
+       "name": "replace_impl",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text"
+        },
+        {
+         "name": "rep",
+         "type": "str",
+         "doc": "the replacement"
+        },
+        {
+         "name": "all",
+         "type": "bool",
+         "doc": "replace every match"
+        }
+       ],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Shared work of `replace` and `replace_all`.",
+       "fallible": false,
+       "returns_doc": "the new string"
+      },
+      {
+       "name": "replace",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text"
+        },
+        {
+         "name": "rep",
+         "type": "str",
+         "doc": "the replacement"
+        }
+       ],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Replaces the first match; `$1`, `${name}` and `$$` work in `rep`.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "replace_all",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text"
+        },
+        {
+         "name": "rep",
+         "type": "str",
+         "doc": "the replacement"
+        }
+       ],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Replaces every match; `$1`, `${name}` and `$$` work in `rep`.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "split",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str"
+        }
+       ],
+       "returns": "List<String>",
+       "receiver": "self",
+       "doc": "the pieces of `s` between matches",
+       "fallible": false
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "matches",
+     "tparams": [],
+     "params": [
+      {
+       "name": "pattern",
+       "type": "str"
+      },
+      {
+       "name": "s",
+       "type": "str"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "`pattern` matches somewhere in `s` (false when the pattern is invalid)",
+     "fallible": false
+    },
+    {
+     "name": "escape",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str"
+      }
+     ],
+     "returns": "String",
+     "receiver": null,
+     "doc": "`s` with every regex metacharacter escaped, so it matches itself literally",
+     "fallible": false
     }
    ]
   },
