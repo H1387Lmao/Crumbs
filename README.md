@@ -530,6 +530,7 @@ println(c.named("on 2024-05-17", "year")); // 2024
 you; `parse` returns a `Matches` to inspect (`ok()`, `message()`, `value`, `values`, `int`, `flag`, `count`, `subcommand()`, `sub()`).
 See `examples/argparse.cb`.
 
+```
 let mut app = args.Command.new("tool", "does useful things");
 app.flag("verbose", 'v', "talk more");
 let mut build = args.Command.new("build", "compile");
