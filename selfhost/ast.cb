@@ -17,6 +17,12 @@ fn empty_val(tag: i64) -> Val {
 pub fn v_none() -> Val { return empty_val(0); }
 pub fn v_bool(b: bool) -> Val { let mut v = empty_val(1); v.i = b ? 1 : 0; return v; }
 pub fn v_int(i: i64) -> Val { let mut v = empty_val(2); v.i = i; return v; }
+// an integer that may exceed i64: the decimal text is kept in `s`
+pub fn v_u64(x: u64) -> Val {
+    let mut v = empty_val(2);
+    if x > 9223372036854775807 { v.s = format("{x}"); } else { v.i = x as i64; }
+    return v;
+}
 pub fn v_str(s: str) -> Val { let mut v = empty_val(3); v.s = String.from(s); return v; }
 pub fn v_bytes(s: str) -> Val { let mut v = empty_val(7); v.s = String.from(s); return v; }
 pub fn v_float() -> Val { return empty_val(8); }
@@ -92,12 +98,24 @@ fn dump_span(out: *String, sp: Span) { out.append(format("@{sp.line}:{sp.col}+{s
 fn dump_val(out: *String, v: *Val) {
     if v.tag == 0 { out.append("None"); }
     else if v.tag == 1 { out.append(v.i != 0 ? "true" : "false"); }
-    else if v.tag == 2 { out.append(format("{v.i}")); }
+    else if v.tag == 2 { if v.s.len > 0 { out.append(v.s); } else { out.append(format("{v.i}")); } }
     else if v.tag == 3 { dump_str(out, v.s, ""); }
     else if v.tag == 7 { dump_str(out, v.s, "b"); }
     else if v.tag == 8 { out.append("f"); }
     else if v.tag == 6 { dump_span(out, v.span); }
     else if v.tag == 4 { dump_node(out, v.node.at(0)); }
+    else if v.tag == 9 {
+        out.push('{');
+        let mut i = 0 as i64;
+        while i < v.items.len {
+            if i > 0 { out.push(','); }
+            dump_val(out, v.items.at(i));
+            out.push(':');
+            dump_val(out, v.items.at(i + 1));
+            i += 2;
+        }
+        out.push('}');
+    }
     else {
         out.push('[');
         for i in 0..v.items.len {

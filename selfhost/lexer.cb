@@ -135,6 +135,12 @@ fn tok(kind: TK, text: str, line: i64, col: i64, len: i64) -> Token {
 
 pub fn lex(text: str) -> LexResult {
     let mut r = LexResult { toks: List.new(), errors: List.new() };
+    lex_into(text, &r);
+    return r;
+}
+
+// like `lex`, but fills a result that already lives somewhere (a struct field cannot be moved out)
+pub fn lex_into(text: str, r: *LexResult) {
     let n = text.len;
     let mut i = 0 as i64;
     let mut line = 1 as i64;
@@ -160,7 +166,7 @@ pub fn lex(text: str) -> LexResult {
                     i += 1;
                 }
             }
-            if depth != 0 { err(&r, sline, chars(text, sls, start) + 1, "unterminated block comment"); }
+            if depth != 0 { err(r, sline, chars(text, sls, start) + 1, "unterminated block comment"); }
             continue;
         }
         if is_ident_start(c) {
@@ -196,33 +202,33 @@ pub fn lex(text: str) -> LexResult {
             if prefixed {
                 let digits = cs[2..cs.len];
                 if digits.len == 0 {
-                    err(&r, line, col, format("missing digits after `{body[0..2]}`"));
+                    err(r, line, col, format("missing digits after `{body[0..2]}`"));
                     ok = false;
                 } else {
                     let p = cs[1];
                     let base = (p == 'x' || p == 'X') ? 16 as u64 : ((p == 'b' || p == 'B') ? 2 as u64 : 8 as u64);
                     let mut over = false;
                     val = parse_digits(digits, base, &over);
-                    if over { err(&r, line, col, "integer literal is too large"); ok = false; }
+                    if over { err(r, line, col, "integer literal is too large"); ok = false; }
                 }
             } else {
                 for k in 0..cs.len { if cs[k] == '.' || cs[k] == 'e' || cs[k] == 'E' { is_float = true; } }
                 if !is_float {
                     let mut over = false;
                     val = parse_digits(cs, 10, &over);
-                    if over { err(&r, line, col, "integer literal is too large"); ok = false; }
+                    if over { err(r, line, col, "integer literal is too large"); ok = false; }
                 }
             }
             if ok && i < n && is_digit(text[i]) {
-                err(&r, line, col, format("invalid digit in numeric literal `{body}{text[i]:c}`"));
+                err(r, line, col, format("invalid digit in numeric literal `{body}{text[i]:c}`"));
                 ok = false;
             }
             let sfl = suffix == "f32" || suffix == "f64";
             let sfi = suffix == "i8" || suffix == "i16" || suffix == "i32" || suffix == "i64"
                    || suffix == "u8" || suffix == "u16" || suffix == "u32" || suffix == "u64";
             if ok && suffix.len > 0 {
-                if is_float && !sfl { err(&r, line, col, format("invalid suffix `{suffix}` for float literal")); ok = false; }
-                else if !is_float && !sfi && !sfl { err(&r, line, col, format("invalid suffix `{suffix}` for integer literal")); ok = false; }
+                if is_float && !sfl { err(r, line, col, format("invalid suffix `{suffix}` for float literal")); ok = false; }
+                else if !is_float && !sfi && !sfl { err(r, line, col, format("invalid suffix `{suffix}` for integer literal")); ok = false; }
                 else if !is_float && sfl { is_float = true; }
             }
             if !ok { let mut t = tok(TK.Int, "", line, col, slen); r.toks.push(t); continue; }
@@ -260,11 +266,11 @@ pub fn lex(text: str) -> LexResult {
                             buf.push((hex_val(text[i + 1]) * 16 + hex_val(text[i + 2])) as u8);
                             i += 3;
                         } else {
-                            err(&r, line, chars(text, ls, esc_at) + 1, "invalid `\\x` escape");
+                            err(r, line, chars(text, ls, esc_at) + 1, "invalid `\\x` escape");
                             i += 1;
                         }
                     } else {
-                        err(&r, line, chars(text, ls, esc_at) + 1, format("unknown escape sequence `\\{e:c}`"));
+                        err(r, line, chars(text, ls, esc_at) + 1, format("unknown escape sequence `\\{e:c}`"));
                         i += 1;
                     }
                     continue;
@@ -273,7 +279,7 @@ pub fn lex(text: str) -> LexResult {
                 i += 1;
             }
             let slen = chars(text, start, i) > 1 ? chars(text, start, i) : 1;
-            if !closed { err(&r, sline, chars(text, sls, start) + 1, "unterminated string literal"); }
+            if !closed { err(r, sline, chars(text, sls, start) + 1, "unterminated string literal"); }
             let mut t = tok(TK.Str, "", sline, chars(text, sls, start) + 1, slen);
             t.text = buf;
             r.toks.push(t);
@@ -291,7 +297,7 @@ pub fn lex(text: str) -> LexResult {
                     val = (hex_val(text[i + 1]) * 16 + hex_val(text[i + 2])) as i64;
                     i += 3;
                 } else {
-                    err(&r, line, chars(text, ls, start) + 1, "unknown escape sequence in char literal");
+                    err(r, line, chars(text, ls, start) + 1, "unknown escape sequence in char literal");
                     i += 1;
                     val = 0;
                 }
@@ -299,7 +305,7 @@ pub fn lex(text: str) -> LexResult {
                 let ch = text[i];
                 i += 1;
                 if ch >= 128 {
-                    err(&r, line, chars(text, ls, start) + 1, "char literal must be a single byte");
+                    err(r, line, chars(text, ls, start) + 1, "char literal must be a single byte");
                     val = 0;
                     // skip the rest of a multi-byte character
                     while i < n && (text[i] & 0xC0) == 0x80 { i += 1; }
@@ -307,12 +313,12 @@ pub fn lex(text: str) -> LexResult {
             }
             if i < n && text[i] == '\'' && val < 0 {
                 i += 1;
-                err(&r, line, chars(text, ls, start) + 1, "unterminated or empty char literal");
+                err(r, line, chars(text, ls, start) + 1, "unterminated or empty char literal");
                 val = 0;
             } else if i < n && text[i] == '\'' {
                 i += 1;
             } else {
-                err(&r, line, chars(text, ls, start) + 1, "unterminated or empty char literal");
+                err(r, line, chars(text, ls, start) + 1, "unterminated or empty char literal");
                 if val < 0 { val = 0; }
             }
             let mut t = tok(TK.Char, "", line, chars(text, ls, start) + 1, chars(text, start, i) > 0 ? chars(text, start, i) : 1);
@@ -326,10 +332,9 @@ pub fn lex(text: str) -> LexResult {
         else if two.len == 2 && is_op2(two) { r.toks.push(tok(TK.Op, two, line, chars(text, ls, i) + 1, 2)); i += 2; }
         else if is_op1(c) { r.toks.push(tok(TK.Op, text[i..i + 1], line, chars(text, ls, i) + 1, 1)); i += 1; }
         else {
-            err(&r, line, chars(text, ls, i) + 1, format("unexpected character `{c:c}`"));
+            err(r, line, chars(text, ls, i) + 1, format("unexpected character `{c:c}`"));
             i += 1;
         }
     }
     r.toks.push(tok(TK.Eof, "", line, chars(text, ls, i) + 1, 1));
-    return r;
 }

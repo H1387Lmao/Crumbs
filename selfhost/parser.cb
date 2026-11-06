@@ -1,0 +1,1835 @@
+// The Crumbs parser, written in Crumbs. It mirrors src/crumbsc/parser.py: the same recursive descent, the same
+// error messages and recovery, and the same tree (see ast.cb). Not ported: `async fn` (the compiler does not use it).
+import lexer;
+import ast;
+
+error Abort;
+
+struct Undo { idx: i64, tok: lexer.Token }
+
+struct P {
+    lx: lexer.LexResult,
+    p: i64,
+    line_lens: List<i64>,            // characters per source line
+    no_struct: bool,
+    impl_ty: List<ast.Node>,         // zero or one: the type of the `impl` block being parsed
+    tb_names: List<String>,          // the bounds of the type parameters just parsed
+    tb_vals: List<ast.Val>,
+    undo: List<Undo>,
+    undoing: bool,
+}
+
+// ---- small helpers -----------------------------------------------------------------------------
+
+fn ts(t: *lexer.Token) -> ast.Span { return ast.span(t.line, t.col, t.len); }
+
+fn clone_tok(t: *lexer.Token) -> lexer.Token {
+    return lexer.Token { kind: t.kind, text: String.from(t.text), ival: t.ival, suffix: String.from(t.suffix),
+                         line: t.line, col: t.col, len: t.len };
+}
+
+fn tok(p: *P) -> *lexer.Token { return p.lx.toks.at(p.p); }
+
+fn peek(p: *P, k: i64) -> *lexer.Token {
+    let i = p.p + k;
+    return p.lx.toks.at(i < p.lx.toks.len - 1 ? i : p.lx.toks.len - 1);
+}
+
+fn prev(p: *P) -> *lexer.Token { return p.lx.toks.at(p.p > 0 ? p.p - 1 : 0); }
+
+fn advance(p: *P) -> lexer.Token {
+    let mut t = clone_tok(tok(p));
+    if t.kind != lexer.TK.Eof { p.p += 1; }
+    return t;
+}
+
+fn is_op_at(p: *P, v: str, k: i64) -> bool {
+    let t = peek(p, k);
+    return t.kind == lexer.TK.Op && t.text == v;
+}
+fn is_op(p: *P, v: str) -> bool { return is_op_at(p, v, 0); }
+
+fn is_kw_at(p: *P, v: str, k: i64) -> bool {
+    let t = peek(p, k);
+    return t.kind == lexer.TK.Kw && t.text == v;
+}
+fn is_kw(p: *P, v: str) -> bool { return is_kw_at(p, v, 0); }
+
+fn accept_op(p: *P, v: str) -> bool {
+    if is_op(p, v) { advance(p); return true; }
+    return false;
+}
+
+fn accept_kw(p: *P, v: str) -> bool {
+    if is_kw(p, v) { advance(p); return true; }
+    return false;
+}
+
+fn describe(t: *lexer.Token) -> String {
+    if t.kind == lexer.TK.Eof { return String.from("end of file"); }
+    if t.kind == lexer.TK.Str { return String.from("string literal"); }
+    if t.kind == lexer.TK.Int || t.kind == lexer.TK.Float || t.kind == lexer.TK.Char { return String.from("literal"); }
+    if t.kind == lexer.TK.Kw { return format("keyword `{t.text}`"); }
+    return format("`{t.text}`");
+}
+
+// ---- spans and diagnostics ---------------------------------------------------------------------
+
+fn join(p: *P, a: ast.Span, b: ast.Span) -> ast.Span {
+    if b.line == a.line && b.col + b.len > a.col { return ast.span(a.line, a.col, b.col + b.len - a.col); }
+    let n = a.line - 1 < p.line_lens.len ? *p.line_lens.at(a.line - 1) : 0;
+    return ast.span(a.line, a.col, n - a.col + 1);
+}
+
+fn sp(p: *P, start: ast.Span) -> ast.Span { return join(p, start, ts(prev(p))); }
+
+fn has_error_on(p: *P, line: i64) -> bool {
+    for e in p.lx.errors { if e.line == line { return true; } }
+    return false;
+}
+
+// Diagnostics.error: skips an exact duplicate
+fn add_error(p: *P, line: i64, col: i64, msg: str) {
+    for e in p.lx.errors { if e.line == line && e.col == col && e.msg == msg { return; } }
+    p.lx.errors.push(lexer.Diag { line: line, col: col, msg: String.from(msg) });
+}
+
+// records an error at `sp` unless that line already has one (the caller then throws Abort)
+fn fail_at(p: *P, at: ast.Span, msg: str) {
+    if !has_error_on(p, at.line) { add_error(p, at.line, at.col, msg); }
+}
+
+fn fail(p: *P, msg: str) { fail_at(p, ts(tok(p)), msg); }
+
+fn expect_op(p: *P, v: str, ctx: str) -> lexer.Token! {
+    if is_op(p, v) { return advance(p); }
+    let mut where = String.empty();
+    if ctx.len > 0 { where = format(" {ctx}"); }
+    if (v == ";" || v == ")" || v == "]" || v == "}") && p.p > 0 && tok(p).line != prev(p).line {
+        let ps = ts(prev(p));
+        if !has_error_on(p, ps.line) { add_error(p, ps.line, ps.col + ps.len, format("expected `{v}`{where}")); }
+        throw Abort;
+    }
+    fail(p, format("expected `{v}`{where}, found {describe(tok(p))}"));
+    throw Abort;
+}
+
+fn expect_kw(p: *P, v: str) -> lexer.Token! {
+    if is_kw(p, v) { return advance(p); }
+    fail(p, format("expected keyword `{v}`, found {describe(tok(p))}"));
+    throw Abort;
+}
+
+fn expect_ident(p: *P, what: str) -> lexer.Token! {
+    let t = tok(p);
+    if t.kind == lexer.TK.Ident { return advance(p); }
+    if t.kind == lexer.TK.Kw {
+        fail(p, format("expected {what}, found keyword `{t.text}`"));
+        throw Abort;
+    }
+    fail(p, format("expected {what}, found {describe(t)}"));
+    throw Abort;
+}
+
+// consumes a `>`; a `>>` is split so nested generics like `A<B<C>>` parse
+fn expect_gt(p: *P) -> void! {
+    if is_op(p, ">") { advance(p); return; }
+    if is_op(p, ">>") {
+        let mut t = clone_tok(tok(p));
+        if p.undoing { p.undo.push(Undo { idx: p.p, tok: clone_tok(&t) }); }
+        let nt = lexer.Token { kind: lexer.TK.Op, text: String.from(">"), ival: 0, suffix: String.empty(), line: t.line, col: t.col + 1, len: 1 };
+        p.lx.toks.set(p.p, nt);
+        return;
+    }
+    fail(p, format("expected `>`, found {describe(tok(p))}"));
+    throw Abort;
+}
+
+// ---- cloning nodes (a type node is reused for every `self` parameter) -----------------------------
+
+fn clone_val(v: *ast.Val) -> ast.Val {
+    let mut out = ast.Val { tag: v.tag, i: v.i, s: String.from(v.s), node: List.new(), items: List.new(), span: v.span };
+    for i in 0..v.node.len { out.node.push(clone_node(v.node.at(i))); }
+    for i in 0..v.items.len { out.items.push(clone_val(v.items.at(i))); }
+    return out;
+}
+
+fn clone_node(n: *ast.Node) -> ast.Node {
+    let mut out = ast.Node { kind: String.from(n.kind), span: n.span, attrs: List.new() };
+    for i in 0..n.attrs.len {
+        let a = n.attrs.at(i);
+        out.attrs.push(ast.Attr { name: String.from(a.name), v: clone_val(&a.v) });
+    }
+    return out;
+}
+
+fn put_tbounds(n: *ast.Node, p: *P) {
+    // a dict, kept as alternating keys and values (tag 9)
+    let mut v = ast.v_list(List.new());
+    v.tag = 9;
+    for i in 0..p.tb_names.len {
+        v.items.push(ast.v_str(*p.tb_names.at(i)));
+        v.items.push(clone_val(p.tb_vals.at(i)));
+    }
+    n.put("tbounds", v);
+}
+
+fn names_val(ss: *List<String>) -> ast.Val {
+    let mut items: List<ast.Val> = List.new();
+    for i in 0..ss.len { items.push(ast.v_str(*ss.at(i))); }
+    return ast.v_list(items);
+}
+
+fn pair_val(name: str, at: ast.Span) -> ast.Val {
+    let mut items: List<ast.Val> = List.new();
+    items.push(ast.v_str(name));
+    items.push(ast.v_span(at));
+    return ast.v_list(items);
+}
+
+fn opt_str(s: str, present: bool) -> ast.Val { return present ? ast.v_str(s) : ast.v_none(); }
+
+// ---- type parameters and type arguments -------------------------------------------------------------
+
+fn parse_bound_list(p: *P) -> List<ast.Node>! {
+    let mut bounds: List<ast.Node> = List.new();
+    loop {
+        let mut t = try expect_ident(p, "trait name");
+        let mut path: List<String> = List.new();
+        path.push(String.from(t.text));
+        if is_op(p, ".") && peek(p, 1).kind == lexer.TK.Ident {
+            advance(p);
+            let mut q = advance(p);
+            path.push(String.from(q.text));
+        }
+        if is_op(p, "<") {
+            fail(p, "traits are not generic: a bound is just the trait's name");
+            throw Abort;
+        }
+        let mut n = ast.new_node("TName", sp(p, ts(&t)));
+        n.put_strs("path", &path);
+        n.put_nodes("args", List.new());
+        bounds.push(n);
+        if !accept_op(p, "+") { break; }
+    }
+    return bounds;
+}
+
+// `<A, B: Trait + Other>`: the names; the bounds are left in `p.tb_*`
+fn parse_tparams(p: *P) -> List<String>! {
+    let mut names: List<String> = List.new();
+    p.tb_names = List.new();
+    p.tb_vals = List.new();
+    if accept_op(p, "<") {
+        loop {
+            let mut t = try expect_ident(p, "type parameter name");
+            for i in 0..names.len {
+                if *names.at(i) == t.text {
+                    fail_at(p, ts(&t), format("type parameter `{t.text}` is declared more than once"));
+                    throw Abort;
+                }
+            }
+            names.push(String.from(t.text));
+            if accept_op(p, ":") {
+                let bl = try parse_bound_list(p);
+                p.tb_names.push(String.from(t.text));
+                p.tb_vals.push(ast.v_list(ast.vals_of(bl)));
+            }
+            if !accept_op(p, ",") { break; }
+        }
+        try expect_gt(p);
+    }
+    return names;
+}
+
+fn parse_type_args(p: *P) -> List<ast.Node>! {
+    let mut args: List<ast.Node> = List.new();
+    args.push(try parse_type(p));
+    while accept_op(p, ",") { args.push(try parse_type(p)); }
+    try expect_gt(p);
+    return args;
+}
+
+// ---- recovery -------------------------------------------------------------------------------------
+
+fn sync_stmt(p: *P) {
+    let mut depth = 0 as i64;
+    while tok(p).kind != lexer.TK.Eof {
+        let t = tok(p);
+        if t.kind == lexer.TK.Op {
+            if t.text == "(" || t.text == "[" || t.text == "{" { depth += 1; }
+            else if (t.text == ")" || t.text == "]") && depth > 0 { depth -= 1; }
+            else if t.text == "}" {
+                if depth == 0 { return; }
+                depth -= 1;
+            } else if t.text == ";" && depth == 0 { advance(p); return; }
+        } else if t.kind == lexer.TK.Kw && depth == 0 {
+            let w: str = t.text;
+            if w == "let" || w == "if" || w == "while" || w == "loop" || w == "for" || w == "return" || w == "break"
+               || w == "continue" || w == "match" || w == "throw" { return; }
+        }
+        advance(p);
+    }
+}
+
+fn is_item_start(w: str) -> bool {
+    return w == "fn" || w == "struct" || w == "enum" || w == "const" || w == "import" || w == "pub" || w == "extern"
+        || w == "error" || w == "export";
+}
+
+fn sync_item(p: *P) {
+    let mut depth = 0 as i64;
+    let mut first = true;
+    while tok(p).kind != lexer.TK.Eof {
+        let t = tok(p);
+        if t.kind == lexer.TK.Op && t.text == "{" { depth += 1; }
+        else if t.kind == lexer.TK.Op && t.text == "}" { depth = depth > 1 ? depth - 1 : 0; }
+        else if t.kind == lexer.TK.Kw && depth == 0 && is_item_start(t.text) && !first { return; }
+        first = false;
+        advance(p);
+    }
+}
+
+// ---- small node builders -----------------------------------------------------------------------
+
+fn some(n: ast.Node) -> ast.Node? { return n; }
+
+fn name_path(n: *ast.Node) -> List<String> {
+    let mut out: List<String> = List.new();
+    let v = n.get("path");
+    for i in 0..v.items.len { out.push(String.from(v.items.at(i).s)); }
+    return out;
+}
+
+fn tname(sp: ast.Span, name: str) -> ast.Node {
+    let mut n = ast.new_node("TName", sp);
+    let mut path: List<String> = List.new();
+    path.push(String.from(name));
+    n.put_strs("path", &path);
+    n.put_nodes("args", List.new());
+    return n;
+}
+
+fn mark_parenthesized(n: *ast.Node) { if !n.has("parenthesized") { n.put_bool("parenthesized", true); } }
+
+fn valid_utf8(s: str) -> bool {
+    let mut i = 0 as i64;
+    while i < s.len {
+        let c = s[i] as i64;
+        let mut need = 0 as i64;
+        if c < 128 { need = 0; }
+        else if c >= 194 && c < 224 { need = 1; }
+        else if c >= 224 && c < 240 { need = 2; }
+        else if c >= 240 && c < 245 { need = 3; }
+        else { return false; }
+        if i + need >= s.len + (need == 0 ? 1 : 0) && need > 0 { return false; }
+        for k in 1..need + 1 {
+            if i + k >= s.len { return false; }
+            let d = s[i + k] as i64;
+            if d < 128 || d >= 192 { return false; }
+        }
+        i += need + 1;
+    }
+    return true;
+}
+
+fn bin_prec(op: str) -> i64 {
+    if op == "??" { return 1; }
+    if op == "||" { return 2; }
+    if op == "&&" { return 3; }
+    if op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">=" { return 4; }
+    if op == "|" { return 5; }
+    if op == "^" { return 6; }
+    if op == "&" { return 7; }
+    if op == "<<" || op == ">>" { return 8; }
+    if op == "+" || op == "-" { return 9; }
+    if op == "*" || op == "/" || op == "%" || op == "*%" { return 10; }
+    return 0;
+}
+
+fn is_cmp(op: str) -> bool { return op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">="; }
+
+fn is_assign_op(op: str) -> bool {
+    return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=" || op == "&=" || op == "|="
+        || op == "^=" || op == "<<=" || op == ">>=";
+}
+
+fn is_prim(s: str) -> bool {
+    return s == "i8" || s == "i16" || s == "i32" || s == "i64" || s == "u8" || s == "u16" || s == "u32" || s == "u64"
+        || s == "isize" || s == "usize" || s == "f32" || s == "f64" || s == "bool" || s == "str" || s == "String" || s == "void";
+}
+
+// ---- items --------------------------------------------------------------------------------------
+
+fn parse_module(p: *P) -> ast.Node {
+    let mut items: List<ast.Node> = List.new();
+    while tok(p).kind != lexer.TK.Eof {
+        let start = p.p;
+        try {
+            let it = try parse_item(p);
+            items.push(it);
+        } catch {
+            sync_item(p);
+            if p.p == start { advance(p); }
+        }
+    }
+    let mut m = ast.new_node("Module", ast.span(1, 1, 1));
+    m.put_nodes("items", items);
+    return m;
+}
+
+fn is_directive(p: *P) -> bool {
+    let t = tok(p);
+    let n = peek(p, 1);
+    if t.kind != lexer.TK.Ident { return false; }
+    if !(t.text == "link" || t.text == "include" || t.text == "define") { return false; }
+    if n.kind == lexer.TK.Str { return true; }
+    return t.text == "link" && n.kind == lexer.TK.Ident && n.text == "pkg" && peek(p, 2).kind == lexer.TK.Str;
+}
+
+fn parse_directive(p: *P) -> ast.Node! {
+    let mut start = advance(p);
+    let mut what = String.from(start.text);
+    if what == "link" && tok(p).kind == lexer.TK.Ident && tok(p).text == "pkg" {
+        advance(p);
+        what = String.from("pkg");
+    }
+    let mut s = clone_tok(tok(p));
+    if s.kind != lexer.TK.Str {
+        fail(p, format("expected a string after `{start.text}`"));
+        throw Abort;
+    }
+    advance(p);
+    if !valid_utf8(s.text) {
+        fail_at(p, ts(&s), "directive strings must be valid UTF-8");
+        throw Abort;
+    }
+    try expect_op(p, ";", format("after `{start.text}` directive"));
+    let mut n = ast.new_node("Directive", sp(p, ts(&start)));
+    n.put_str("what", what);
+    n.put_str("value", s.text);
+    n.put_span("vspan", ts(&s));
+    return n;
+}
+
+fn parse_drop(p: *P) -> ast.Node! {
+    let mut start = advance(p);
+    let mut tparams = try parse_tparams(p);
+    if p.tb_names.len > 0 {
+        fail_at(p, ts(&start), "a destructor cannot put trait bounds on its type parameters");
+        throw Abort;
+    }
+    let ty = try parse_type(p);
+    if ty.kind != "TName" || ty.get("path").items.len != 1 {
+        fail_at(p, ts(&start), "a destructor is declared as `drop TypeName(self) { ... }`");
+        throw Abort;
+    }
+    try expect_op(p, "(", "after the destructor's type");
+    let mut me = try expect_ident(p, "name for the value being destroyed");
+    try expect_op(p, ")", "after the destructor parameter");
+    let body = try parse_block(p);
+    let tyname = String.from(ty.get("path").items.at(0).s);
+    let ty_span = ty.span;
+    let mut self_ty = ast.new_node("TPtr", ty_span);
+    self_ty.put_node("inner", ty);
+    let mut param = ast.new_node("Param", ts(&me));
+    param.put_str("name", me.text);
+    param.put_node("tyn", self_ty);
+    param.put_span("name_span", ts(&me));
+    param.put_bool("mut", false);
+    let mut params: List<ast.Node> = List.new();
+    params.push(param);
+    let mut f = ast.new_node("Fn", ty_span);
+    f.put_str("name", format("cb_drop_{tyname}"));
+    f.put_nodes("params", params);
+    f.put_none("ret");
+    f.put_node("body", body);
+    f.put_bool("pub", false);
+    f.put_bool("extern", false);
+    f.put_strs("tparams", &tparams);
+    f.put_span("full_span", sp(p, ts(&start)));
+    f.put_bool("export", false);
+    f.put_none("cname_str");
+    f.put_bool("variadic", false);
+    f.put_str("drop_for", tyname);
+    return f;
+}
+
+fn parse_impl(p: *P) -> ast.Node! {
+    let mut start = advance(p);
+    let mut tparams = try parse_tparams(p);
+    let mut ty = try parse_type(p);
+    let mut trait_n: ast.Node? = null;
+    if accept_kw(p, "for") {
+        if ty.kind != "TName" || ty.get("path").items.len > 2 || ty.get("args").items.len > 0 {
+            fail_at(p, ts(&start), "expected a trait name before `for`");
+            throw Abort;
+        }
+        trait_n = some(ty);
+        ty = try parse_type(p);
+    }
+    if ty.kind != "TName" {
+        fail_at(p, ts(&start), "methods can only be declared for a named type: `impl Point { ... }`");
+        throw Abort;
+    }
+    // the bounds live in p.tb_*, but parse_type cannot disturb them
+    let mut tb = ast.new_node("tmp", ast.span(1, 1, 1));
+    put_tbounds(&tb, p);
+    try expect_op(p, "{", "after the type of an `impl` block");
+    p.impl_ty = List.new();
+    p.impl_ty.push(clone_node(&ty));
+    let mut fns: List<ast.Node> = List.new();
+    while !is_op(p, "}") {
+        if tok(p).kind == lexer.TK.Eof {
+            fail_at(p, ts(&start), "unclosed `impl` block");
+            throw Abort;
+        }
+        let pb = accept_kw(p, "pub");
+        if !is_kw(p, "fn") {
+            fail(p, format("only functions can be declared inside `impl`, found {describe(tok(p))}"));
+            throw Abort;
+        }
+        fns.push(try parse_fn(p, pb, false, "", false, false));
+    }
+    try expect_op(p, "}", "");
+    p.impl_ty = List.new();
+    let mut n = ast.new_node("Impl", sp(p, ts(&start)));
+    n.put_strs("tparams", &tparams);
+    n.put("tbounds", clone_val(tb.get("tbounds")));
+    n.put_node("tyn", ty);
+    n.put_nodes("fns", fns);
+    n.put_opt("trait", trait_n);
+    return n;
+}
+
+fn parse_trait(p: *P, pb: bool) -> ast.Node! {
+    let mut start = advance(p);
+    let mut nm = try expect_ident(p, "trait name");
+    let mut supers: List<ast.Node> = List.new();
+    if accept_op(p, ":") { supers = try parse_bound_list(p); }
+    try expect_op(p, "{", "after the trait name");
+    p.impl_ty = List.new();
+    p.impl_ty.push(tname(ts(&nm), "Self"));
+    let mut methods: List<ast.Node> = List.new();
+    while !is_op(p, "}") {
+        if tok(p).kind == lexer.TK.Eof {
+            fail_at(p, ts(&start), "unclosed `trait` block");
+            throw Abort;
+        }
+        if is_kw(p, "pub") {
+            fail(p, "trait methods cannot be marked `pub`: they are as visible as the trait itself");
+            throw Abort;
+        }
+        if !is_kw(p, "fn") {
+            fail(p, format("only functions can be declared inside `trait`, found {describe(tok(p))}"));
+            throw Abort;
+        }
+        methods.push(try parse_trait_fn(p));
+    }
+    try expect_op(p, "}", "");
+    p.impl_ty = List.new();
+    let mut n = ast.new_node("Trait", ts(&nm));
+    n.put_str("name", nm.text);
+    n.put_bool("pub", pb);
+    n.put_nodes("supers", supers);
+    n.put_nodes("methods", methods);
+    n.put_span("full_span", sp(p, ts(&start)));
+    return n;
+}
+
+fn parse_trait_fn(p: *P) -> ast.Node! {
+    let mut start = try expect_kw(p, "fn");
+    let mut nm = try expect_ident(p, "function name");
+    if is_op(p, "<") {
+        fail_at(p, ts(&nm), "trait methods cannot be generic");
+        throw Abort;
+    }
+    let mut params: List<ast.Node> = List.new();
+    try parse_params(p, false, &params);
+    let mut ret: ast.Node? = null;
+    if accept_op(p, "->") { ret = some(try parse_ret_type(p)); }
+    let mut body: ast.Node? = null;
+    if !accept_op(p, ";") { body = some(try parse_block(p)); }
+    let mut n = ast.new_node("TraitFn", ts(&nm));
+    n.put_str("name", nm.text);
+    n.put_nodes("params", params);
+    n.put_opt("ret", ret);
+    n.put_opt("body", body);
+    n.put_span("full_span", sp(p, ts(&start)));
+    return n;
+}
+
+fn parse_item(p: *P) -> ast.Node! {
+    let mut start = clone_tok(tok(p));
+    let pb = accept_kw(p, "pub");
+    let mut t = clone_tok(tok(p));
+    if !pb && is_directive(p) { return try parse_directive(p); }
+    if t.kind == lexer.TK.Ident && t.text == "drop" && (peek(p, 1).kind == lexer.TK.Ident || is_op_at(p, "<", 1)) {
+        return try parse_drop(p);
+    }
+    if t.kind == lexer.TK.Ident && t.text == "trait" && peek(p, 1).kind == lexer.TK.Ident {
+        return try parse_trait(p, pb);
+    }
+    if t.kind == lexer.TK.Ident && t.text == "impl" && (peek(p, 1).kind == lexer.TK.Ident || is_op_at(p, "<", 1)) {
+        if pb {
+            fail_at(p, ts(&start), "`pub` is not allowed on `impl` blocks; mark the functions inside as `pub`");
+            throw Abort;
+        }
+        return try parse_impl(p);
+    }
+    if t.kind == lexer.TK.Ident && t.text == "async" && is_kw_at(p, "fn", 1) {
+        fail(p, "`async fn` is not supported by the self-hosted parser");
+        throw Abort;
+    }
+    if t.kind != lexer.TK.Kw {
+        fail(p, format("expected an item (`fn`, `struct`, `enum`, `trait`, `const`, `error`, `import`, `impl`), found {describe(&t)}"));
+        throw Abort;
+    }
+    let v: str = t.text;
+    if v == "import" {
+        if pb {
+            fail_at(p, ts(&start), "`pub` is not allowed on imports");
+            throw Abort;
+        }
+        return try parse_import(p);
+    }
+    if v == "fn" { return try parse_fn(p, pb, false, "", false, false); }
+    if v == "export" {
+        advance(p);
+        if !is_kw(p, "fn") {
+            fail(p, "`export` applies to functions: `export fn name(...) { ... }`");
+            throw Abort;
+        }
+        return try parse_fn(p, pb, false, "", false, true);
+    }
+    if v == "extern" {
+        advance(p);
+        let mut cname = String.empty();
+        let mut has_cname = false;
+        if tok(p).kind == lexer.TK.Str {
+            let mut c = advance(p);
+            cname = String.from(c.text);
+            has_cname = true;
+        }
+        if is_kw(p, "struct") { return try parse_struct(p, pb, true, cname, has_cname); }
+        if is_kw(p, "const") { return try parse_const(p, pb, true, cname, has_cname); }
+        if !is_kw(p, "fn") {
+            fail(p, "expected `fn`, `struct` or `const` after `extern`");
+            throw Abort;
+        }
+        return try parse_fn(p, pb, true, cname, has_cname, false);
+    }
+    if v == "struct" { return try parse_struct(p, pb, false, "", false); }
+    if v == "enum" { return try parse_enum(p, pb); }
+    if v == "const" { return try parse_const(p, pb, false, "", false); }
+    if v == "error" { return try parse_error_decl(p, pb); }
+    fail(p, format("expected an item, found {describe(&t)}"));
+    throw Abort;
+}
+
+fn parse_import(p: *P) -> ast.Node! {
+    let mut start = advance(p);
+    let mut parts: List<lexer.Token> = List.new();
+    parts.push(try expect_ident(p, "module name"));
+    while accept_op(p, ".") { parts.push(try expect_ident(p, "module name")); }
+    let mut alias: lexer.Token? = null;
+    if accept_kw(p, "as") { alias = some_tok(try expect_ident(p, "alias")); }
+    try expect_op(p, ";", "after import");
+    let mut path: List<String> = List.new();
+    for i in 0..parts.len { path.push(String.from(parts.at(i).text)); }
+    let mut n = ast.new_node("Import", sp(p, ts(&start)));
+    n.put_strs("path", &path);
+    if alias.is_none() {
+        n.put_none("alias");
+        n.put_span("name_span", ts(parts.at(parts.len - 1)));
+    } else {
+        let mut a = alias.unwrap();
+        n.put_str("alias", a.text);
+        n.put_span("name_span", ts(&a));
+    }
+    return n;
+}
+
+fn some_tok(t: lexer.Token) -> lexer.Token? { return t; }
+
+fn parse_params(p: *P, allow_variadic: bool, params: *List<ast.Node>) -> bool! {
+    try expect_op(p, "(", "");
+    let mut variadic = false;
+    let mut last_default = false;
+    while !is_op(p, ")") {
+        if is_op(p, "...") {
+            if !allow_variadic {
+                fail(p, "only `extern fn` declarations can be variadic");
+                throw Abort;
+            }
+            advance(p);
+            variadic = true;
+            break;
+        }
+        let is_mut = accept_kw(p, "mut");
+        let mut nm = try expect_ident(p, "parameter name");
+        if nm.text == "self" && !is_op(p, ":") {
+            if p.impl_ty.len == 0 || params.len > 0 {
+                fail_at(p, ts(&nm), "`self` can only be the first parameter of a function inside an `impl` block");
+                throw Abort;
+            }
+            let mut tp = ast.new_node("TPtr", ts(&nm));
+            tp.put_node("inner", clone_node(p.impl_ty.at(0)));
+            let mut pn = ast.new_node("Param", ts(&nm));
+            pn.put_str("name", "self");
+            pn.put_node("tyn", tp);
+            pn.put_span("name_span", ts(&nm));
+            pn.put_bool("mut", false);
+            pn.put_bool("self_param", true);
+            pn.put_bool("self_mut", is_mut);
+            params.push(pn);
+            if !accept_op(p, ",") { break; }
+            continue;
+        }
+        try expect_op(p, ":", "after parameter name");
+        let ty = try parse_type(p);
+        let mut def: ast.Node? = null;
+        if accept_op(p, "=") {
+            let saved = p.no_struct;
+            p.no_struct = false;
+            def = some(try parse_expr(p));
+            p.no_struct = saved;
+            last_default = true;
+        } else if last_default {
+            fail_at(p, ts(&nm), format("parameter `{nm.text}` has no default, but the one before it does"));
+            throw Abort;
+        }
+        let mut pn = ast.new_node("Param", join(p, ts(&nm), ts(prev(p))));
+        pn.put_str("name", nm.text);
+        pn.put_node("tyn", ty);
+        pn.put_span("name_span", ts(&nm));
+        pn.put_bool("mut", is_mut);
+        pn.put_opt("default", def);
+        params.push(pn);
+        if !accept_op(p, ",") { break; }
+    }
+    try expect_op(p, ")", "after parameters");
+    return variadic;
+}
+
+fn parse_fn(p: *P, pb: bool, ext: bool, cname: str, has_cname: bool, exp: bool) -> ast.Node! {
+    let mut start = try expect_kw(p, "fn");
+    let mut nm = try expect_ident(p, "function name");
+    let mut tparams = try parse_tparams(p);
+    let mut tb = ast.new_node("tmp", ast.span(1, 1, 1));
+    put_tbounds(&tb, p);
+    if ext && tparams.len > 0 {
+        fail_at(p, ts(&nm), "extern functions cannot be generic");
+        throw Abort;
+    }
+    if exp && tparams.len > 0 {
+        fail_at(p, ts(&nm), "exported functions cannot be generic");
+        throw Abort;
+    }
+    let mut params: List<ast.Node> = List.new();
+    let variadic = try parse_params(p, ext, &params);
+    let mut ret: ast.Node? = null;
+    if accept_op(p, "->") { ret = some(try parse_ret_type(p)); }
+    let mut body: ast.Node? = null;
+    if ext { try expect_op(p, ";", "after extern function declaration"); }
+    else { body = some(try parse_block(p)); }
+    let mut f = ast.new_node("Fn", ts(&nm));
+    f.put_str("name", nm.text);
+    f.put_nodes("params", params);
+    f.put_opt("ret", ret);
+    f.put_opt("body", body);
+    f.put_bool("pub", pb);
+    f.put_bool("extern", ext);
+    f.put_strs("tparams", &tparams);
+    f.put("tbounds", clone_val(tb.get("tbounds")));
+    f.put_span("full_span", sp(p, ts(&start)));
+    f.put_bool("export", exp);
+    if has_cname { f.put_str("cname_str", cname); } else { f.put_none("cname_str"); }
+    f.put_bool("variadic", variadic);
+    f.put_none("drop_for");
+    return f;
+}
+
+fn parse_struct(p: *P, pb: bool, ext: bool, cname: str, has_cname: bool) -> ast.Node! {
+    advance(p);
+    let mut nm = try expect_ident(p, "struct name");
+    let mut tparams = try parse_tparams(p);
+    let mut tb = ast.new_node("tmp", ast.span(1, 1, 1));
+    put_tbounds(&tb, p);
+    if ext && tparams.len > 0 {
+        fail_at(p, ts(&nm), "extern structs cannot be generic");
+        throw Abort;
+    }
+    let mut opaque = false;
+    let mut fields: List<ast.Node> = List.new();
+    if ext && is_op(p, ";") {
+        advance(p);
+        opaque = true;
+    } else {
+        try expect_op(p, "{", "after struct name");
+        while !is_op(p, "}") {
+            let mut fnm = try expect_ident(p, "field name");
+            try expect_op(p, ":", "after field name");
+            let ty = try parse_type(p);
+            let mut fd = ast.new_node("Field", ts(&fnm));
+            fd.put_str("name", fnm.text);
+            fd.put_node("tyn", ty);
+            fields.push(fd);
+            if !accept_op(p, ",") { break; }
+        }
+        try expect_op(p, "}", "to close struct");
+    }
+    let mut n = ast.new_node("Struct", ts(&nm));
+    n.put_str("name", nm.text);
+    n.put_nodes("fields", fields);
+    n.put_bool("pub", pb);
+    n.put_strs("tparams", &tparams);
+    n.put("tbounds", clone_val(tb.get("tbounds")));
+    n.put_bool("extern", ext);
+    n.put_bool("opaque", opaque);
+    if has_cname { n.put_str("cname_str", cname); } else { n.put_none("cname_str"); }
+    return n;
+}
+
+fn parse_enum(p: *P, pb: bool) -> ast.Node! {
+    advance(p);
+    let mut nm = try expect_ident(p, "enum name");
+    try expect_op(p, "{", "after enum name");
+    let mut vs: List<ast.Val> = List.new();
+    while !is_op(p, "}") {
+        let mut v = try expect_ident(p, "variant name");
+        vs.push(pair_val(v.text, ts(&v)));
+        if !accept_op(p, ",") { break; }
+    }
+    try expect_op(p, "}", "to close enum");
+    let mut n = ast.new_node("Enum", ts(&nm));
+    n.put_str("name", nm.text);
+    n.put("variants", ast.v_list(vs));
+    n.put_bool("pub", pb);
+    return n;
+}
+
+fn parse_const(p: *P, pb: bool, ext: bool, cname: str, has_cname: bool) -> ast.Node! {
+    advance(p);
+    let mut nm = try expect_ident(p, "constant name");
+    if !is_op(p, ":") {
+        fail(p, "constants require a type annotation");
+        throw Abort;
+    }
+    advance(p);
+    let ty = try parse_type(p);
+    let mut n = ast.new_node("Const", ts(&nm));
+    n.put_str("name", nm.text);
+    n.put_node("tyn", ty);
+    if ext {
+        try expect_op(p, ";", "after extern constant");
+        n.put_none("init");
+        n.put_bool("pub", pb);
+        n.put_bool("extern", true);
+        if has_cname { n.put_str("cname_str", cname); } else { n.put_none("cname_str"); }
+        return n;
+    }
+    try expect_op(p, "=", "in constant declaration");
+    let init = try parse_expr(p);
+    try expect_op(p, ";", "after constant");
+    n.put_node("init", init);
+    n.put_bool("pub", pb);
+    n.put_bool("extern", false);
+    n.put_none("cname_str");
+    return n;
+}
+
+fn parse_error_decl(p: *P, pb: bool) -> ast.Node! {
+    advance(p);
+    let mut names: List<lexer.Token> = List.new();
+    names.push(try expect_ident(p, "error name"));
+    while accept_op(p, ",") { names.push(try expect_ident(p, "error name")); }
+    try expect_op(p, ";", "after error declaration");
+    let mut vs: List<ast.Val> = List.new();
+    for i in 0..names.len { vs.push(pair_val(names.at(i).text, ts(names.at(i)))); }
+    let mut n = ast.new_node("ErrorDecl", ts(names.at(0)));
+    n.put("names", ast.v_list(vs));
+    n.put_bool("pub", pb);
+    return n;
+}
+
+// ---- types ---------------------------------------------------------------------------------------
+
+fn parse_ret_type(p: *P) -> ast.Node! {
+    let t = try parse_type(p);
+    if is_op(p, "!") {
+        let mut bang = advance(p);
+        let mut n = ast.new_node("TErrUnion", join(p, t.span, ts(&bang)));
+        n.put_node("inner", t);
+        return n;
+    }
+    return t;
+}
+
+fn parse_type(p: *P) -> ast.Node! {
+    let mut t = clone_tok(tok(p));
+    let mut ty = try parse_type_base(p);
+    while is_op(p, "?") || is_op(p, "??") {
+        let mut q = advance(p);
+        if ty.kind == "TOpt" || q.text == "??" {
+            fail_at(p, ts(&q), "optional types cannot be nested");
+            throw Abort;
+        }
+        let mut n = ast.new_node("TOpt", join(p, ts(&t), ts(&q)));
+        n.put_node("inner", ty);
+        ty = n;
+    }
+    return ty;
+}
+
+fn parse_type_base(p: *P) -> ast.Node! {
+    let mut t = clone_tok(tok(p));
+    if t.kind == lexer.TK.Op && t.text == "*" {
+        advance(p);
+        let ro = is_kw(p, "const");
+        if ro { advance(p); }
+        let inner = try parse_type(p);
+        let mut n = ast.new_node("TPtr", sp(p, ts(&t)));
+        n.put_node("inner", inner);
+        n.put_bool("ro", ro);
+        return n;
+    }
+    if t.kind == lexer.TK.Kw && t.text == "fn" {
+        advance(p);
+        try expect_op(p, "(", "in function type");
+        let mut ps: List<ast.Node> = List.new();
+        while !is_op(p, ")") {
+            ps.push(try parse_type(p));
+            if !accept_op(p, ",") { break; }
+        }
+        try expect_op(p, ")", "after the parameter types of a function type");
+        let mut ret: ast.Node? = null;
+        if accept_op(p, "->") { ret = some(try parse_ret_type(p)); }
+        let mut n = ast.new_node("TFn", sp(p, ts(&t)));
+        n.put_nodes("params", ps);
+        n.put_opt("ret", ret);
+        return n;
+    }
+    if t.kind == lexer.TK.Op && t.text == "(" {
+        advance(p);
+        let inner = try parse_type(p);
+        try expect_op(p, ")", "after the type");
+        return inner;
+    }
+    if t.kind == lexer.TK.Op && (t.text == "|" || t.text == "||") {
+        advance(p);
+        let mut ps: List<ast.Node> = List.new();
+        if t.text == "|" {
+            while !is_op(p, "|") {
+                ps.push(try parse_type(p));
+                if !accept_op(p, ",") { break; }
+            }
+            try expect_op(p, "|", "after the parameter types of a closure type");
+        }
+        let mut ret: ast.Node? = null;
+        if accept_op(p, "->") { ret = some(try parse_ret_type(p)); }
+        let mut n = ast.new_node("TClo", sp(p, ts(&t)));
+        n.put_nodes("params", ps);
+        n.put_opt("ret", ret);
+        return n;
+    }
+    if t.kind == lexer.TK.Op && t.text == "[" {
+        advance(p);
+        if accept_op(p, "]") {
+            let inner = try parse_type(p);
+            let mut n = ast.new_node("TSlice", sp(p, ts(&t)));
+            n.put_node("inner", inner);
+            return n;
+        }
+        let size = try parse_expr(p);
+        try expect_op(p, "]", "in array type");
+        let inner = try parse_type(p);
+        let mut n = ast.new_node("TArray", sp(p, ts(&t)));
+        n.put_node("size", size);
+        n.put_node("inner", inner);
+        return n;
+    }
+    if t.kind == lexer.TK.Ident || (t.kind == lexer.TK.Kw && t.text == "error") {
+        advance(p);
+        let mut path: List<String> = List.new();
+        path.push(String.from(t.text));
+        while is_op(p, ".") && peek(p, 1).kind == lexer.TK.Ident {
+            advance(p);
+            let mut q = advance(p);
+            path.push(String.from(q.text));
+        }
+        let mut args: List<ast.Node> = List.new();
+        let last: str = *path.at(path.len - 1);
+        if is_op(p, "<") && !is_prim(last) && last != "error" {
+            advance(p);
+            args = try parse_type_args(p);
+        }
+        if path.len == 1 && *path.at(0) == "Self" && args.len == 0 && p.impl_ty.len > 0 {
+            return clone_node(p.impl_ty.at(0));
+        }
+        let mut n = ast.new_node("TName", sp(p, ts(&t)));
+        n.put_strs("path", &path);
+        n.put_nodes("args", args);
+        return n;
+    }
+    fail(p, format("expected a type, found {describe(&t)}"));
+    throw Abort;
+}
+
+// ---- statements --------------------------------------------------------------------------------------
+
+fn parse_block(p: *P) -> ast.Node! {
+    let mut start = try expect_op(p, "{", "");
+    let saved = p.no_struct;
+    p.no_struct = false;
+    let mut stmts: List<ast.Node> = List.new();
+    while !is_op(p, "}") {
+        if tok(p).kind == lexer.TK.Eof {
+            add_error(p, start.line, start.col, "unclosed `{`");
+            break;
+        }
+        let s0 = p.p;
+        try {
+            let s = try parse_stmt(p);
+            stmts.push(s);
+        } catch {
+            sync_stmt(p);
+            if p.p == s0 { advance(p); }
+        }
+    }
+    let mut end = clone_tok(tok(p));
+    if is_op(p, "}") { advance(p); }
+    p.no_struct = saved;
+    let mut n = ast.new_node("Block", join(p, ts(&start), ts(&end)));
+    n.put_nodes("stmts", stmts);
+    n.put_span("end_span", ts(&end));
+    return n;
+}
+
+fn parse_cond(p: *P) -> ast.Node! {
+    let saved = p.no_struct;
+    p.no_struct = true;
+    let mut ok = true;
+    let mut e = ast.new_node("tmp", ast.span(1, 1, 1));
+    try {
+        e = try parse_expr(p);
+    } catch {
+        ok = false;
+    }
+    p.no_struct = saved;
+    if !ok { throw Abort; }
+    return e;
+}
+
+fn parse_stmt(p: *P) -> ast.Node! {
+    let mut t = clone_tok(tok(p));
+    if t.kind == lexer.TK.Ident && t.text == "region" && peek(p, 1).kind == lexer.TK.Ident && is_op_at(p, "{", 2) {
+        advance(p);
+        let mut nm = advance(p);
+        let body = try parse_block(p);
+        let mut n = ast.new_node("Region", sp(p, ts(&t)));
+        n.put_str("name", nm.text);
+        n.put_span("name_span", ts(&nm));
+        n.put_node("body", body);
+        return n;
+    }
+    if t.kind == lexer.TK.Kw {
+        let v: str = t.text;
+        if v == "try" && is_op_at(p, "{", 1) {
+            advance(p);
+            let body = try parse_block(p);
+            if !is_kw(p, "catch") {
+                fail_at(p, ts(&t), "a `try { ... }` block needs a `catch` handler");
+                throw Abort;
+            }
+            advance(p);
+            let mut binder: lexer.Token? = null;
+            if accept_op(p, "|") {
+                binder = some_tok(try expect_ident(p, "error binding"));
+                try expect_op(p, "|", "after catch binding");
+            }
+            let handler = try parse_block(p);
+            let mut n = ast.new_node("TryBlock", sp(p, ts(&t)));
+            n.put_node("body", body);
+            put_binder(&n, binder);
+            n.put_node("handler", handler);
+            return n;
+        }
+        if v == "let" { return try parse_let(p); }
+        if v == "if" { return try parse_if(p); }
+        if v == "while" {
+            advance(p);
+            let cond = try parse_cond(p);
+            let body = try parse_block(p);
+            let mut n = ast.new_node("While", sp(p, ts(&t)));
+            n.put_node("cond", cond);
+            n.put_node("body", body);
+            return n;
+        }
+        if v == "loop" {
+            advance(p);
+            let body = try parse_block(p);
+            let mut n = ast.new_node("Loop", sp(p, ts(&t)));
+            n.put_node("body", body);
+            return n;
+        }
+        if v == "for" { return try parse_for(p); }
+        if v == "return" {
+            advance(p);
+            let mut e: ast.Node? = null;
+            if !is_op(p, ";") { e = some(try parse_expr(p)); }
+            try expect_op(p, ";", "after `return`");
+            let mut n = ast.new_node("Return", sp(p, ts(&t)));
+            n.put_opt("expr", e);
+            return n;
+        }
+        if v == "break" || v == "continue" {
+            advance(p);
+            try expect_op(p, ";", format("after `{v}`"));
+            return ast.new_node(v == "break" ? "Break" : "Continue", sp(p, ts(&t)));
+        }
+        if v == "throw" {
+            advance(p);
+            let e = try parse_expr(p);
+            try expect_op(p, ";", "after `throw`");
+            let mut n = ast.new_node("Throw", sp(p, ts(&t)));
+            n.put_node("expr", e);
+            return n;
+        }
+        if v == "match" { return try parse_match(p); }
+        if v == "fn" || v == "struct" || v == "enum" || v == "import" || v == "pub" || v == "extern" || v == "export" {
+            fail(p, format("`{v}` items are only allowed at the top level of a module"));
+            throw Abort;
+        }
+    }
+    if is_op(p, "{") { return try parse_block(p); }
+    let e = try parse_expr(p);
+    if tok(p).kind == lexer.TK.Op && is_assign_op(tok(p).text) {
+        let mut op = advance(p);
+        let rhs = try parse_expr(p);
+        try expect_op(p, ";", "after assignment");
+        let mut n = ast.new_node("Assign", sp(p, ts(&t)));
+        n.put_node("target", e);
+        n.put_str("op", op.text);
+        n.put_node("value", rhs);
+        n.put_span("op_span", ts(&op));
+        return n;
+    }
+    try expect_op(p, ";", "after expression");
+    let mut n = ast.new_node("ExprStmt", sp(p, ts(&t)));
+    n.put_node("expr", e);
+    return n;
+}
+
+fn put_binder(n: *ast.Node, binder: lexer.Token?) {
+    if binder.is_none() {
+        n.put_none("binder");
+        n.put_none("binder_span");
+    } else {
+        let mut b = binder.unwrap();
+        n.put_str("binder", b.text);
+        n.put_span("binder_span", ts(&b));
+    }
+}
+
+fn parse_let(p: *P) -> ast.Node! {
+    let mut t = advance(p);
+    let mt = accept_kw(p, "mut");
+    let mut nm = try expect_ident(p, "variable name");
+    let mut tyn: ast.Node? = null;
+    if accept_op(p, ":") {
+        tyn = some(try parse_type(p));
+        if is_op(p, "!") {
+            fail(p, "error unions (`T!`) can only be function return types");
+            throw Abort;
+        }
+    }
+    if !is_op(p, "=") {
+        fail(p, format("variables must be initialized: expected `=`, found {describe(tok(p))}"));
+        throw Abort;
+    }
+    advance(p);
+    let init = try parse_expr(p);
+    try expect_op(p, ";", "after `let` statement");
+    let mut n = ast.new_node("Let", sp(p, ts(&t)));
+    n.put_str("name", nm.text);
+    n.put_bool("mut", mt);
+    n.put_opt("tyn", tyn);
+    n.put_node("init", init);
+    n.put_span("name_span", ts(&nm));
+    return n;
+}
+
+fn parse_if(p: *P) -> ast.Node! {
+    let mut t = advance(p);
+    let cond = try parse_cond(p);
+    let then = try parse_block(p);
+    let mut els: ast.Node? = null;
+    if accept_kw(p, "else") {
+        if is_kw(p, "if") { els = some(try parse_if(p)); }
+        else { els = some(try parse_block(p)); }
+    }
+    let mut n = ast.new_node("If", sp(p, ts(&t)));
+    n.put_node("cond", cond);
+    n.put_node("then", then);
+    n.put_opt("els", els);
+    return n;
+}
+
+fn parse_for(p: *P) -> ast.Node! {
+    let mut t = advance(p);
+    let mut nm = try expect_ident(p, "loop variable");
+    try expect_kw(p, "in");
+    let saved = p.no_struct;
+    p.no_struct = true;
+    let mut ok = true;
+    let mut it = ast.new_node("tmp", ast.span(1, 1, 1));
+    try {
+        let lo = try parse_expr(p);
+        if is_op(p, "..") || is_op(p, "..=") {
+            let mut o = advance(p);
+            let hi = try parse_expr(p);
+            let mut r = ast.new_node("Range", join(p, lo.span, hi.span));
+            r.put_node("lo", lo);
+            r.put_node("hi", hi);
+            r.put_bool("inclusive", o.text == "..=");
+            it = r;
+        } else {
+            it = lo;
+        }
+    } catch {
+        ok = false;
+    }
+    p.no_struct = saved;
+    if !ok { throw Abort; }
+    let body = try parse_block(p);
+    let mut n = ast.new_node("For", sp(p, ts(&t)));
+    n.put_str("var", nm.text);
+    n.put_span("var_span", ts(&nm));
+    n.put_node("iter", it);
+    n.put_node("body", body);
+    return n;
+}
+
+fn parse_match(p: *P) -> ast.Node! {
+    let mut t = advance(p);
+    let scrut = try parse_cond(p);
+    try expect_op(p, "{", "after match scrutinee");
+    let mut arms: List<ast.Node> = List.new();
+    while !is_op(p, "}") {
+        if tok(p).kind == lexer.TK.Eof {
+            fail(p, "unclosed `match`");
+            throw Abort;
+        }
+        let mut pats: List<ast.Node> = List.new();
+        let mut wild = false;
+        loop {
+            if tok(p).kind == lexer.TK.Ident && tok(p).text == "_" {
+                advance(p);
+                wild = true;
+            } else {
+                let saved = p.no_struct;
+                p.no_struct = true;
+                pats.push(try parse_bin(p, 6));
+                p.no_struct = saved;
+            }
+            if !accept_op(p, "|") { break; }
+        }
+        try expect_op(p, "=>", "after match pattern");
+        let body = try parse_block(p);
+        let mut arm = ast.new_node("Arm", body.span);
+        arm.put_nodes("pats", pats);
+        arm.put_bool("wild", wild);
+        arm.put_node("body", body);
+        arms.push(arm);
+        accept_op(p, ",");
+    }
+    try expect_op(p, "}", "to close match");
+    let mut n = ast.new_node("Match", sp(p, ts(&t)));
+    n.put_node("scrut", scrut);
+    n.put_nodes("arms", arms);
+    return n;
+}
+
+// ---- expressions ---------------------------------------------------------------------------------------
+
+fn parse_expr(p: *P) -> ast.Node! {
+    let mut start = clone_tok(tok(p));
+    let mut lhs = try parse_bin(p, 1);
+    if is_op(p, "?") {
+        advance(p);
+        let saved = p.no_struct;
+        p.no_struct = false;
+        let a = try parse_expr(p);
+        p.no_struct = saved;
+        try expect_op(p, ":", "in the `cond ? a : b` expression");
+        let b = try parse_expr(p);
+        let mut n = ast.new_node("Ternary", sp(p, ts(&start)));
+        n.put_node("cond", lhs);
+        n.put_node("a", a);
+        n.put_node("b", b);
+        lhs = n;
+    }
+    while is_kw(p, "catch") {
+        advance(p);
+        let mut binder: lexer.Token? = null;
+        if accept_op(p, "|") {
+            binder = some_tok(try expect_ident(p, "error binding"));
+            try expect_op(p, "|", "after catch binding");
+        }
+        let mut handler = ast.new_node("tmp", ast.span(1, 1, 1));
+        if is_op(p, "{") {
+            let saved = p.no_struct;
+            handler = try parse_block(p);
+            p.no_struct = saved;
+        } else {
+            if !binder.is_none() {
+                fail(p, "expected `{` after `catch |name|`");
+                throw Abort;
+            }
+            handler = try parse_bin(p, 1);
+        }
+        let mut n = ast.new_node("Catch", sp(p, ts(&start)));
+        n.put_node("expr", lhs);
+        put_binder(&n, binder);
+        n.put_node("handler", handler);
+        lhs = n;
+    }
+    return lhs;
+}
+
+fn parse_bin(p: *P, minprec: i64) -> ast.Node! {
+    let mut start = clone_tok(tok(p));
+    let mut lhs = try parse_cast(p);
+    loop {
+        let mut t = clone_tok(tok(p));
+        if t.kind != lexer.TK.Op { break; }
+        let prec = bin_prec(t.text);
+        if prec == 0 || prec < minprec { break; }
+        advance(p);
+        let rhs = try parse_bin(p, prec + 1);
+        let mut n = ast.new_node("Binary", sp(p, ts(&start)));
+        n.put_str("op", t.text);
+        n.put_node("l", lhs);
+        n.put_node("r", rhs);
+        n.put_span("op_span", ts(&t));
+        lhs = n;
+        if is_cmp(t.text) && tok(p).kind == lexer.TK.Op && is_cmp(tok(p).text) {
+            fail(p, "comparison operators cannot be chained");
+            throw Abort;
+        }
+    }
+    return lhs;
+}
+
+fn parse_cast(p: *P) -> ast.Node! {
+    let mut start = clone_tok(tok(p));
+    let mut e = try parse_unary(p);
+    while is_kw(p, "as") {
+        advance(p);
+        let ty = try parse_type(p);
+        let mut n = ast.new_node("Cast", sp(p, ts(&start)));
+        n.put_node("expr", e);
+        n.put_node("tyn", ty);
+        e = n;
+    }
+    return e;
+}
+
+fn parse_unary(p: *P) -> ast.Node! {
+    let mut t = clone_tok(tok(p));
+    if t.kind == lexer.TK.Op && (t.text == "++" || t.text == "--") {
+        advance(p);
+        let operand = try parse_unary(p);
+        let mut n = ast.new_node("IncDec", sp(p, ts(&t)));
+        n.put_str("op", t.text);
+        n.put_bool("prefix", true);
+        n.put_node("expr", operand);
+        return n;
+    }
+    if t.kind == lexer.TK.Op && (t.text == "-" || t.text == "!" || t.text == "~" || t.text == "*" || t.text == "&") {
+        advance(p);
+        let operand = try parse_unary(p);
+        let mut n = ast.new_node("Unary", sp(p, ts(&t)));
+        n.put_str("op", t.text);
+        n.put_node("expr", operand);
+        return n;
+    }
+    if t.kind == lexer.TK.Ident && t.text == "await" {
+        let nx = peek(p, 1);
+        let starts = nx.kind == lexer.TK.Ident || nx.kind == lexer.TK.Int || nx.kind == lexer.TK.Float
+            || nx.kind == lexer.TK.Str || nx.kind == lexer.TK.Char
+            || (nx.kind == lexer.TK.Kw && (nx.text == "true" || nx.text == "false" || nx.text == "try"))
+            || is_op_at(p, "(", 1) || is_op_at(p, "*", 1) || is_op_at(p, "&", 1);
+        if starts {
+            advance(p);
+            let operand = try parse_unary(p);
+            let mut f = ast.new_node("Field", sp(p, ts(&t)));
+            f.put_node("obj", operand);
+            f.put_str("name", "wait");
+            f.put_span("name_span", ts(&t));
+            let mut n = ast.new_node("Call", sp(p, ts(&t)));
+            n.put_node("callee", f);
+            n.put_nodes("args", List.new());
+            n.put_none("targ");
+            n.put_none("targs");
+            return n;
+        }
+    }
+    if t.kind == lexer.TK.Kw && t.text == "try" {
+        advance(p);
+        let operand = try parse_unary(p);
+        let mut n = ast.new_node("Try", sp(p, ts(&t)));
+        n.put_node("expr", operand);
+        return n;
+    }
+    return try parse_postfix(p);
+}
+
+fn parse_args(p: *P) -> List<ast.Node>! {
+    let saved = p.no_struct;
+    p.no_struct = false;
+    let mut args: List<ast.Node> = List.new();
+    while !is_op(p, ")") {
+        if tok(p).kind == lexer.TK.Ident && is_op_at(p, "=", 1) {
+            let mut nm = advance(p);
+            advance(p);
+            let val = try parse_expr(p);
+            let mut n = ast.new_node("NamedArg", join(p, ts(&nm), val.span));
+            n.put_str("name", nm.text);
+            n.put_span("name_span", ts(&nm));
+            n.put_node("expr", val);
+            args.push(n);
+        } else {
+            args.push(try parse_expr(p));
+        }
+        if !accept_op(p, ",") { break; }
+    }
+    p.no_struct = saved;
+    try expect_op(p, ")", "after arguments");
+    return args;
+}
+
+fn is_path(e: *ast.Node) -> bool {
+    if e.kind == "Ident" { return true; }
+    return e.kind == "Field" && is_path(e.node_of("obj"));
+}
+
+fn call_node(p: *P, start: *lexer.Token, callee: ast.Node, args: List<ast.Node>) -> ast.Node {
+    let mut n = ast.new_node("Call", sp(p, ts(start)));
+    n.put_node("callee", callee);
+    n.put_nodes("args", args);
+    return n;
+}
+
+fn parse_postfix(p: *P) -> ast.Node! {
+    let mut start = clone_tok(tok(p));
+    let mut e = try parse_primary(p);
+    loop {
+        let mut t = clone_tok(tok(p));
+        if t.kind != lexer.TK.Op { break; }
+        let v: str = t.text;
+        if v == "(" {
+            advance(p);
+            let mut targ: ast.Node? = null;
+            if e.kind == "Ident" && e.str_of("name") == "size_of" {
+                let saved = p.no_struct;
+                p.no_struct = false;
+                let ty = try parse_type(p);
+                p.no_struct = saved;
+                let bname = String.from(e.str_of("name"));
+                try expect_op(p, ")", format("after the type in `{bname}(T)`"));
+                let mut n = call_node(p, &start, e, List.new());
+                n.put_node("targ", ty);
+                n.put_none("targs");
+                e = n;
+                continue;
+            }
+            if e.kind == "Ident" && (e.str_of("name") == "alloc" || e.str_of("name") == "alloc_in") {
+                let saved = p.no_struct;
+                p.no_struct = false;
+                let ty = try parse_type(p);
+                p.no_struct = saved;
+                if !accept_op(p, ",") {
+                    let bname = String.from(e.str_of("name"));
+                    fail(p, format("`{bname}` expects a type and a count: `{bname}(T, n)`"));
+                    throw Abort;
+                }
+                targ = some(ty);
+            }
+            let args = try parse_args(p);
+            let mut n = call_node(p, &start, e, args);
+            n.put_opt("targ", targ);
+            n.put_none("targs");
+            e = n;
+        } else if v == "[" {
+            advance(p);
+            let saved = p.no_struct;
+            p.no_struct = false;
+            e = try parse_index_tail(p, &start, e);
+            p.no_struct = saved;
+        } else if v == "?." {
+            advance(p);
+            let mut nm = try expect_ident(p, "field or method name");
+            let mut has_args = false;
+            let mut arglist: List<ast.Node> = List.new();
+            if is_op(p, "(") {
+                advance(p);
+                arglist = try parse_args(p);
+                has_args = true;
+            }
+            let mut n = ast.new_node("OptChain", sp(p, ts(&start)));
+            n.put_node("obj", e);
+            n.put_str("name", nm.text);
+            n.put_span("name_span", ts(&nm));
+            if has_args { n.put_nodes("args", arglist); } else { n.put_none("args"); }
+            e = n;
+        } else if v == "?" && is_op_at(p, "??", 1) {
+            advance(p);
+        } else if v == "." && is_kw_at(p, "catch", 1) && is_op_at(p, "(", 2) {
+            advance(p);
+            advance(p);
+            advance(p);
+            let mut binder: lexer.Token? = null;
+            if accept_op(p, "|") {
+                binder = some_tok(try expect_ident(p, "error binding"));
+                try expect_op(p, "|", "after the error name");
+            }
+            let saved = p.no_struct;
+            p.no_struct = false;
+            let mut handler = ast.new_node("tmp", ast.span(1, 1, 1));
+            if is_op(p, "{") { handler = try parse_block(p); }
+            else { handler = try parse_expr(p); }
+            p.no_struct = saved;
+            try expect_op(p, ")", "after the catch handler");
+            let mut n = ast.new_node("Catch", sp(p, ts(&start)));
+            n.put_node("expr", e);
+            put_binder(&n, binder);
+            n.put_node("handler", handler);
+            n.put_bool("lambda_form", true);
+            e = n;
+        } else if v == "." {
+            advance(p);
+            let mut nm = try expect_ident(p, "field name");
+            let mut n = ast.new_node("Field", sp(p, ts(&start)));
+            n.put_node("obj", e);
+            n.put_str("name", nm.text);
+            n.put_span("name_span", ts(&nm));
+            e = n;
+        } else if v == "->" {
+            advance(p);
+            let mut nm = try expect_ident(p, "field or method name");
+            let mut u = ast.new_node("Unary", sp(p, ts(&start)));
+            u.put_str("op", "*");
+            u.put_node("expr", e);
+            let mut n = ast.new_node("Field", sp(p, ts(&start)));
+            n.put_node("obj", u);
+            n.put_str("name", nm.text);
+            n.put_span("name_span", ts(&nm));
+            e = n;
+        } else if v == "++" || v == "--" {
+            advance(p);
+            let mut n = ast.new_node("IncDec", sp(p, ts(&start)));
+            n.put_str("op", v);
+            n.put_bool("prefix", false);
+            n.put_node("expr", e);
+            e = n;
+        } else if v == "<" && is_path(&e) {
+            let mut targs: List<ast.Node> = List.new();
+            let mut ok = false;
+            let save_p = p.p;
+            let save_n = p.lx.errors.len;
+            p.undo = List.new();
+            p.undoing = true;
+            try {
+                advance(p);
+                targs = try parse_type_args(p);
+                ok = is_op(p, "(");
+            } catch {
+                ok = false;
+            }
+            p.undoing = false;
+            if !ok {
+                while p.undo.len > 0 {
+                    let mut u = p.undo.pop() catch { panic("unreachable"); };
+                    p.lx.toks.set(u.idx, clone_tok(&u.tok));
+                }
+                p.p = save_p;
+                while p.lx.errors.len > save_n { p.lx.errors.pop() catch { panic("unreachable"); }; }
+                break;
+            }
+            p.undo = List.new();
+            advance(p);
+            let args = try parse_args(p);
+            let mut n = call_node(p, &start, e, args);
+            n.put_none("targ");
+            n.put_nodes("targs", targs);
+            e = n;
+        } else if v == "{" && is_path(&e) && looks_like_struct_lit(p) {
+            e = try parse_struct_lit(p, &start, e);
+        } else {
+            break;
+        }
+    }
+    return e;
+}
+
+fn looks_like_struct_lit(p: *P) -> bool {
+    let a = peek(p, 1);
+    let b = peek(p, 2);
+    if a.kind == lexer.TK.Ident && b.kind == lexer.TK.Op && b.text == ":" { return true; }
+    if a.kind == lexer.TK.Op && a.text == "}" && !p.no_struct { return true; }
+    return false;
+}
+
+fn parse_struct_lit(p: *P, start: *lexer.Token, path: ast.Node) -> ast.Node! {
+    try expect_op(p, "{", "");
+    let saved = p.no_struct;
+    p.no_struct = false;
+    let mut fields: List<ast.Val> = List.new();
+    while !is_op(p, "}") {
+        let mut nm = try expect_ident(p, "field name");
+        try expect_op(p, ":", "after field name");
+        let val = try parse_expr(p);
+        let mut items: List<ast.Val> = List.new();
+        items.push(ast.v_str(nm.text));
+        items.push(ast.v_span(ts(&nm)));
+        items.push(ast.v_node(val));
+        fields.push(ast.v_list(items));
+        if !accept_op(p, ",") { break; }
+    }
+    p.no_struct = saved;
+    try expect_op(p, "}", "to close struct literal");
+    let mut n = ast.new_node("StructLit", sp(p, ts(start)));
+    n.put_node("path", path);
+    n.put("fields", ast.v_list(fields));
+    return n;
+}
+
+fn parse_index_tail(p: *P, start: *lexer.Token, base: ast.Node) -> ast.Node! {
+    if is_op(p, "..") {
+        advance(p);
+        let mut hi: ast.Node? = null;
+        if !is_op(p, "]") { hi = some(try parse_expr(p)); }
+        try expect_op(p, "]", "after slice range");
+        let mut n = ast.new_node("SliceExpr", sp(p, ts(start)));
+        n.put_node("obj", base);
+        n.put_none("lo");
+        n.put_opt("hi", hi);
+        return n;
+    }
+    let idx = try parse_expr(p);
+    if is_op(p, "..") {
+        advance(p);
+        let mut hi: ast.Node? = null;
+        if !is_op(p, "]") { hi = some(try parse_expr(p)); }
+        try expect_op(p, "]", "after slice range");
+        let mut n = ast.new_node("SliceExpr", sp(p, ts(start)));
+        n.put_node("obj", base);
+        n.put_node("lo", idx);
+        n.put_opt("hi", hi);
+        return n;
+    }
+    try expect_op(p, "]", "after index");
+    let mut n = ast.new_node("Index", sp(p, ts(start)));
+    n.put_node("obj", base);
+    n.put_node("idx", idx);
+    return n;
+}
+
+fn parse_closure(p: *P) -> ast.Node! {
+    let mut start = clone_tok(tok(p));
+    let mut is_move = false;
+    if start.kind == lexer.TK.Ident && start.text == "move" {
+        advance(p);
+        is_move = true;
+    }
+    let mut bar = clone_tok(tok(p));
+    let mut params: List<ast.Node> = List.new();
+    if bar.text == "||" {
+        advance(p);
+    } else {
+        try expect_op(p, "|", "");
+        while !is_op(p, "|") {
+            let mut nm = try expect_ident(p, "closure parameter name");
+            let mut ty: ast.Node? = null;
+            if accept_op(p, ":") { ty = some(try parse_type(p)); }
+            let mut pn = ast.new_node("Param", ts(&nm));
+            pn.put_str("name", nm.text);
+            pn.put_opt("tyn", ty);
+            pn.put_span("name_span", ts(&nm));
+            pn.put_bool("mut", false);
+            params.push(pn);
+            if !accept_op(p, ",") { break; }
+        }
+        try expect_op(p, "|", "after the closure parameters");
+    }
+    let mut ret: ast.Node? = null;
+    if accept_op(p, "->") { ret = some(try parse_ret_type(p)); }
+    let mut body = ast.new_node("tmp", ast.span(1, 1, 1));
+    let mut expr_body = false;
+    if is_op(p, "{") {
+        body = try parse_block(p);
+        expr_body = false;
+    } else {
+        let saved = p.no_struct;
+        let e = try parse_expr(p);
+        p.no_struct = saved;
+        body = e;
+        expr_body = true;
+    }
+    let mut n = ast.new_node("Closure", sp(p, ts(&start)));
+    n.put_nodes("params", params);
+    n.put_opt("ret", ret);
+    n.put_node("body", body);
+    n.put_bool("expr_body", expr_body);
+    n.put_bool("move", is_move);
+    return n;
+}
+
+fn suffix_val(t: *lexer.Token) -> ast.Val {
+    return t.suffix.len > 0 ? ast.v_str(t.suffix) : ast.v_none();
+}
+
+fn parse_primary(p: *P) -> ast.Node! {
+    let mut t = clone_tok(tok(p));
+    let k = t.kind;
+    if (k == lexer.TK.Op && (t.text == "|" || t.text == "||"))
+       || (k == lexer.TK.Ident && t.text == "move" && peek(p, 1).kind == lexer.TK.Op
+           && (peek(p, 1).text == "|" || peek(p, 1).text == "||")) {
+        return try parse_closure(p);
+    }
+    if k == lexer.TK.Int {
+        advance(p);
+        let mut n = ast.new_node("Int", ts(&t));
+        n.put("value", ast.v_u64(t.ival));
+        n.put("suffix", suffix_val(&t));
+        return n;
+    }
+    if k == lexer.TK.Char {
+        advance(p);
+        let mut n = ast.new_node("Int", ts(&t));
+        n.put("value", ast.v_u64(t.ival));
+        n.put_str("suffix", "u8");
+        return n;
+    }
+    if k == lexer.TK.Float {
+        advance(p);
+        let mut n = ast.new_node("Float", ts(&t));
+        n.put("value", ast.v_float());
+        n.put("suffix", suffix_val(&t));
+        return n;
+    }
+    if k == lexer.TK.Str {
+        advance(p);
+        let mut n = ast.new_node("Str", ts(&t));
+        n.put("value", ast.v_bytes(t.text));
+        return n;
+    }
+    if k == lexer.TK.Kw && (t.text == "true" || t.text == "false") {
+        advance(p);
+        let mut n = ast.new_node("Bool", ts(&t));
+        n.put_bool("value", t.text == "true");
+        return n;
+    }
+    if k == lexer.TK.Ident {
+        advance(p);
+        if t.text == "Self" && p.impl_ty.len > 0 {
+            let path = name_path(p.impl_ty.at(0));
+            let mut node = ast.new_node("Ident", ts(&t));
+            node.put_str("name", *path.at(0));
+            for i in 1..path.len {
+                let mut f = ast.new_node("Field", ts(&t));
+                f.put_node("obj", node);
+                f.put_str("name", *path.at(i));
+                f.put_span("name_span", ts(&t));
+                node = f;
+            }
+            return node;
+        }
+        let mut n = ast.new_node("Ident", ts(&t));
+        n.put_str("name", t.text);
+        return n;
+    }
+    if k == lexer.TK.Op && t.text == "(" {
+        advance(p);
+        let saved = p.no_struct;
+        p.no_struct = false;
+        let mut e = try parse_expr(p);
+        p.no_struct = saved;
+        try expect_op(p, ")", "to close parenthesis");
+        mark_parenthesized(&e);
+        return e;
+    }
+    if k == lexer.TK.Op && t.text == "[" { return try parse_array_lit(p); }
+    if k == lexer.TK.Kw && t.text == "error" {
+        fail(p, "`error` is a keyword; declare errors with `error Name;` and refer to them by name");
+        throw Abort;
+    }
+    fail(p, format("expected an expression, found {describe(&t)}"));
+    throw Abort;
+}
+
+fn parse_array_lit(p: *P) -> ast.Node! {
+    let mut start = advance(p);
+    let saved = p.no_struct;
+    p.no_struct = false;
+    let mut result = ast.new_node("tmp", ast.span(1, 1, 1));
+    let mut ok = true;
+    try {
+        if is_op(p, "]") {
+            advance(p);
+            result = ast.new_node("ArrayLit", sp(p, ts(&start)));
+            result.put_nodes("elems", List.new());
+        } else {
+            let first = try parse_expr(p);
+            if accept_op(p, ";") {
+                let count = try parse_expr(p);
+                try expect_op(p, "]", "after array repeat");
+                result = ast.new_node("ArrayRepeat", sp(p, ts(&start)));
+                result.put_node("elem", first);
+                result.put_node("count", count);
+            } else {
+                let mut elems: List<ast.Node> = List.new();
+                elems.push(first);
+                while accept_op(p, ",") {
+                    if is_op(p, "]") { break; }
+                    elems.push(try parse_expr(p));
+                }
+                try expect_op(p, "]", "to close array literal");
+                result = ast.new_node("ArrayLit", sp(p, ts(&start)));
+                result.put_nodes("elems", elems);
+            }
+        }
+    } catch {
+        ok = false;
+    }
+    p.no_struct = saved;
+    if !ok { throw Abort; }
+    return result;
+}
+
+// ---- entry point -------------------------------------------------------------------------------------
+
+fn char_len(s: str, a: i64, b: i64) -> i64 {
+    let mut n = 0 as i64;
+    for i in a..b { if (s[i] & 192) != 128 { n += 1; } }
+    return n;
+}
+
+pub fn parse(text: str, errors: *List<lexer.Diag>) -> ast.Node {
+    let mut lens: List<i64> = List.new();
+    let mut a = 0 as i64;
+    for i in 0..text.len + 1 {
+        if i == text.len || text[i] == '\n' {
+            lens.push(char_len(text, a, i));
+            a = i + 1;
+        }
+    }
+    let mut p = P { lx: lexer.LexResult { toks: List.new(), errors: List.new() }, p: 0, line_lens: lens, no_struct: false, impl_ty: List.new(),
+                    tb_names: List.new(), tb_vals: List.new(), undo: List.new(), undoing: false };
+    lexer.lex_into(text, &p.lx);
+    let m = parse_module(&p);
+    for i in 0..p.lx.errors.len { errors.push(lexer.Diag { line: p.lx.errors.at(i).line, col: p.lx.errors.at(i).col, msg: String.from(p.lx.errors.at(i).msg) }); }
+    return m;
+}

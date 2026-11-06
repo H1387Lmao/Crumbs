@@ -139,7 +139,7 @@ def test_docs_fresh():
     report("docs/stdlib.json is up to date", ok, why or r.stderr)
 
 
-def test_selfhost(stage, tool_cb, py_tool, patterns):
+def test_selfhost(stage, tool_cb, py_tool, patterns, skip_async=False):
     """The Crumbs-in-Crumbs `stage` (lexer, parser, ...) must print exactly what the Python one prints, for every file."""
     import tempfile, shutil
     tmp = tempfile.mkdtemp(prefix="selfhost-")
@@ -149,6 +149,8 @@ def test_selfhost(stage, tool_cb, py_tool, patterns):
         if r.returncode != 0:
             return report(f"selfhost/{stage}", False, r.stdout + r.stderr)
         files = sorted(f for pat in patterns for f in glob.glob(os.path.join(HERE, "..", pat)))
+        if skip_async:   # the self-hosted parser does not desugar `async fn`
+            files = [f for f in files if "async fn" not in open(f, encoding="utf-8").read()]
         bad = []
         for f in files:
             a = subprocess.run([sys.executable, os.path.join(HERE, "..", "tools", py_tool), f], capture_output=True, text=True)
@@ -188,6 +190,7 @@ def main():
         print("== the compiler written in Crumbs")
         pats = ["tests/ok/*.cb", "tests/err/*.cb", "tests/panic/*.cb", "tests/strict/*.cb", "src/std/*.cb", "selfhost/*.cb", "examples/*.cb", "examples/*/*.cb"]
         test_selfhost("lexer", "tokdump.cb", "tokdump.py", pats)
+        test_selfhost("parser", "astdump.cb", "astdump.py", pats, skip_async=True)
     if not only or "cookie" in " ".join(only):
         print("== cookie build tool")
         sys.path.insert(0, HERE)

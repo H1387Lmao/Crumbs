@@ -1,0 +1,16 @@
+// Prints the AST of a file in the format of tools/astdump.py (used to check the parser against the Python one).
+import std.fs;
+import std.env;
+import lexer;
+import parser;
+import ast;
+
+fn main() -> void! {
+    let src = fs.read_to_string(env.arg(1)) catch { println("cannot read {env.arg(1)}"); return; };
+    let mut errors: List<lexer.Diag> = List.new();
+    let mut module = parser.parse(src, &errors);
+    for e in errors { println("error {e.line}:{e.col} {e.msg}"); }
+    let mut out = String.empty();
+    ast.dump_node(&out, &module);
+    println("{out}");
+}
