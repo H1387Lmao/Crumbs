@@ -1,0 +1,14 @@
+true
+2
+c.toml
+build
+8
+out
+app
+2
+missing the required option `--out`
+missing the required argument `target`
+unknown command `bild` (did you mean `build`?)
+true
+missing the required option `--out`
+unknown option `--nope`
