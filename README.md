@@ -550,6 +550,32 @@ A runtime panic (index out of range, failed `unwrap`, ...) raises `module.Panic`
 panicking path are skipped, so that call may leak. Functions using pointers, closures, function pointers or generics, and methods, are
 not exposed; the build prints which function was skipped and why. Values are copied across the boundary, so Python never holds a
 pointer into Crumbs memory. Use the default owned memory mode (not `--gc`) for extensions. See `examples/python/geom.cb`.
+**Regular expressions (`std.regex`).** `Regex.new(pattern)` compiles classes, `\d \w \s \b`, anchors, groups (capturing, `(?:`, named
+`(?<name>`), alternation, greedy and lazy repeats `* + ? {n,m}` and a leading `(?i)`. Matching is bounded by pattern size times text size, so
+nothing blows up exponentially (there are no backreferences or lookaround). It offers `is_match`, `find`, `find_all`, `captures`
+(`get`, `named`), `replace` / `replace_all` (`$1`, `${name}`) and `split`.
+
+```
+let re = regex.Regex.new("(?<year>\\d{4})-(\\d{2})");
+let c = re.captures("on 2024-05-17");
+println(c.named("on 2024-05-17", "year")); // 2024
+```
+
+**Argument parsing (`std.args`).** Declare flags, options (with defaults or required), positionals and nested subcommands; get generated
+`--help` / `--version`, `-vv` counting, `-ofile` / `--out=file` forms, `--` and "did you mean" hints. `parse_or_exit` prints and exits for
+you; `parse` returns a `Matches` to inspect (`ok()`, `message()`, `value`, `values`, `int`, `flag`, `count`, `subcommand()`, `sub()`).
+See `examples/argparse.cb`.
+
+```
+let mut app = args.Command.new("tool", "does useful things");
+app.flag("verbose", 'v', "talk more");
+let mut build = args.Command.new("build", "compile");
+build.option_default("jobs", 'j', "N", "parallel jobs", "4");
+build.positional("target", "what to build", true);
+app.subcommand(build);
+let argv = env.args();
+let m = app.parse_or_exit(argv.view());
+```
 
 ## Borrow checker
 

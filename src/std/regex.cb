@@ -1,0 +1,675 @@
+// std.regex: regular expressions over bytes, matched in time proportional to (pattern size x text size): no pattern can
+// blow up exponentially.
+//
+//     import std.regex;
+//     let re = regex.Regex.new("(?<year>\\d{4})-(\\d{2})-(\\d{2})");
+//     if !re.ok() { println(re.message()); }
+//     let text = "released 2024-05-17, patched 2024-06-02";
+//     let m = re.find(text);                              // first match: m.found, m.start, m.end
+//     println(m.text(text));                              // 2024-05-17
+//     let c = re.captures(text);
+//     println(c.get(text, 2));                            // 05
+//     println(c.named(text, "year"));                     // 2024
+//     println(re.replace_all(text, "$3/$2/$1"));          // released 17/05/2024, patched 02/06/2024
+//     println(regex.Regex.new("[,;] *").split("a, b;c").len);   // 3
+//
+// Syntax: literals, `.` (any byte but newline), classes `[a-z0-9_]` / `[^"]`, escapes `\d \w \s \D \W \S \b \B \n \t \r`
+// and `\.`-style escapes of punctuation, anchors `^ $`, groups `( )`, non-capturing `(?: )`, named `(?<name> )` or
+// `(?P<name> )`, alternation `|`, repeats `* + ? {n} {n,} {n,m}` and their lazy forms `*? +? ?? {n,m}?`. A pattern that
+// starts with `(?i)` ignores ASCII case. Matching is leftmost, with the first alternative / greedy choice winning. There
+// are no backreferences or lookaround (they are what makes matching exponential). In replacements `$1` / `${name}` insert a
+// group and `$$` a dollar sign.
+
+struct Class { neg: bool, ranges: List<i64> }        // pairs lo, hi
+
+// node kinds
+// 0 byte, 1 any, 2 class, 3 concatenation, 4 alternation, 5 repeat, 6 group, 7 start, 8 end, 9 word boundary, 10 not word boundary, 11 empty
+struct Node { kind: i64, a: i64, b: i64, greedy: bool, kids: List<i64> }
+
+// instruction codes
+// 0 byte a, 1 any, 2 class a, 3 split a b, 4 jump a, 5 save a, 6 start, 7 end, 8 word boundary, 9 not boundary, 10 match
+
+pub struct Match { found: bool, start: i64, end: i64 }
+
+impl Match {
+    // the matched part of `s` (the string that was searched)
+    pub fn text(self, s: str) -> str { return self.found ? s[self.start..self.end] : ""; }
+    pub fn len(self) -> i64 { return self.found ? self.end - self.start : 0; }
+}
+
+pub struct Captures { found: bool, pos: List<i64>, names: List<String> }
+
+impl Captures {
+    // number of groups, counting group 0 (the whole match)
+    pub fn len(self) -> i64 { return self.pos.len / 2; }
+    // did group `i` take part in the match?
+    pub fn has(self, i: i64) -> bool {
+        return self.found && i >= 0 && i < self.len() && *self.pos.at(2 * i) >= 0;
+    }
+    pub fn start(self, i: i64) -> i64 { return self.has(i) ? *self.pos.at(2 * i) : -1; }
+    pub fn end(self, i: i64) -> i64 { return self.has(i) ? *self.pos.at(2 * i + 1) : -1; }
+    // the text of group `i` ("" when it did not take part)
+    pub fn get(self, s: str, i: i64) -> str { return self.has(i) ? s[self.start(i)..self.end(i)] : ""; }
+    // the index of a named group, or -1
+    pub fn index_of(self, name: str) -> i64 {
+        for i in 0..self.names.len { if self.names.at(i).len > 0 && *self.names.at(i) == name { return i; } }
+        return -1;
+    }
+    pub fn named(self, s: str, name: str) -> str {
+        let i = self.index_of(name);
+        return i < 0 ? "" : self.get(s, i);
+    }
+}
+
+pub struct Regex {
+    pattern: String,
+    err: String,
+    icase: bool,
+    ngroups: i64,                      // including group 0
+    op: List<i64>,
+    xa: List<i64>,
+    xb: List<i64>,
+    classes: List<Class>,
+    names: List<String>,               // by group index; "" for unnamed
+    nodes: List<Node>,
+    pos: i64,                          // parser position
+}
+
+// ---- parsing -----------------------------------------------------------------------------------
+
+fn node(re: *Regex, kind: i64, a: i64, b: i64) -> i64 {
+    let k: List<i64> = List.new();
+    let nd = Node { kind: kind, a: a, b: b, greedy: true, kids: k };
+    re.nodes.push(nd);
+    return re.nodes.len - 1;
+}
+
+fn fail(re: *Regex, msg: str) {
+    if re.err.len == 0 { re.err = format("{msg} (at position {re.pos})"); }
+}
+
+fn is_word(c: u8) -> bool { return is_alnum(c) || c == '_'; }
+fn is_alnum(c: u8) -> bool { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+
+fn add_range(cl: *Class, lo: i64, hi: i64) { cl.ranges.push(lo); cl.ranges.push(hi); }
+
+// adds the ranges of a `\d`-style escape (`kind` d, w or s) to a class; negated kinds (D, W, S) add the complement
+fn add_escape_class(cl: *Class, kind: u8) {
+    let up = kind >= 'A' && kind <= 'Z';
+    let k = up ? kind + 32 : kind;
+    let mut r: List<i64> = List.new();
+    if k == 'd' { r.push('0' as i64); r.push('9' as i64); }
+    else if k == 'w' {
+        r.push('0' as i64); r.push('9' as i64); r.push('a' as i64); r.push('z' as i64);
+        r.push('A' as i64); r.push('Z' as i64); r.push('_' as i64); r.push('_' as i64);
+    } else {
+        r.push(9); r.push(13); r.push(32); r.push(32);
+    }
+    if !up {
+        for i in 0..r.len { cl.ranges.push(*r.at(i)); }
+        return;
+    }
+    // complement of the (sorted, disjoint after sorting by hand) ranges within 0..255
+    let n = r.len / 2;
+    let mut lo = 0 as i64;
+    // sort pairs by lo (tiny list)
+    for i in 0..n {
+        for j in i + 1..n {
+            if *r.at(2 * j) < *r.at(2 * i) {
+                let a = *r.at(2 * i); let b = *r.at(2 * i + 1);
+                r.set(2 * i, *r.at(2 * j)); r.set(2 * i + 1, *r.at(2 * j + 1));
+                r.set(2 * j, a); r.set(2 * j + 1, b);
+            }
+        }
+    }
+    for i in 0..n {
+        let a = *r.at(2 * i);
+        let b = *r.at(2 * i + 1);
+        if a > lo { add_range(cl, lo, a - 1); }
+        lo = b + 1;
+    }
+    if lo <= 255 { add_range(cl, lo, 255); }
+}
+
+fn escape_byte(c: u8) -> i64 {
+    if c == 'n' { return 10; }
+    if c == 't' { return 9; }
+    if c == 'r' { return 13; }
+    if c == '0' { return 0; }
+    return c as i64;
+}
+
+fn peek(re: *Regex, p: str) -> i64 { return re.pos < p.len ? p[re.pos] as i64 : -1; }
+
+fn parse_class(re: *Regex, p: str) -> i64 {
+    // after `[`
+    let mut cl = Class { neg: false, ranges: List.new() };
+    if peek(re, p) == '^' as i64 { cl.neg = true; re.pos += 1; }
+    let mut first = true;
+    loop {
+        if re.pos >= p.len { fail(re, "missing `]` to close the class"); return -1; }
+        let c = p[re.pos];
+        if c == ']' && !first { re.pos += 1; break; }
+        first = false;
+        re.pos += 1;
+        let mut lo = c as i64;
+        if c == '\\' {
+            if re.pos >= p.len { fail(re, "a `\\` at the end of the pattern"); return -1; }
+            let e = p[re.pos];
+            re.pos += 1;
+            if e == 'd' || e == 'w' || e == 's' || e == 'D' || e == 'W' || e == 'S' { add_escape_class(&cl, e); continue; }
+            lo = escape_byte(e);
+        }
+        let mut hi = lo;
+        if peek(re, p) == '-' as i64 && re.pos + 1 < p.len && p[re.pos + 1] != ']' {
+            re.pos += 1;
+            let mut h = p[re.pos];
+            re.pos += 1;
+            if h == '\\' {
+                if re.pos >= p.len { fail(re, "a `\\` at the end of the pattern"); return -1; }
+                h = escape_byte(p[re.pos]) as u8;
+                re.pos += 1;
+            }
+            hi = h as i64;
+            if hi < lo { fail(re, "the range in the class runs backwards"); return -1; }
+        }
+        add_range(&cl, lo, hi);
+    }
+    re.classes.push(cl);
+    return node(re, 2, re.classes.len - 1, 0);
+}
+
+fn parse_number(re: *Regex, p: str) -> i64 {
+    let mut v = -1 as i64;
+    while re.pos < p.len && p[re.pos] >= '0' && p[re.pos] <= '9' {
+        if v < 0 { v = 0; }
+        v = v * 10 + (p[re.pos] - '0') as i64;
+        if v > 1000 { fail(re, "a repeat count above 1000"); return 0; }
+        re.pos += 1;
+    }
+    return v;
+}
+
+fn parse_alt(re: *Regex, p: str) -> i64 {
+    let alt = node(re, 4, 0, 0);
+    loop {
+        let cat = parse_cat(re, p);
+        if re.err.len > 0 { return -1; }
+        re.nodes.at(alt).kids.push(cat);
+        if peek(re, p) == '|' as i64 { re.pos += 1; continue; }
+        break;
+    }
+    if re.nodes.at(alt).kids.len == 1 { return *re.nodes.at(alt).kids.at(0); }
+    return alt;
+}
+
+fn parse_cat(re: *Regex, p: str) -> i64 {
+    let cat = node(re, 3, 0, 0);
+    loop {
+        let c = peek(re, p);
+        if c == -1 || c == '|' as i64 || c == ')' as i64 { break; }
+        let atom = parse_atom(re, p);
+        if re.err.len > 0 { return -1; }
+        let q = parse_repeat(re, p, atom);
+        if re.err.len > 0 { return -1; }
+        re.nodes.at(cat).kids.push(q);
+    }
+    if re.nodes.at(cat).kids.len == 0 { return node(re, 11, 0, 0); }
+    if re.nodes.at(cat).kids.len == 1 { return *re.nodes.at(cat).kids.at(0); }
+    return cat;
+}
+
+fn parse_repeat(re: *Regex, p: str, atom: i64) -> i64 {
+    let mut cur = atom;
+    loop {
+        let c = peek(re, p);
+        let mut lo = 0 as i64;
+        let mut hi = -1 as i64;
+        if c == '*' as i64 { re.pos += 1; }
+        else if c == '+' as i64 { lo = 1; re.pos += 1; }
+        else if c == '?' as i64 { hi = 1; re.pos += 1; }
+        else if c == '{' as i64 {
+            let save = re.pos;
+            re.pos += 1;
+            let a = parse_number(re, p);
+            if re.err.len > 0 { return -1; }
+            let mut ok = a >= 0;
+            let mut b = a;
+            if ok && peek(re, p) == ',' as i64 {
+                re.pos += 1;
+                b = parse_number(re, p);
+                if re.err.len > 0 { return -1; }
+            }
+            if ok && peek(re, p) == '}' as i64 { re.pos += 1; } else { ok = false; }
+            if !ok { re.pos = save; return cur; }          // not a repeat: `{` stays a literal (handled by the caller)
+            lo = a; hi = b;
+            if hi >= 0 && hi < lo { fail(re, "the repeat range runs backwards"); return -1; }
+        } else { return cur; }
+        let k = re.nodes.at(cur).kind;
+        if k == 7 || k == 8 || k == 9 || k == 10 { fail(re, "nothing to repeat"); return -1; }
+        let greedy = !(peek(re, p) == '?' as i64);
+        if !greedy { re.pos += 1; }
+        let r = node(re, 5, lo, hi);
+        re.nodes.at(r).greedy = greedy;
+        re.nodes.at(r).kids.push(cur);
+        cur = r;
+    }
+}
+
+fn parse_atom(re: *Regex, p: str) -> i64 {
+    let c = p[re.pos];
+    re.pos += 1;
+    if c == '(' {
+        let mut cap = -1 as i64;
+        if peek(re, p) == '?' as i64 {
+            re.pos += 1;
+            let k = peek(re, p);
+            if k == ':' as i64 { re.pos += 1; }
+            else if k == '<' as i64 || k == 'P' as i64 {
+                if k == 'P' as i64 { re.pos += 1; }
+                if peek(re, p) != '<' as i64 { fail(re, "expected `<` after `(?P`"); return -1; }
+                re.pos += 1;
+                let st = re.pos;
+                while re.pos < p.len && p[re.pos] != '>' { re.pos += 1; }
+                if re.pos >= p.len { fail(re, "missing `>` after the group name"); return -1; }
+                let name = p[st..re.pos];
+                re.pos += 1;
+                cap = re.ngroups;
+                re.ngroups += 1;
+                while re.names.len < re.ngroups { re.names.push(String.empty()); }
+                re.names.set(cap, String.from(name));
+            } else { fail(re, "unsupported group syntax (only `(?:`, `(?<name>` and a leading `(?i)` exist)"); return -1; }
+        } else {
+            cap = re.ngroups;
+            re.ngroups += 1;
+            while re.names.len < re.ngroups { re.names.push(String.empty()); }
+        }
+        let inner = parse_alt(re, p);
+        if re.err.len > 0 { return -1; }
+        if peek(re, p) != ')' as i64 { fail(re, "missing `)` to close the group"); return -1; }
+        re.pos += 1;
+        let g = node(re, 6, cap, 0);
+        re.nodes.at(g).kids.push(inner);
+        return g;
+    }
+    if c == '[' { return parse_class(re, p); }
+    if c == '.' { return node(re, 1, 0, 0); }
+    if c == '^' { return node(re, 7, 0, 0); }
+    if c == '$' { return node(re, 8, 0, 0); }
+    if c == '*' || c == '+' || c == '?' { re.pos -= 1; fail(re, "nothing to repeat"); return -1; }
+    if c == '\\' {
+        if re.pos >= p.len { fail(re, "a `\\` at the end of the pattern"); return -1; }
+        let e = p[re.pos];
+        re.pos += 1;
+        if e == 'd' || e == 'w' || e == 's' || e == 'D' || e == 'W' || e == 'S' {
+            let mut cl = Class { neg: false, ranges: List.new() };
+            add_escape_class(&cl, e);
+            re.classes.push(cl);
+            return node(re, 2, re.classes.len - 1, 0);
+        }
+        if e == 'b' { return node(re, 9, 0, 0); }
+        if e == 'B' { return node(re, 10, 0, 0); }
+        if is_alnum(e) && e != 'n' && e != 't' && e != 'r' && e != '0' { fail(re, "unknown escape"); return -1; }
+        return node(re, 0, escape_byte(e), 0);
+    }
+    return node(re, 0, c as i64, 0);
+}
+
+// ---- code generation -----------------------------------------------------------------------------
+
+fn emit(re: *Regex, o: i64, a: i64, b: i64) -> i64 {
+    re.op.push(o); re.xa.push(a); re.xb.push(b);
+    if re.op.len > 60000 { fail(re, "the pattern is too large"); }
+    return re.op.len - 1;
+}
+
+fn gen(re: *Regex, n: i64) {
+    if re.err.len > 0 { return; }
+    let kind = re.nodes.at(n).kind;
+    let a = re.nodes.at(n).a;
+    let b = re.nodes.at(n).b;
+    if kind == 0 { emit(re, 0, a, 0); }
+    else if kind == 1 { emit(re, 1, 0, 0); }
+    else if kind == 2 { emit(re, 2, a, 0); }
+    else if kind == 3 {
+        let cnt = re.nodes.at(n).kids.len;
+        for i in 0..cnt { gen(re, *re.nodes.at(n).kids.at(i)); }
+    } else if kind == 4 {
+        let cnt = re.nodes.at(n).kids.len;
+        let mut jumps: List<i64> = List.new();
+        for i in 0..cnt {
+            if i + 1 < cnt {
+                let sp = emit(re, 3, 0, 0);
+                re.xa.set(sp, re.op.len);
+                gen(re, *re.nodes.at(n).kids.at(i));
+                jumps.push(emit(re, 4, 0, 0));
+                re.xb.set(sp, re.op.len);
+            } else {
+                gen(re, *re.nodes.at(n).kids.at(i));
+            }
+        }
+        for i in 0..jumps.len { re.xa.set(*jumps.at(i), re.op.len); }
+    } else if kind == 5 {
+        let kid = *re.nodes.at(n).kids.at(0);
+        let greedy = re.nodes.at(n).greedy;
+        for i in 0..a { gen(re, kid); }
+        if b < 0 {
+            let sp = emit(re, 3, 0, 0);
+            let body = re.op.len;
+            gen(re, kid);
+            emit(re, 4, sp, 0);
+            let out = re.op.len;
+            if greedy { re.xa.set(sp, body); re.xb.set(sp, out); } else { re.xa.set(sp, out); re.xb.set(sp, body); }
+        } else {
+            let mut splits: List<i64> = List.new();
+            for i in 0..b - a {
+                let sp = emit(re, 3, 0, 0);
+                splits.push(sp);
+                gen(re, kid);
+            }
+            let out = re.op.len;
+            for i in 0..splits.len {
+                let sp = *splits.at(i);
+                if greedy { re.xa.set(sp, sp + 1); re.xb.set(sp, out); } else { re.xa.set(sp, out); re.xb.set(sp, sp + 1); }
+            }
+        }
+    } else if kind == 6 {
+        if a >= 0 { emit(re, 5, 2 * a, 0); }
+        gen(re, *re.nodes.at(n).kids.at(0));
+        if a >= 0 { emit(re, 5, 2 * a + 1, 0); }
+    } else if kind == 7 { emit(re, 6, 0, 0); }
+    else if kind == 8 { emit(re, 7, 0, 0); }
+    else if kind == 9 { emit(re, 8, 0, 0); }
+    else if kind == 10 { emit(re, 9, 0, 0); }
+}
+
+// ---- matching ------------------------------------------------------------------------------------
+
+fn lower(c: i64) -> i64 { return (c >= 65 && c <= 90) ? c + 32 : c; }
+
+fn class_has(cl: *Class, c: i64, icase: bool) -> bool {
+    let mut hit = false;
+    let mut k = 0 as i64;
+    while k < cl.ranges.len {
+        let lo = *cl.ranges.at(k);
+        let hi = *cl.ranges.at(k + 1);
+        if c >= lo && c <= hi { hit = true; }
+        if icase {
+            let l = lower(c);
+            let u = (c >= 97 && c <= 122) ? c - 32 : c;
+            if (l >= lo && l <= hi) || (u >= lo && u <= hi) { hit = true; }
+        }
+        k += 2;
+    }
+    return hit != cl.neg;
+}
+
+// the working memory of a search: states already explored (they cannot lead to a match either), and the backtrack stack
+struct Searcher {
+    seen: []u8,
+    width: i64,                  // text length + 1
+    hi: i64,                     // highest text position touched, for clearing between searches
+    stack: List<i64>,
+    caps: List<i64>,
+}
+
+fn new_searcher(re: *Regex, n: i64) -> Searcher {
+    let sz = re.op.len * (n + 1);
+    let seen = alloc(u8, sz);
+    for i in 0..sz { seen[i] = 0; }
+    let mut caps: List<i64> = List.new();
+    for i in 0..2 * re.ngroups { caps.push(-1); }
+    return Searcher { seen: seen, width: n + 1, hi: -1, stack: List.new(), caps: caps };
+}
+
+fn at_word_boundary(s: str, pos: i64) -> bool {
+    let before = pos > 0 && is_word(s[pos - 1]);
+    let after = pos < s.len && is_word(s[pos]);
+    return before != after;
+}
+
+// tries to match starting exactly at `from`; on success the capture positions are in `sr.caps`
+fn run(re: *Regex, sr: *Searcher, s: str, from: i64) -> bool {
+    for i in 0..sr.caps.len { sr.caps.set(i, -1); }
+    sr.stack.clear();
+    sr.stack.push(0); sr.stack.push(0); sr.stack.push(from);        // (kind 0 = branch, pc, pos)
+    let n = s.len;
+    while sr.stack.len > 0 {
+        let pos0 = sr.stack.pop() catch 0;
+        let a0 = sr.stack.pop() catch 0;
+        let kind0 = sr.stack.pop() catch 0;
+        if kind0 == 1 { sr.caps.set(a0, pos0); continue; }          // restore a capture slot
+        let mut pc = a0;
+        let mut pos = pos0;
+        loop {
+            let cell = pc * sr.width + pos;
+            if sr.seen[cell] != 0 { break; }
+            sr.seen[cell] = 1;
+            if pos > sr.hi { sr.hi = pos; }
+            let o = *re.op.at(pc);
+            if o == 0 {
+                if pos >= n { break; }
+                let c = s[pos] as i64;
+                let want = *re.xa.at(pc);
+                if c == want || (re.icase && lower(c) == lower(want)) { pc += 1; pos += 1; } else { break; }
+            } else if o == 1 {
+                if pos >= n || s[pos] == '\n' { break; }
+                pc += 1; pos += 1;
+            } else if o == 2 {
+                if pos >= n { break; }
+                if class_has(re.classes.at(*re.xa.at(pc)), s[pos] as i64, re.icase) { pc += 1; pos += 1; } else { break; }
+            } else if o == 3 {
+                sr.stack.push(0); sr.stack.push(*re.xb.at(pc)); sr.stack.push(pos);
+                pc = *re.xa.at(pc);
+            } else if o == 4 {
+                pc = *re.xa.at(pc);
+            } else if o == 5 {
+                let slot = *re.xa.at(pc);
+                sr.stack.push(1); sr.stack.push(slot); sr.stack.push(*sr.caps.at(slot));
+                sr.caps.set(slot, pos);
+                pc += 1;
+            } else if o == 6 {
+                if pos != 0 { break; }
+                pc += 1;
+            } else if o == 7 {
+                if pos != n { break; }
+                pc += 1;
+            } else if o == 8 {
+                if !at_word_boundary(s, pos) { break; }
+                pc += 1;
+            } else if o == 9 {
+                if at_word_boundary(s, pos) { break; }
+                pc += 1;
+            } else {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// forget everything a previous search explored (only the part of the table it could have touched)
+fn reset_seen(re: *Regex, sr: *Searcher, from: i64) {
+    let mut p = from;
+    while p <= sr.hi {
+        for pc in 0..re.op.len { sr.seen[pc * sr.width + p] = 0; }
+        p += 1;
+    }
+    sr.hi = from - 1;
+}
+
+// the leftmost match starting at or after `from`; the capture positions are left in `sr.caps`
+fn search(re: *Regex, sr: *Searcher, s: str, from: i64) -> bool {
+    if from > s.len { return false; }
+    reset_seen(re, sr, from);
+    let mut st = from;
+    while st <= s.len {
+        if run(re, sr, s, st) { return true; }
+        st += 1;
+    }
+    return false;
+}
+
+// ---- public API ------------------------------------------------------------------------------------
+
+impl Regex {
+    // compiles `pattern`; check `ok()` before using it (a failed pattern matches nothing)
+    pub fn new(pattern: str) -> Regex {
+        let mut re = Regex { pattern: String.from(pattern), err: String.empty(), icase: false, ngroups: 1,
+                             op: List.new(), xa: List.new(), xb: List.new(), classes: List.new(),
+                             names: List.new(), nodes: List.new(), pos: 0 };
+        re.names.push(String.empty());
+        let mut p: str = pattern;
+        if p.len >= 4 && p[0] == '(' && p[1] == '?' && p[2] == 'i' && p[3] == ')' { re.icase = true; re.pos = 4; }
+        let root = parse_alt(&re, p);
+        if re.err.len == 0 && re.pos < p.len {
+            fail(&re, "unmatched `)`");
+        }
+        if re.err.len == 0 {
+            emit(&re, 5, 0, 0);
+            gen(&re, root);
+            emit(&re, 5, 1, 0);
+            emit(&re, 10, 0, 0);
+        }
+        if re.err.len > 0 { re.op.clear(); }
+        re.nodes.clear();
+        return re;
+    }
+
+    pub fn ok(self) -> bool { return self.err.len == 0; }
+    // why compiling failed ("" when it worked)
+    pub fn message(self) -> str { return self.err; }
+    // number of capture groups, not counting the whole match
+    pub fn group_count(self) -> i64 { return self.ngroups - 1; }
+
+    pub fn is_match(self, s: str) -> bool { return self.find(s).found; }
+
+    pub fn find(self, s: str) -> Match { return self.find_from(s, 0); }
+
+    // the first match starting at or after byte `from`
+    pub fn find_from(self, s: str, from: i64) -> Match {
+        if self.op.len == 0 { return Match { found: false, start: 0, end: 0 }; }
+        let mut sr = new_searcher(self, s.len);
+        let hit = search(self, &sr, s, from);
+        let m = hit ? Match { found: true, start: *sr.caps.at(0), end: *sr.caps.at(1) } : Match { found: false, start: 0, end: 0 };
+        free(sr.seen);
+        return m;
+    }
+
+    pub fn captures(self, s: str) -> Captures { return self.captures_from(s, 0); }
+
+    pub fn captures_from(self, s: str, from: i64) -> Captures {
+        let mut out = Captures { found: false, pos: List.new(), names: List.new() };
+        for i in 0..self.names.len { out.names.push(String.from(*self.names.at(i))); }
+        if self.op.len == 0 { return out; }
+        let mut sr = new_searcher(self, s.len);
+        if search(self, &sr, s, from) {
+            out.found = true;
+            for i in 0..sr.caps.len { out.pos.push(*sr.caps.at(i)); }
+        }
+        free(sr.seen);
+        return out;
+    }
+
+    // every non-overlapping match, left to right (an empty match advances by one byte)
+    pub fn find_all(self, s: str) -> List<Match> {
+        let mut out: List<Match> = List.new();
+        if self.op.len == 0 { return out; }
+        let mut sr = new_searcher(self, s.len);
+        let mut at = 0 as i64;
+        while at <= s.len {
+            if !search(self, &sr, s, at) { break; }
+            let st = *sr.caps.at(0);
+            let en = *sr.caps.at(1);
+            out.push(Match { found: true, start: st, end: en });
+            at = en > st ? en : en + 1;
+        }
+        free(sr.seen);
+        return out;
+    }
+
+    // `$1`, `${name}` and `$$` in `rep` are expanded from the match
+    fn expand(self, out: *String, s: str, rep: str, sr: *Searcher) {
+        let mut i = 0 as i64;
+        while i < rep.len {
+            let c = rep[i];
+            if c != '$' || i + 1 >= rep.len { out.push(c); i += 1; continue; }
+            let d = rep[i + 1];
+            if d == '$' { out.push('$'); i += 2; continue; }
+            let mut g = -1 as i64;
+            if d >= '0' && d <= '9' {
+                g = 0;
+                i += 1;
+                while i < rep.len && rep[i] >= '0' && rep[i] <= '9' { g = g * 10 + (rep[i] - '0') as i64; i += 1; }
+            } else if d == '{' {
+                let st = i + 2;
+                let mut e = st;
+                while e < rep.len && rep[e] != '}' { e += 1; }
+                if e >= rep.len { out.push(c); i += 1; continue; }
+                let name = rep[st..e];
+                for k in 0..self.names.len { if self.names.at(k).len > 0 && *self.names.at(k) == name { g = k; } }
+                i = e + 1;
+            } else { out.push(c); i += 1; continue; }
+            if g >= 0 && 2 * g + 1 < sr.caps.len && *sr.caps.at(2 * g) >= 0 {
+                out.append(s[*sr.caps.at(2 * g)..*sr.caps.at(2 * g + 1)]);
+            }
+        }
+    }
+
+    fn replace_impl(self, s: str, rep: str, all: bool) -> String {
+        let mut out = String.empty();
+        if self.op.len == 0 { out.append(s); return out; }
+        let mut sr = new_searcher(self, s.len);
+        let mut at = 0 as i64;
+        let mut copied = 0 as i64;
+        while at <= s.len {
+            if !search(self, &sr, s, at) { break; }
+            let st = *sr.caps.at(0);
+            let en = *sr.caps.at(1);
+            out.append(s[copied..st]);
+            self.expand(&out, s, rep, &sr);
+            copied = en;
+            at = en > st ? en : en + 1;
+            if !all { break; }
+        }
+        out.append(s[copied..s.len]);
+        free(sr.seen);
+        return out;
+    }
+
+    pub fn replace(self, s: str, rep: str) -> String { return self.replace_impl(s, rep, false); }
+    pub fn replace_all(self, s: str, rep: str) -> String { return self.replace_impl(s, rep, true); }
+
+    // the pieces of `s` between matches
+    pub fn split(self, s: str) -> List<String> {
+        let mut out: List<String> = List.new();
+        let ms = self.find_all(s);
+        let mut prev = 0 as i64;
+        for i in 0..ms.len {
+            let m = ms.at(i);
+            if m.end == m.start && (m.start == 0 || m.start >= s.len) { continue; }
+            out.push(String.from(s[prev..m.start]));
+            prev = m.end;
+        }
+        out.push(String.from(s[prev..s.len]));
+        return out;
+    }
+}
+
+// `pattern` matches somewhere in `s` (false when the pattern is invalid)
+pub fn matches(pattern: str, s: str) -> bool {
+    let re = Regex.new(pattern);
+    return re.ok() && re.is_match(s);
+}
+
+// `s` with every regex metacharacter escaped, so it matches itself literally
+pub fn escape(s: str) -> String {
+    let mut out = String.empty();
+    for i in 0..s.len {
+        let c = s[i];
+        if c == '\\' || c == '.' || c == '*' || c == '+' || c == '?' || c == '(' || c == ')' || c == '[' || c == ']'
+            || c == '{' || c == '}' || c == '|' || c == '^' || c == '$' || c == '-' { out.push('\\'); }
+        out.push(c);
+    }
+    return out;
+}
