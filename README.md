@@ -514,6 +514,42 @@ Written in Crumbs and imported with `import std.name;` (`String`, `str`, `List<T
 helpers: they bind libc and pthread with plain `extern fn` / `extern struct` / `extern const` declarations, exactly like user code does.
 (The only runtime hooks they call are the collector's thread notifications in `std.thread`.)
 
+## Python extensions
+
+`crumbs pyext geom.cb` compiles a module to an importable Python extension (`geom.cpython-313-x86_64-linux-gnu.so`) and writes a
+`geom.pyi` type stub next to it. Every `pub fn` and `pub const` of the entry file becomes a function or attribute of the module;
+keyword arguments and default values (`excited: bool = false`) work. It needs the Python development headers (`python3-dev`);
+`--python python3.12` builds for another interpreter and `--module NAME` renames the module.
+
+```
+pub struct Point { x: f64, y: f64 }
+pub fn hypot(p: Point) -> f64 { return math.sqrt(p.x * p.x + p.y * p.y); }
+pub fn words(s: str) -> List<String> { ... }
+pub fn root(n: i64) -> i64! { if n < 0 { throw Negative; } ... }
+```
+```
+>>> import geom
+>>> geom.hypot({"x": 3, "y": 4}), geom.words("a bc d")
+(5.0, ['a', 'bc', 'd'])
+>>> geom.root(-1)
+geom.CrumbsError: geom.Negative
+```
+
+| Crumbs | Python |
+|---|---|
+| `i8`..`u64`, `bool`, `f32`, `f64` | `int` (range-checked, `OverflowError`), `bool`, `float` |
+| `str`, `String` | `str` |
+| `T?` | `T` or `None` |
+| `List<T>`, `[N]T`, `[]T` (results only) | `list` |
+| struct whose fields all convert | `dict` (arguments also accept any object with those attributes) |
+| enum | `int` (the variant's number, checked on the way in) |
+| `T!` | `T`, or raises `module.CrumbsError` with the error's name |
+| `void` | `None` |
+
+A runtime panic (index out of range, failed `unwrap`, ...) raises `module.Panic` instead of ending the interpreter; destructors on the
+panicking path are skipped, so that call may leak. Functions using pointers, closures, function pointers or generics, and methods, are
+not exposed; the build prints which function was skipped and why. Values are copied across the boundary, so Python never holds a
+pointer into Crumbs memory. Use the default owned memory mode (not `--gc`) for extensions. See `examples/python/geom.cb`.
 **Regular expressions (`std.regex`).** `Regex.new(pattern)` compiles classes, `\d \w \s \b`, anchors, groups (capturing, `(?:`, named
 `(?<name>`), alternation, greedy and lazy repeats `* + ? {n,m}` and a leading `(?i)`. Matching is bounded by pattern size times text size, so
 nothing blows up exponentially (there are no backreferences or lookaround). It offers `is_match`, `find`, `find_all`, `captures`
