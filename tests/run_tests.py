@@ -139,6 +139,27 @@ def test_docs_fresh():
     report("docs/stdlib.json is up to date", ok, why or r.stderr)
 
 
+def test_selfhost(stage, tool_cb, py_tool, patterns):
+    """The Crumbs-in-Crumbs `stage` (lexer, parser, ...) must print exactly what the Python one prints, for every file."""
+    import tempfile, shutil
+    tmp = tempfile.mkdtemp(prefix="selfhost-")
+    exe = os.path.join(tmp, stage)
+    try:
+        r = run(["build", os.path.join(HERE, "..", "selfhost", tool_cb), "-o", exe, "--no-warn"])
+        if r.returncode != 0:
+            return report(f"selfhost/{stage}", False, r.stdout + r.stderr)
+        files = sorted(f for pat in patterns for f in glob.glob(os.path.join(HERE, "..", pat)))
+        bad = []
+        for f in files:
+            a = subprocess.run([sys.executable, os.path.join(HERE, "..", "tools", py_tool), f], capture_output=True, text=True)
+            b = subprocess.run([exe, f], capture_output=True, text=True)
+            if a.stdout != b.stdout:
+                bad.append(os.path.relpath(f, HERE))
+        report(f"selfhost/{stage}: {len(files)} files identical to the Python {stage}", not bad, "differs on: " + ", ".join(bad[:10]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     only = sys.argv[1:]
     build_fixtures()
@@ -163,6 +184,10 @@ def main():
     for p in sorted(glob.glob(os.path.join(HERE, "panic", "*.cb"))):
         if sel(p):
             test_panic(p)
+    if not only or "selfhost" in " ".join(only):
+        print("== the compiler written in Crumbs")
+        pats = ["tests/ok/*.cb", "tests/err/*.cb", "tests/panic/*.cb", "tests/strict/*.cb", "src/std/*.cb", "selfhost/*.cb", "examples/*.cb", "examples/*/*.cb"]
+        test_selfhost("lexer", "tokdump.cb", "tokdump.py", pats)
     if not only or "cookie" in " ".join(only):
         print("== cookie build tool")
         sys.path.insert(0, HERE)

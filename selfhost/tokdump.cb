@@ -1,0 +1,36 @@
+// Prints the tokens of a file, one per line, in the format of tools/tokdump.py (used to check the lexer against the Python one).
+import std.fs;
+import std.env;
+import lexer;
+
+fn kind_name(k: lexer.TK) -> str {
+    if k == lexer.TK.Int { return "int"; }
+    if k == lexer.TK.Float { return "float"; }
+    if k == lexer.TK.Str { return "str"; }
+    if k == lexer.TK.Char { return "char"; }
+    if k == lexer.TK.Ident { return "ident"; }
+    if k == lexer.TK.Kw { return "kw"; }
+    if k == lexer.TK.Op { return "op"; }
+    return "eof";
+}
+
+fn hex(s: str) -> String {
+    let digits = "0123456789abcdef";
+    let mut out = String.empty();
+    for i in 0..s.len { out.push(digits[(s[i] >> 4) as i64]); out.push(digits[(s[i] & 15) as i64]); }
+    return out;
+}
+
+fn main() -> void! {
+    let src = fs.read_to_string(env.arg(1)) catch { println("cannot read {env.arg(1)}"); return; };
+    let r = lexer.lex(src);
+    for e in r.errors { println("error {e.line}:{e.col} {e.msg}"); }
+    for t in r.toks {
+        let k = kind_name(t.kind);
+        if t.kind == lexer.TK.Int { println("{t.line}:{t.col}+{t.len} {k} {t.ival} {t.suffix}"); }
+        else if t.kind == lexer.TK.Char { println("{t.line}:{t.col}+{t.len} {k} {t.ival}"); }
+        else if t.kind == lexer.TK.Float { println("{t.line}:{t.col}+{t.len} {k} {t.suffix}"); }
+        else if t.kind == lexer.TK.Str { println("{t.line}:{t.col}+{t.len} {k} {hex(t.text)}"); }
+        else { println("{t.line}:{t.col}+{t.len} {k} {t.text}"); }
+    }
+}
