@@ -1338,6 +1338,13 @@ class Checker:
                      help=f"specify explicitly, e.g. `{sym.name}<{', '.join(sym.tparams)}>(...)`"
                      if what == "fn" else "annotate the variable or give the fields concrete values")
 
+    def probe(self, a):
+        """Checks an argument only to learn its type: the moves it makes are undone, since the real check comes later."""
+        saved = dict(self.moved)
+        t = self.check(a, None)
+        self.moved = saved
+        return t
+
     def instantiate_call(self, e, sym, exp):
         tps, params = sym.tparams, sym.node.params
         if len(e.args) != len(params):
@@ -1361,10 +1368,10 @@ class Checker:
         else:
             for a, p in zip(e.args, params):
                 if not self.untyped(a) and a.kind != "Closure":
-                    self.unify(p.tyn, self.check(a, None), sym, b)
+                    self.unify(p.tyn, self.probe(a), sym, b)
             for a, p in zip(e.args, params):
                 if self.untyped(a) and a.kind != "Closure" and not self.is_bare_param(p.tyn, sym, b):
-                    self.unify(p.tyn, self.check(a, None), sym, b)
+                    self.unify(p.tyn, self.probe(a), sym, b)
             for a, p in zip(e.args, params):                    # closures last: their parameter types come from what is already known
                 if a.kind == "Closure" and p.tyn.kind == "TClo":
                     self.unify(p.tyn, self.check(a, self.clo_hint(p.tyn, sym, b)), sym, b)
