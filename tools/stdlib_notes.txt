@@ -317,3 +317,12 @@ pcre.Regex.replace_impl :: Shared work of `replace` and `replace_all`. :: the ne
 pcre.Regex.replace :: Replaces the first match; `$1`, `${name}` and `$$` work in `rep`. :: a new `String` :: s=the text; rep=the replacement
 pcre.Regex.replace_all :: Replaces every match; `$1`, `${name}` and `$$` work in `rep`. :: a new `String` :: s=the text; rep=the replacement
 pcre.Regex.split :: Splits at every match. :: the pieces between matches :: s=the text to split
+args.Command.new :: Creates a command (or subcommand) description. :: a new `Command` :: name=the command's name; about=one line shown in help
+args.Command.version :: Sets the version, which enables `-V` / `--version`. :: nothing :: v=the version text
+args.Command.option_default :: Declares an option that takes a value and has a default when not given. :: nothing :: name=the long name; short=the one-letter form or 0; meta=placeholder shown in help; help=description; default=value used when absent
+args.Command.require_subcommand :: Makes giving a subcommand mandatory. :: nothing ::
+args.Matches.ok :: Checks that parsing succeeded and did not stop for help or version. :: `true` when the result can be used ::
+args.Matches.message :: The error message of a failed parse. :: the message, or an empty string when parsing worked ::
+args.Matches.wants_help :: Tells whether `-h` / `--help` was given. :: `true` if help was requested ::
+args.Matches.wants_version :: Tells whether `-V` / `--version` was given. :: `true` if the version was requested ::
+args.Matches.flag :: Tells whether a flag was given. :: `true` if it appeared at least once :: name=the flag's long name

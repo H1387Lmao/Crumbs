@@ -59,6 +59,7 @@
   {
    "title": "Other",
    "modules": [
+    "args",
     "iter",
     "pcre",
     "regex",
@@ -7099,12 +7100,539 @@
    ]
   },
   {
+   "id": "args",
+   "name": "args",
+   "import": "std.args",
+   "summary": "a command-line argument parser with flags, options, positionals and nested subcommands.",
+   "description": "`parse` gives a `Matches` that you check with `ok()` (the message is in `message()`); `help` and `--version` are built in:\n`-h` / `--help` print generated help, and `m.wants_help()` / `m.wants_version()` tell you when `parse` stopped for them.\nA bare `--` ends option parsing: everything after it is positional. Values may be repeated (`-I a -I b`): `values(name)`\nlists them all, `value(name)` gives the last. A value starting with `-` is accepted after `=` or as a short attached value.",
+   "example": "import std.args;\nimport std.env;\n\nlet mut app = args.Command.new(\"tool\", \"does useful things\");\napp.version(\"1.2.0\");\napp.flag(\"verbose\", 'v', \"talk more\");                    // -v, --verbose, may repeat: -vv\napp.option(\"config\", 'c', \"FILE\", \"configuration file\");  // -c FILE, -cFILE, --config FILE, --config=FILE\n\nlet mut build = args.Command.new(\"build\", \"compile the project\");\nbuild.option_default(\"jobs\", 'j', \"N\", \"parallel jobs\", \"4\");\nbuild.positional(\"target\", \"what to build\", true);        // required\nbuild.positional_rest(\"extra\", \"more targets\");           // collects whatever is left\napp.subcommand(build);\n\nlet argv = env.args();\nlet m = app.parse_or_exit(argv.view());                    // prints help / errors and exits for you\nif m.flag(\"verbose\") { println(\"verbose\"); }\nif m.subcommand() == \"build\" {\n    let b = m.sub();\n    println(\"jobs {b.value(\\\"jobs\\\")}, target {b.value(\\\"target\\\")}\");\n}",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "Command",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "",
+     "fields": [
+      {
+       "name": "name",
+       "type": "String"
+      },
+      {
+       "name": "about",
+       "type": "String"
+      },
+      {
+       "name": "ver",
+       "type": "String"
+      },
+      {
+       "name": "specs",
+       "type": "List<Spec>"
+      },
+      {
+       "name": "subs",
+       "type": "List<Command>"
+      },
+      {
+       "name": "sub_required",
+       "type": "bool"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str",
+         "doc": "the command's name"
+        },
+        {
+         "name": "about",
+         "type": "str",
+         "doc": "one line shown in help"
+        }
+       ],
+       "returns": "Command",
+       "receiver": null,
+       "doc": "Creates a command (or subcommand) description.",
+       "fallible": false,
+       "returns_doc": "a new `Command`"
+      },
+      {
+       "name": "version",
+       "tparams": [],
+       "params": [
+        {
+         "name": "v",
+         "type": "str",
+         "doc": "the version text"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Sets the version, which enables `-V` / `--version`.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "flag",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        },
+        {
+         "name": "short",
+         "type": "u8"
+        },
+        {
+         "name": "help",
+         "type": "str"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "a switch without a value: `-v`, `--verbose`; `short` 0 for none",
+       "fallible": false
+      },
+      {
+       "name": "option",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        },
+        {
+         "name": "short",
+         "type": "u8"
+        },
+        {
+         "name": "meta",
+         "type": "str"
+        },
+        {
+         "name": "help",
+         "type": "str"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "an option that takes a value",
+       "fallible": false
+      },
+      {
+       "name": "option_default",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str",
+         "doc": "the long name"
+        },
+        {
+         "name": "short",
+         "type": "u8",
+         "doc": "the one-letter form or 0"
+        },
+        {
+         "name": "meta",
+         "type": "str",
+         "doc": "placeholder shown in help"
+        },
+        {
+         "name": "help",
+         "type": "str",
+         "doc": "description"
+        },
+        {
+         "name": "default",
+         "type": "str",
+         "doc": "value used when absent"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Declares an option that takes a value and has a default when not given.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "option_required",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        },
+        {
+         "name": "short",
+         "type": "u8"
+        },
+        {
+         "name": "meta",
+         "type": "str"
+        },
+        {
+         "name": "help",
+         "type": "str"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "an option that must be given",
+       "fallible": false
+      },
+      {
+       "name": "positional",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        },
+        {
+         "name": "help",
+         "type": "str"
+        },
+        {
+         "name": "required",
+         "type": "bool"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "the next positional argument (they are matched in the order declared)",
+       "fallible": false
+      },
+      {
+       "name": "positional_rest",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        },
+        {
+         "name": "help",
+         "type": "str"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "a final positional that collects every remaining argument",
+       "fallible": false
+      },
+      {
+       "name": "subcommand",
+       "tparams": [],
+       "params": [
+        {
+         "name": "c",
+         "type": "Command"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "adds a subcommand (moved in); with `require_subcommand` the parent cannot be used alone",
+       "fallible": false
+      },
+      {
+       "name": "require_subcommand",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Makes giving a subcommand mandatory.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "parse",
+       "tparams": [],
+       "params": [
+        {
+         "name": "argv",
+         "type": "[]String"
+        }
+       ],
+       "returns": "Matches",
+       "receiver": "self",
+       "doc": "parses `argv` (element 0 is the program name: pass `env.args().view()`); never exits",
+       "fallible": false
+      },
+      {
+       "name": "parse_or_exit",
+       "tparams": [],
+       "params": [
+        {
+         "name": "argv",
+         "type": "[]String"
+        }
+       ],
+       "returns": "Matches",
+       "receiver": "self",
+       "doc": "parses; on `--help` / `--version` prints and exits 0, on a mistake prints the error and exits 2",
+       "fallible": false
+      },
+      {
+       "name": "help",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "the generated help for this command",
+       "fallible": false
+      }
+     ]
+    },
+    {
+     "name": "Matches",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "",
+     "fields": [
+      {
+       "name": "cmd",
+       "type": "String"
+      },
+      {
+       "name": "err",
+       "type": "String"
+      },
+      {
+       "name": "help",
+       "type": "bool"
+      },
+      {
+       "name": "ver",
+       "type": "bool"
+      },
+      {
+       "name": "help_text",
+       "type": "String"
+      },
+      {
+       "name": "vals",
+       "type": "map.HashMap<List<String>>"
+      },
+      {
+       "name": "pos",
+       "type": "List<String>"
+      },
+      {
+       "name": "sub_name",
+       "type": "String"
+      },
+      {
+       "name": "subm",
+       "type": "List<Matches>"
+      }
+     ],
+     "methods": [
+      {
+       "name": "ok",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Checks that parsing succeeded and did not stop for help or version.",
+       "fallible": false,
+       "returns_doc": "`true` when the result can be used"
+      },
+      {
+       "name": "message",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "The error message of a failed parse.",
+       "fallible": false,
+       "returns_doc": "the message, or an empty string when parsing worked"
+      },
+      {
+       "name": "wants_help",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Tells whether `-h` / `--help` was given.",
+       "fallible": false,
+       "returns_doc": "`true` if help was requested"
+      },
+      {
+       "name": "wants_version",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Tells whether `-V` / `--version` was given.",
+       "fallible": false,
+       "returns_doc": "`true` if the version was requested"
+      },
+      {
+       "name": "help_message",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "the help text to show for a request (`-h`) or a mistake",
+       "fallible": false
+      },
+      {
+       "name": "has",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "was the flag given (or the option / positional supplied)?",
+       "fallible": false
+      },
+      {
+       "name": "flag",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str",
+         "doc": "the flag's long name"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Tells whether a flag was given.",
+       "fallible": false,
+       "returns_doc": "`true` if it appeared at least once"
+      },
+      {
+       "name": "count",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "how many times a flag was given: `-vvv` is 3",
+       "fallible": false
+      },
+      {
+       "name": "value",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        }
+       ],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "the last value given (or the default), \"\" when absent",
+       "fallible": false
+      },
+      {
+       "name": "values",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        }
+       ],
+       "returns": "[]str",
+       "receiver": "self",
+       "doc": "every value given, in order",
+       "fallible": false
+      },
+      {
+       "name": "int",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        },
+        {
+         "name": "fallback",
+         "type": "i64"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "the value parsed as an integer; `fallback` when absent or not a number",
+       "fallible": false
+      },
+      {
+       "name": "positionals",
+       "tparams": [],
+       "params": [],
+       "returns": "*const List<String>",
+       "receiver": "self",
+       "doc": "every positional argument, in order",
+       "fallible": false
+      },
+      {
+       "name": "subcommand",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "the chosen subcommand's name, \"\" when none",
+       "fallible": false
+      },
+      {
+       "name": "sub",
+       "tparams": [],
+       "params": [],
+       "returns": "*Matches",
+       "receiver": "self",
+       "doc": "the chosen subcommand's matches (only valid when `subcommand()` is not empty)",
+       "fallible": false
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "help_text",
+     "tparams": [],
+     "params": [
+      {
+       "name": "c",
+       "type": "*Command"
+      },
+      {
+       "name": "path",
+       "type": "str"
+      }
+     ],
+     "returns": "String",
+     "receiver": null,
+     "doc": "help text for `c`, whose full invocation name (e.g. \"tool build\") is `path`",
+     "fallible": false
+    }
+   ]
+  },
+  {
    "id": "iter",
    "name": "iter",
    "import": "std.iter",
-   "summary": "lazy iterators built from closures. No import is needed.",
-   "description": "An `Iter<T>` produces values one at a time with `next()`, which gives `T?` (nothing when it is exhausted). The adapters\n(`map`, `filter`, `take`, `zip`, ...) consume the iterator and return a new one that does its work only when it is\nasked for the next value; the consumers (`collect`, `fold`, `count`, `any`, ...) drive it to the end. Whatever an\niterator still holds is destroyed with it. `for x in e` accepts an `Iter<T>`, any value with a `next(self) -> T?` method,\nor any value with an `iter()` method, such as a `List`, which yields pointers to its elements.",
-   "example": "let evens = (1..=10)                              // ranges: iter.range(lo, hi) / iter.range_incl(lo, hi)\nfor n in iter.range(0, 10).filter(|n| *n % 2 == 0).map(|n| n * n) { println(n); }\n\nlet words = List.from([\"a\", \"bb\", \"ccc\"]);\nlet lens = words.iter().map(|w| w.len).collect();     // List<i64>\nlet total = words.iter().fold(0, |acc, w| acc + w.len);",
+   "summary": "lazy iterators built from closures. `Iter<T>` and its methods need no import; `import std.iter;` gives the",
+   "description": "constructors such as `iter.range`.\n\nAn `Iter<T>` produces values one at a time with `next()`, which gives `T?` (nothing when it is exhausted). The adapters\n(`map`, `filter`, `take`, `zip`, ...) consume the iterator and return a new one that does its work only when it is\nasked for the next value; the consumers (`collect`, `fold`, `count`, `any`, ...) drive it to the end. Whatever an\niterator still holds is destroyed with it. `for x in e` accepts an `Iter<T>`, any value with a `next(self) -> T?` method,\nor any value with an `iter()` method, such as a `List`, which yields pointers to its elements.",
+   "example": "import std.iter;\n// ranges: iter.range(lo, hi) / iter.range_incl(lo, hi)\nfor n in iter.range(0, 10).filter(|n| *n % 2 == 0).map(|n| n * n) { println(n); }\n\nlet mut words: List<str> = List.new();\nwords.push(\"a\"); words.push(\"bb\"); words.push(\"ccc\");\nlet lens = words.iter().map(|w| w.len).collect();     // List<i64>\nlet total = words.iter().fold(0 as i64, |acc, w| acc + w.len);\nprintln(lens.len + total);",
    "errors": [],
    "consts": [],
    "types": [
@@ -8783,7 +9311,7 @@
    "import": "std.set",
    "summary": "a set of strings, built on std.map.",
    "description": "",
-   "example": "import std.set;\nlet mut seen = set.HashSet.new();\nif seen.add(\"a\") { println(\"new\"); }     // add says whether the value was new\nprintln(seen.has(\"a\"));\nfor k in seen.iter() { println(*k); }",
+   "example": "import std.set;\nlet mut seen = set.HashSet.new();\nif seen.add(\"a\") { println(\"new\"); }     // add says whether the value was new\nprintln(seen.has(\"a\"));\nlet all = seen.to_list();                 // copies of the members\nprintln(all.len);",
    "errors": [],
    "consts": [],
    "types": [

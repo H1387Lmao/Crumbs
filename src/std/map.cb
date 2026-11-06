@@ -12,6 +12,7 @@
 // value's destructor. Values with destructors are moved in (`set`) and out (`remove`) or borrowed (`get`);
 // `get_or` needs a copyable value type. The iteration order of `for_each` and `keys` is unspecified.
 
+
 import std.iter;
 
 pub struct HashMap<V> {
@@ -225,3 +226,6 @@ impl<V> HashMap<V> {
         return get(self, key);
     }
 }
+
+// keeps the `std.iter` import counted as used even in programs that never iterate a map
+fn iter_import_marker(_it: iter.Iter<i64>) {}
