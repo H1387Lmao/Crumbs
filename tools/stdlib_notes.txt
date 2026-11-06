@@ -298,6 +298,25 @@ regex.Regex.captures_from :: Like `captures`, but starts looking at byte `from`.
 regex.Regex.replace_impl :: Shared work of `replace` and `replace_all`. :: the new string :: s=the text; rep=the replacement; all=replace every match
 regex.Regex.replace :: Replaces the first match; `$1`, `${name}` and `$$` work in `rep`. :: a new `String` :: s=the text; rep=the replacement
 regex.Regex.replace_all :: Replaces every match; `$1`, `${name}` and `$$` work in `rep`. :: a new `String` :: s=the text; rep=the replacement
+pcre.matches :: Checks whether a pattern matches anywhere in a string. :: `true` if it does (false for an invalid pattern) :: pattern=the PCRE2 pattern; s=the text
+pcre.escape :: Escapes every metacharacter so the text matches itself. :: the escaped pattern :: s=the literal text
+pcre.caseless :: The option that ignores letter case. :: the flag for `with_options` ::
+pcre.multiline :: The option that lets `^` and `$` match at line breaks. :: the flag for `with_options` ::
+pcre.dotall :: The option that lets `.` match a newline. :: the flag for `with_options` ::
+pcre.extended :: The option that ignores whitespace and `#` comments in the pattern. :: the flag for `with_options` ::
+pcre.Regex.ok :: Tells whether the pattern compiled. :: `true` when it can be used ::
+pcre.Regex.message :: Why compiling failed. :: the PCRE2 message with the position, or "" when it worked ::
+pcre.Regex.group_count :: Counts the capture groups, not counting the whole match. :: the number of groups ::
+pcre.Regex.is_match :: Checks whether the pattern matches anywhere. :: `true` if it does :: s=the text to search
+pcre.Regex.find :: Finds the first match. :: a `regex.Match`; check `found` :: s=the text to search
+pcre.Regex.find_from :: Finds the first match starting at or after byte `from`. :: a `regex.Match`; check `found` :: s=the text to search; from=the first byte to consider
+pcre.Regex.captures :: Finds the first match with its groups. :: a `regex.Captures`; check `found` :: s=the text to search
+pcre.Regex.captures_from :: Like `captures`, starting at byte `from`. :: a `regex.Captures`; check `found` :: s=the text to search; from=the first byte to consider
+pcre.Regex.find_all :: Finds every non-overlapping match. :: a list of `regex.Match` :: s=the text to search
+pcre.Regex.replace_impl :: Shared work of `replace` and `replace_all`. :: the new string :: s=the text; rep=the replacement; all=replace every match
+pcre.Regex.replace :: Replaces the first match; `$1`, `${name}` and `$$` work in `rep`. :: a new `String` :: s=the text; rep=the replacement
+pcre.Regex.replace_all :: Replaces every match; `$1`, `${name}` and `$$` work in `rep`. :: a new `String` :: s=the text; rep=the replacement
+pcre.Regex.split :: Splits at every match. :: the pieces between matches :: s=the text to split
 args.Command.new :: Creates a command (or subcommand) description. :: a new `Command` :: name=the command's name; about=one line shown in help
 args.Command.version :: Sets the version, which enables `-V` / `--version`. :: nothing :: v=the version text
 args.Command.option_default :: Declares an option that takes a value and has a default when not given. :: nothing :: name=the long name; short=the one-letter form or 0; meta=placeholder shown in help; help=description; default=value used when absent

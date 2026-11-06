@@ -577,6 +577,12 @@ let argv = env.args();
 let m = app.parse_or_exit(argv.view());
 ```
 
+**PCRE2 (`std.pcre`).** The same interface as `std.regex`, backed by the C library [PCRE2](https://github.com/PCRE2Project/pcre2) and its JIT
+compiler through `extern fn` (it needs `libpcre2-8`, e.g. `apt install libpcre2-dev`). Same `Match` / `Captures` values, so switching engines is a one-word
+change. It adds the full Perl syntax (backreferences, lookaround, possessive quantifiers, `\K`) and options via `Regex.with_options(p, pcre.caseless())`.
+On a 4.5 MB text (`examples/regex_bench.cb`) it finds 60,000 matches in 2 to 6 ms where `std.regex` needs 240 to 700 ms. A backtracking engine
+can be made to run for a very long time by a hostile pattern; use `std.regex` when patterns come from outside.
+
 ## Borrow checker
 
 Every function body is checked after type checking for the aliasing mistakes that `&` makes possible. A *borrow* is `&place` (exclusive:

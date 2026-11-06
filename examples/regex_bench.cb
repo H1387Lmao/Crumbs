@@ -1,0 +1,28 @@
+import std.pcre;
+import std.regex;
+import std.time;
+
+fn build() -> String {
+    let mut s = String.empty();
+    for i in 0..60000 {
+        s.append(format("line {i}: user{i}@host{i % 97}.com sent 2024-05-{i % 28 + 1} lorem ipsum dolor sit amet\n"));
+    }
+    return s;
+}
+
+fn main() {
+    let text = build();
+    let t: str = text;
+    println("text bytes: {t.len}");
+    let pats = ["(\\w+)@(\\w+)\\.com", "\\d{4}-\\d{2}-\\d{1,2}", "(lorem|ipsum|dolor) sit", "zzz+q"];
+    for i in 0..4 {
+        let mut a = regex.Regex.new(pats[i]);
+        let mut b = pcre.Regex.new(pats[i]);
+        let t0 = (time.monotonic_ns() / 1000000);
+        let na = a.find_all(t).len;
+        let t1 = (time.monotonic_ns() / 1000000);
+        let nb = b.find_all(t).len;
+        let t2 = (time.monotonic_ns() / 1000000);
+        println("{pats[i]}: crumbs {na} in {t1 - t0} ms, pcre2 {nb} in {t2 - t1} ms");
+    }
+}
