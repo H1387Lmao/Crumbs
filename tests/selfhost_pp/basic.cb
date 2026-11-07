@@ -1,0 +1,39 @@
+#define A 1
+#define B (A + 2)
+#define F(x, y) ((x) * (y) + A)
+#define G(...) f(__VA_ARGS__)
+#define H(a, ...) a __VA_OPT__(, ) __VA_ARGS__
+#define S(x) #x
+#define S2(x) S(x)
+#define C(a, b) a ## b
+#define C3(a, b, c) a##b##c
+#define EMPTY
+#define NEST(x) F(x, x)
+#define LINE __LINE__
+#define COUNT __COUNTER__
+let a = A + B + F(1, 2) + G(1, 2, 3) + G();
+let b = H(x) H(x, y) H(x, y, z);
+let c = S(  a   +  b ) S("q\"r\\s") S2(A) S2(F(1,2));
+let d = C(foo, bar) C3(a, 1, b) C(, x) C(x, );
+let e = NEST(NEST(3)) LINE COUNT COUNT __FILE__;
+let f = "A in string" 'A' /* A in comment */ A // A at end
+/* multi
+   line A comment */ A
+let g = F (1, 2) F
+(1, 2);
+#define MULTI(x) \
+    x + \
+    x
+let h = MULTI(4);
+  #  define   SPACED   42
+let i = SPACED;
+#undef A
+let j = A B;
+#define A 9
+#define A 9
+#define A 10
+#define PING PONG
+#define PONG PING
+let k = PING PONG;
+let é = "ünïcode" A é A;
+let l = F(é, "ü") A;

@@ -139,7 +139,7 @@ def test_docs_fresh():
     report("docs/stdlib.json is up to date", ok, why or r.stderr)
 
 
-def test_selfhost(stage, tool_cb, py_tool, patterns, skip_async=False):
+def test_selfhost(stage, tool_cb, py_tool, patterns, skip_async=False, extra=()):
     """The Crumbs-in-Crumbs `stage` (lexer, parser, ...) must print exactly what the Python one prints, for every file."""
     import tempfile, shutil
     tmp = tempfile.mkdtemp(prefix="selfhost-")
@@ -153,8 +153,8 @@ def test_selfhost(stage, tool_cb, py_tool, patterns, skip_async=False):
             files = [f for f in files if "async fn" not in open(f, encoding="utf-8").read()]
         bad = []
         for f in files:
-            a = subprocess.run([sys.executable, os.path.join(HERE, "..", "tools", py_tool), f], capture_output=True, text=True)
-            b = subprocess.run([exe, f], capture_output=True, text=True)
+            a = subprocess.run([sys.executable, os.path.join(HERE, "..", "tools", py_tool), f, *extra], capture_output=True, text=True)
+            b = subprocess.run([exe, f, *extra], capture_output=True, text=True)
             if a.stdout != b.stdout:
                 bad.append(os.path.relpath(f, HERE))
         report(f"selfhost/{stage}: {len(files)} files identical to the Python {stage}", not bad, "differs on: " + ", ".join(bad[:10]))
@@ -191,6 +191,7 @@ def main():
         pats = ["tests/ok/*.cb", "tests/err/*.cb", "tests/panic/*.cb", "tests/strict/*.cb", "src/std/*.cb", "selfhost/*.cb", "examples/*.cb", "examples/*/*.cb"]
         test_selfhost("lexer", "tokdump.cb", "tokdump.py", pats)
         test_selfhost("parser", "astdump.cb", "astdump.py", pats, skip_async=True)
+        test_selfhost("preprocessor", "ppdump.cb", "ppdump.py", pats + ["tests/selfhost_pp/*.cb"], extra=("-DMODE=2", "-DFEATURE"))
     if not only or "cookie" in " ".join(only):
         print("== cookie build tool")
         sys.path.insert(0, HERE)

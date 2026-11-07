@@ -1,0 +1,28 @@
+// Preprocesses a file and prints the result and the diagnostics in the format of tools/ppdump.py.
+import std.fs;
+import std.env;
+import diag;
+import preproc;
+
+fn main() -> void! {
+    let path = env.arg(1);
+    let text = fs.read_to_string(path) catch { println("cannot read {path}"); return; };
+    let mut pp = preproc.new_pp();
+    preproc.init_pp(&pp);
+    for i in 2..env.arg_count() {
+        let a: str = env.arg(i);
+        if a.starts_with("-D") {
+            let body = a[2..a.len];
+            let eq = body.find("=");
+            if eq >= 0 { pp.set_object(body[0..eq], body[eq + 1..body.len]); } else { pp.set_object(body, "1"); }
+        } else if a.starts_with("-U") {
+            pp.undefine(a[2..a.len]);
+        }
+    }
+    let out = preproc.process(&pp, text, path);
+    for d in pp.d.items { println("{d.level} {d.line}:{d.col}+{d.len} {d.msg} || {d.label} || {d.help}"); }
+    println("---");
+    println("{out}");
+    println("--- changed");
+    for c in pp.changed { println("{c.line}\t{c.text}"); }
+}
