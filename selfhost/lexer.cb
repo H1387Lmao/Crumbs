@@ -332,8 +332,11 @@ pub fn lex_into(text: str, r: *LexResult) {
         else if two.len == 2 && is_op2(two) { r.toks.push(tok(TK.Op, two, line, chars(text, ls, i) + 1, 2)); i += 2; }
         else if is_op1(c) { r.toks.push(tok(TK.Op, text[i..i + 1], line, chars(text, ls, i) + 1, 1)); i += 1; }
         else {
-            err(r, line, chars(text, ls, i) + 1, format("unexpected character `{c:c}`"));
-            i += 1;
+            let mut e = i + 1;
+            while e < n && (text[e] & 192) == 128 { e += 1; }        // one whole character
+            let ch = text[i..e];
+            err(r, line, chars(text, ls, i) + 1, format("unexpected character `{ch}`"));
+            i = e;
         }
     }
     r.toks.push(tok(TK.Eof, "", line, chars(text, ls, i) + 1, 1));

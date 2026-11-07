@@ -29,7 +29,7 @@ struct PPError { msg: String, col: i64, len: i64, label: String, help: String }
 
 struct Group { active: bool, taken: bool, seen_else: bool, parent: bool, line: i64, col: i64 }
 
-struct Changed { line: i64, text: String }
+pub struct Changed { line: i64, text: String }
 
 struct Define { name: String, value: String, undef: bool }
 

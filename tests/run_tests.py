@@ -150,7 +150,7 @@ def test_selfhost(stage, tool_cb, py_tool, patterns, skip_async=False, extra=())
             return report(f"selfhost/{stage}", False, r.stdout + r.stderr)
         files = sorted(f for pat in patterns for f in glob.glob(os.path.join(HERE, "..", pat)))
         if skip_async:   # the self-hosted parser does not desugar `async fn`
-            files = [f for f in files if "async fn" not in open(f, encoding="utf-8").read()]
+            files = [f for f in files if not any(w in open(f, encoding="utf-8", errors="replace").read() for w in ("async fn", "import std.async"))]
         bad = []
         for f in files:
             a = subprocess.run([sys.executable, os.path.join(HERE, "..", "tools", py_tool), f, *extra], capture_output=True, text=True)
@@ -191,6 +191,8 @@ def main():
         pats = ["tests/ok/*.cb", "tests/err/*.cb", "tests/panic/*.cb", "tests/strict/*.cb", "src/std/*.cb", "selfhost/*.cb", "examples/*.cb", "examples/*/*.cb"]
         test_selfhost("lexer", "tokdump.cb", "tokdump.py", pats)
         test_selfhost("parser", "astdump.cb", "astdump.py", pats, skip_async=True)
+        test_selfhost("loader", "loaddump.cb", "loaddump.py", pats + ["tests/selfhost_ld/*.cb"], skip_async=True,
+                      extra=("--std=" + os.path.join(HERE, "..", "src", "std"),))
         test_selfhost("preprocessor", "ppdump.cb", "ppdump.py", pats + ["tests/selfhost_pp/*.cb"], extra=("-DMODE=2", "-DFEATURE"))
     if not only or "cookie" in " ".join(only):
         print("== cookie build tool")

@@ -1,30 +1,34 @@
 // Diagnostics for the stages after lexing (mirrors the part of src/crumbsc/diag.py the stages need).
-pub struct Diagnostic { level: String, line: i64, col: i64, len: i64, msg: String, label: String, help: String }
+pub struct Diagnostic { level: String, file: String, line: i64, col: i64, len: i64, msg: String, label: String, help: String, note: String }
 
-pub struct Diags { items: List<Diagnostic> }
+pub struct Diags { items: List<Diagnostic>, file: String }
 
-pub fn new_diags() -> Diags { return Diags { items: List.new() }; }
+pub fn new_diags() -> Diags { return Diags { items: List.new(), file: String.empty() }; }
 
 impl Diags {
     fn dup(self, level: str, line: i64, col: i64, msg: str) -> bool {
         for d in self.items {
-            if d.level == level && d.msg == msg && d.line == line && d.col == col { return true; }
+            if d.level == level && d.msg == msg && d.line == line && d.col == col && d.file == self.file { return true; }
         }
         return false;
     }
-    fn add(mut self, level: str, line: i64, col: i64, len: i64, msg: str, label: str, help: str) {
+    fn add(mut self, level: str, line: i64, col: i64, len: i64, msg: str, label: str, help: str, note: str) {
         if self.dup(level, line, col, msg) { return; }
-        self.items.push(Diagnostic { level: String.from(level), line: line, col: col, len: len > 1 ? len : 1,
-                                     msg: String.from(msg), label: String.from(label), help: String.from(help) });
+        self.items.push(Diagnostic { level: String.from(level), file: String.from(self.file), line: line, col: col,
+                                     len: len > 1 ? len : 1, msg: String.from(msg), label: String.from(label),
+                                     help: String.from(help), note: String.from(note) });
     }
     pub fn add_error(mut self, line: i64, col: i64, len: i64, msg: str, label: str, help: str) {
-        self.add("error", line, col, len, msg, label, help);
+        self.add("error", line, col, len, msg, label, help, "");
     }
     pub fn add_warn(mut self, line: i64, col: i64, len: i64, msg: str, label: str, help: str) {
-        self.add("warning", line, col, len, msg, label, help);
+        self.add("warning", line, col, len, msg, label, help, "");
+    }
+    pub fn add_error_note(mut self, line: i64, col: i64, len: i64, msg: str, label: str, help: str, note: str) {
+        self.add("error", line, col, len, msg, label, help, note);
     }
     pub fn has_error_on(self, line: i64) -> bool {
-        for d in self.items { if d.level == "error" && d.line == line { return true; } }
+        for d in self.items { if d.level == "error" && d.line == line && d.file == self.file { return true; } }
         return false;
     }
 }

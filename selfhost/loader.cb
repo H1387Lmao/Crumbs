@@ -1,0 +1,310 @@
+// Module loading, written in Crumbs: resolves `import a.b;` to files, detects cycles, orders modules.
+// A port of src/crumbsc/loader.py.
+import std.fs;
+import ast;
+import diag;
+import lexer;
+import parser;
+import paths;
+import preproc;
+
+error CompileErr;
+
+pub struct DirectiveRec { kind: String, value: String, line: i64, col: i64 }
+pub struct ImportRef { alias: String, mod_idx: i64, line: i64, col: i64 }
+pub struct Define { name: String, value: String, undef: bool }
+
+pub struct Module {
+    name: String,                  // dotted logical name, e.g. std.math
+    path: String,
+    shown: String,
+    text: String,                  // after preprocessing
+    ast: ast.Node,
+    cprefix: String,
+    imports: List<ImportRef>,
+    directives: List<DirectiveRec>,
+    changed: List<preproc.Changed>,
+    is_entry: bool,
+    is_std: bool,
+}
+
+pub struct Loader {
+    d: diag.Diags,
+    defines: List<Define>,
+    predefined: List<Define>,
+    nostd: bool,
+    include_dirs: List<String>,
+    mods: List<Module>,            // in creation order; `order` lists them in dependency order
+    order: List<i64>,
+    used_prefixes: List<String>,
+    root: String,
+    std_dir: String,
+    fatal: String,
+}
+
+pub fn new_loader(std_dir: str, nostd: bool) -> Loader {
+    return Loader { d: diag.new_diags(), defines: List.new(), predefined: List.new(), nostd: nostd,
+                    include_dirs: List.new(), mods: List.new(), order: List.new(), used_prefixes: List.new(),
+                    root: String.empty(), std_dir: paths.abspath(std_dir), fatal: String.empty() };
+}
+
+fn contains(l: *List<String>, s: str) -> bool {
+    for i in 0..l.len { if *l.at(i) == s { return true; } }
+    return false;
+}
+
+fn lower(s: str) -> String {
+    let mut o = String.empty();
+    for i in 0..s.len { o.push(s[i] >= 'A' && s[i] <= 'Z' ? s[i] + 32 : s[i]); }
+    return o;
+}
+
+fn ends_with_any_ext(s: str) -> bool {
+    let l = lower(s);
+    let exts = [".o", ".obj", ".a", ".so", ".dylib", ".dll", ".lib", ".c"];
+    for i in 0..8 { if l.ends_with(exts[i]) { return true; } }
+    return false;
+}
+
+fn find_byte(s: str, b: u8) -> bool {
+    for i in 0..s.len { if s[i] == b { return true; } }
+    return false;
+}
+
+impl Loader {
+    fn prefix_for(mut self, logical: str) -> String {
+        let base = logical.replace(".", "__");
+        let mut p = String.from(base);
+        let mut k = 1 as i64;
+        while contains(&self.used_prefixes, p) {
+            k += 1;
+            p = format("{base}{k}");
+        }
+        self.used_prefixes.push(String.from(p));
+        return p;
+    }
+
+    fn file_of(mut self, mi: i64) { self.d.file = String.from(self.mods.at(mi).shown); }
+
+    fn fail(mut self, msg: str) -> void! {
+        self.fatal = String.from(msg);
+        throw CompileErr;
+    }
+}
+
+pub fn load_entry(ld: *Loader, path_in: str) -> void! {
+    let path = paths.abspath(path_in);
+    ld.root = paths.dirname(path);
+    if !ld.nostd {                  // the prelude: `List` and the `String` / `str` methods need no import
+        let names = ["list", "iter", "str", "fmt"];
+        for i in 0..4 {
+            let p = paths.join(ld.std_dir, format("{names[i]}.cb"));
+            let mut none: List<i64> = List.new();
+            try load(ld, p, format("std.{names[i]}"), &none);
+        }
+    }
+    let stem = paths.stem(path);
+    let mut none2: List<i64> = List.new();
+    let mi = try load(ld, path, stem, &none2);
+    ld.mods.at(mi).is_entry = true;
+}
+
+fn read_module(ld: *Loader, path: str, shown: *String, text: *String, changed: *List<preproc.Changed>) -> void! {
+    let raw = fs.read_to_string(path) catch {
+        let why = fs.is_dir(path) ? "Is a directory" : (fs.exists(path) ? "Permission denied" : "No such file or directory");
+        try ld.fail(format("cannot read `{path}`: {why}"));
+        return;
+    };
+    if !paths.valid_utf8(raw) { try ld.fail(format("`{path}` is not valid UTF-8")); }
+    // universal newlines, as Python's text mode does
+    let mut t = String.empty();
+    let mut i = 0 as i64;
+    while i < raw.len {
+        if raw[i] == '\r' {
+            t.push('\n');
+            if i + 1 < raw.len && raw[i + 1] == '\n' { i += 1; }
+        } else {
+            t.push(raw[i]);
+        }
+        i += 1;
+    }
+    *shown = paths.relpath(path);
+    if preproc.needs_preprocessing(t) || ld.defines.len > 0 {
+        let mut pp = preproc.new_pp();
+        preproc.init_pp(&pp);
+        for k in 0..ld.predefined.len { pp.set_object(ld.predefined.at(k).name, ld.predefined.at(k).value); }
+        for k in 0..ld.defines.len {
+            let df = ld.defines.at(k);
+            if df.undef { pp.undefine(df.name); } else { pp.set_object(df.name, df.value); }
+        }
+        let new = preproc.process(&pp, t, *shown);
+        for k in 0..pp.d.items.len {
+            let it = pp.d.items.at(k);
+            ld.d.file = String.from(*shown);
+            if it.level == "error" { ld.d.add_error(it.line, it.col, it.len, it.msg, it.label, it.help); }
+            else { ld.d.add_warn(it.line, it.col, it.len, it.msg, it.label, it.help); }
+        }
+        for k in 0..pp.changed.len { changed.push(preproc.Changed { line: pp.changed.at(k).line, text: String.from(pp.changed.at(k).text) }); }
+        *text = new;
+    } else {
+        *text = t;
+    }
+}
+
+fn load(ld: *Loader, path: str, logical: str, stack: *List<i64>) -> i64! {
+    for i in 0..ld.mods.len { if ld.mods.at(i).path == path { return i; } }
+    let mut shown = String.empty();
+    let mut text = String.empty();
+    let mut changed: List<preproc.Changed> = List.new();
+    try read_module(ld, path, &shown, &text, &changed);
+    let mut perrs: List<lexer.Diag> = List.new();
+    let tree = parser.parse(text, &perrs);
+    ld.d.file = String.from(shown);
+    for i in 0..perrs.len { ld.d.add_error(perrs.at(i).line, perrs.at(i).col, 1, perrs.at(i).msg, "", ""); }
+    let prefix = ld.prefix_for(logical);
+    let mi = ld.mods.len;
+    ld.mods.push(Module { name: String.from(logical), path: String.from(path), shown: shown, text: text, ast: tree,
+                          cprefix: prefix, imports: List.new(), directives: List.new(), changed: changed,
+                          is_entry: false, is_std: paths.is_under(path, ld.std_dir) });
+    directives(ld, mi);
+    let mut stk: List<i64> = List.new();
+    for i in 0..stack.len { stk.push(*stack.at(i)); }
+    stk.push(mi);
+    let nitems = ld.mods.at(mi).ast.get("items").items.len;
+    for k in 0..nitems {
+        let mut info = import_info(ld, mi, k);
+        if !info.is_import { continue; }
+        let aline = info.line;
+        let acol = info.col;
+        let alen = info.len;
+        let nline = info.nline;
+        let ncol = info.ncol;
+        let nlen = info.nlen;
+        let mut alias = String.from(*info.path.at(info.path.len - 1));
+        if info.alias.len > 0 { alias = String.from(info.alias); }
+        let mut dotted = String.empty();
+        for i in 0..info.path.len { if i > 0 { dotted.push('.'); } dotted.append(*info.path.at(i)); }
+        let target = resolve(ld, mi, &info.path, aline, acol, alen);
+        if target.len == 0 { continue; }
+        let mut cyc = false;
+        for i in 0..stk.len { if ld.mods.at(*stk.at(i)).path == target { cyc = true; } }
+        if cyc {
+            let mut chain = String.empty();
+            for i in 0..stk.len { chain.append(ld.mods.at(*stk.at(i)).name); chain.append(" -> "); }
+            chain.append(dotted);
+            ld.file_of(mi);
+            ld.d.add_error_note(aline, acol, alen, format("circular import of module `{dotted}`"),
+                                "imports a module that imports this one", "", format("import chain: {chain}"));
+            continue;
+        }
+        let dep = try load(ld, target, dotted, &stk);
+        let mut dup = false;
+        for i in 0..ld.mods.at(mi).imports.len { if ld.mods.at(mi).imports.at(i).alias == alias { dup = true; } }
+        if dup {
+            ld.file_of(mi);
+            ld.d.add_error(nline, ncol, nlen, format("module name `{alias}` is imported more than once"), "",
+                           "use `import ... as other_name;` to disambiguate");
+            continue;
+        }
+        ld.mods.at(mi).imports.push(ImportRef { alias: alias, mod_idx: dep, line: aline, col: acol });
+    }
+    ld.order.push(mi);
+    return mi;
+}
+
+// an Import item: its path, alias (or ""), and the spans of the item and of the name
+struct ImportInfo { is_import: bool, path: List<String>, alias: String, line: i64, col: i64, len: i64, nline: i64, ncol: i64, nlen: i64 }
+
+fn import_info(ld: *Loader, mi: i64, k: i64) -> ImportInfo {
+    let it = ld.mods.at(mi).ast.get("items").items.at(k).node.at(0);
+    let mut path: List<String> = List.new();
+    if it.kind != "Import" { return ImportInfo { is_import: false, path: path, alias: String.empty(), line: 0, col: 0, len: 0, nline: 0, ncol: 0, nlen: 0 }; }
+    let pv = it.get("path");
+    for i in 0..pv.items.len { path.push(String.from(pv.items.at(i).s)); }
+    let mut alias = String.empty();
+    if !it.is_none("alias") { alias = String.from(it.str_of("alias")); }
+    let ns = it.get("name_span").span;
+    return ImportInfo { is_import: true, path: path, alias: alias, line: it.span.line, col: it.span.col, len: it.span.len,
+                        nline: ns.line, ncol: ns.col, nlen: ns.len };
+}
+
+fn directives(ld: *Loader, mi: i64) {
+    let here = paths.dirname(ld.mods.at(mi).path);
+    let n = ld.mods.at(mi).ast.get("items").items.len;
+    for k in 0..n {
+        let it = ld.mods.at(mi).ast.get("items").items.at(k).node.at(0);
+        if it.kind != "Directive" { continue; }
+        let what = String.from(it.str_of("what"));
+        let val = String.from(it.str_of("value"));
+        let vs = it.get("vspan").span;
+        let sp = it.span;
+        ld.file_of(mi);
+        if val.strip().len == 0 || find_byte(val, '\n') || find_byte(val, 0) {
+            ld.d.add_error(vs.line, vs.col, vs.len, format("invalid `{what}` string"), "", "");
+            continue;
+        }
+        if what == "link" {
+            if find_byte(val, '/') || ends_with_any_ext(val) {
+                let full = paths.is_abs(val) ? String.from(val) : paths.join(here, val);
+                if !paths.is_file(full) {
+                    let rel = paths.relpath(full);
+                    ld.d.add_error_note(vs.line, vs.col, vs.len, format("linked file `{val}` not found"), "",
+                        "paths are relative to the file that contains the `link` directive; write a bare name like `link \"SDL2\";` to link a library with -l",
+                        format("looked for: {rel}"));
+                    continue;
+                }
+                ld.mods.at(mi).directives.push(DirectiveRec { kind: String.from("file"), value: paths.abspath(full), line: sp.line, col: sp.col });
+            } else {
+                ld.mods.at(mi).directives.push(DirectiveRec { kind: String.from("lib"), value: String.from(val), line: sp.line, col: sp.col });
+            }
+        } else if what == "pkg" {
+            ld.mods.at(mi).directives.push(DirectiveRec { kind: String.from("pkg"), value: String.from(val), line: sp.line, col: sp.col });
+        } else if what == "include" {
+            ld.mods.at(mi).directives.push(DirectiveRec { kind: String.from("include"), value: String.from(val), line: sp.line, col: sp.col });
+            ld.mods.at(mi).directives.push(DirectiveRec { kind: String.from("incdir"), value: String.from(here), line: sp.line, col: sp.col });
+        } else if what == "define" {
+            ld.mods.at(mi).directives.push(DirectiveRec { kind: String.from("define"), value: String.from(val), line: sp.line, col: sp.col });
+        }
+    }
+}
+
+// the file a module path names ("" when there is none)
+fn resolve(ld: *Loader, mi: i64, ipath: *List<String>, line: i64, col: i64, len: i64) -> String {
+    let mut dotted = String.empty();
+    for i in 0..ipath.len { if i > 0 { dotted.push('.'); } dotted.append(*ipath.at(i)); }
+    let mut rel = String.empty();
+    for i in 0..ipath.len { if i > 0 { rel.push('/'); } rel.append(*ipath.at(i)); }
+    rel.append(".cb");
+    let mut roots: List<String> = List.new();
+    ld.file_of(mi);
+    if *ipath.at(0) == "std" {
+        if ld.nostd && dotted != "std.mem" {
+            ld.d.add_error(line, col, len, format("`{dotted}` needs the standard runtime, which `--no-stdruntime` removes"),
+                           "not available in this build",
+                           "only `std.mem` works without it; drop --no-stdruntime or bind the C functions you need with `extern fn`");
+            return String.empty();
+        }
+        roots.push(String.from(ld.std_dir));
+        if ipath.len > 1 {
+            let mut r2 = String.empty();
+            for i in 1..ipath.len { if i > 1 { r2.push('/'); } r2.append(*ipath.at(i)); }
+            r2.append(".cb");
+            rel = r2;
+        }
+    } else {
+        roots.push(String.from(ld.root));
+        roots.push(paths.dirname(ld.mods.at(mi).path));
+        for i in 0..ld.include_dirs.len { roots.push(String.from(*ld.include_dirs.at(i))); }
+    }
+    let mut tried: List<String> = List.new();
+    for i in 0..roots.len {
+        let cand = paths.join(*roots.at(i), rel);
+        let shown = paths.relpath(cand);
+        if !contains(&tried, shown) { tried.push(shown); }
+        if paths.is_file(cand) { return paths.abspath(cand); }
+    }
+    let mut note = String.from("looked for: ");
+    for i in 0..tried.len { if i > 0 { note.append(", "); } note.append(*tried.at(i)); }
+    ld.d.add_error_note(line, col, len, format("cannot find module `{dotted}`"), "no such module", "", note);
+    return String.empty();
+}
