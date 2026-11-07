@@ -191,6 +191,7 @@ def main():
         pats = ["tests/ok/*.cb", "tests/err/*.cb", "tests/panic/*.cb", "tests/strict/*.cb", "src/std/*.cb", "selfhost/*.cb", "examples/*.cb", "examples/*/*.cb"]
         test_selfhost("lexer", "tokdump.cb", "tokdump.py", pats)
         test_selfhost("parser", "astdump.cb", "astdump.py", pats, skip_async=True)
+        test_selfhost("fmtspec", "fmtdump.cb", "fmtdump.py", ["tests/selfhost_fmt/*.txt"])
         test_selfhost("loader", "loaddump.cb", "loaddump.py", pats + ["tests/selfhost_ld/*.cb"], skip_async=True,
                       extra=("--std=" + os.path.join(HERE, "..", "src", "std"),))
         test_selfhost("preprocessor", "ppdump.cb", "ppdump.py", pats + ["tests/selfhost_pp/*.cb"], extra=("-DMODE=2", "-DFEATURE"))

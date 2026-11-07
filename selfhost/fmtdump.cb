@@ -1,0 +1,71 @@
+// For every line of a file: splits it as a format template and prints the pieces, each spec and its checks
+// (the format of tools/fmtdump.py).
+import std.fs;
+import std.env;
+import fmtspec;
+
+fn hex(s: str) -> String {
+    let digits = "0123456789abcdef";
+    let mut out = String.empty();
+    for i in 0..s.len { out.push(digits[(s[i] >> 4) as i64]); out.push(digits[(s[i] & 15) as i64]); }
+    return out;
+}
+
+fn show_checked(label: str, c: fmtspec.Checked) {
+    if c.ok { println("    check {label} ok"); }
+    else if c.has_help { println("    check {label} {c.msg} || {c.help}"); }
+    else { println("    check {label} {c.msg} || None"); }
+}
+
+fn main() -> void! {
+    let text = fs.read_to_string(env.arg(1)) catch { println("cannot read"); return; };
+    let mut a = 0 as i64;
+    let mut ln = 0 as i64;
+    for i in 0..text.len + 1 {
+        if i == text.len || text[i] == '\n' {
+            let line: str = text[a..i];
+            a = i + 1;
+            if i == text.len && line.len == 0 { break; }
+            ln += 1;
+            println("T {ln}");
+            let mut pieces: List<fmtspec.Piece> = List.new();
+            let mut err = fmtspec.SpecError { msg: String.empty(), help: String.empty(), has_help: false };
+            let mut ok = true;
+            try {
+                try fmtspec.parse_template(line, &pieces, &err);
+            } catch {
+                ok = false;
+            }
+            if !ok {
+                let h1 = err.has_help ? String.from(err.help) : String.from("None");
+                println("  error {err.msg} || {h1}");
+                continue;
+            }
+            for p in pieces {
+                if !p.is_arg { println("  lit {hex(p.lit)}"); continue; }
+                let mut r = String.from("none");
+                if p.ref_kind == 1 { r = format("int {p.ref_int}"); }
+                else if p.ref_kind == 2 { r = format("name {p.ref_text}"); }
+                else if p.ref_kind == 3 { r = format("expr {p.ref_text}"); }
+                println("  arg {r} spec={hex(p.spec)}");
+                let mut e2 = fmtspec.SpecError { msg: String.empty(), help: String.empty(), has_help: false };
+                let mut sp = fmtspec.new_spec();
+                let mut ok2 = true;
+                try {
+                    sp = try fmtspec.parse_spec(p.spec, &e2);
+                } catch {
+                    ok2 = false;
+                }
+                if !ok2 {
+                    let h2 = e2.has_help ? String.from(e2.help) : String.from("None");
+                    println("    specerror {e2.msg} || {h2}");
+                    continue;
+                }
+                let plain = fmtspec.is_plain(&sp) ? 1 : 0;
+                println("    spec fill={hex(sp.fill)} align={sp.align} sign={hex(sp.sign)} alt={sp.alt} zero={sp.zero} width={sp.width} group={sp.group} prec={sp.prec} type={sp.ty} plain={plain}");
+                let kinds = ["int", "float", "bool", "text", "enum", "ptr", "other"];
+                for k in 0..7 { show_checked(kinds[k], fmtspec.check_for(&sp, kinds[k])); }
+            }
+        }
+    }
+}

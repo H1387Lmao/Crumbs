@@ -1,0 +1,1772 @@
+    check {label} ok
+    check {label} {c.msg} || None
+    check {label} {c.msg} || {c.help}
+    spec fill={hex(sp.fill)} align={sp.align} sign={hex(sp.sign)} alt={sp.alt} zero={sp.zero} width={sp.width} group={sp.group} prec={sp.prec} type={sp.ty} plain={plain}
+    specerror {e2.msg} || {h2}
+  arg {r} spec={hex(p.spec)}
+  directive {dr.kind} {dr.value} @{dr.line}:{dr.col}
+  error {err.msg} || {h1}
+  import {im.alias} -> {ld.mods.at(im.mod_idx).name} @{im.line}:{im.col}
+  lit {hex(p.lit)}
+ {ctx}
+"{o}"
+"{p}"
+#error {u.trim()}
+#warning {u.trim()}
+' { o.append(
+' { p.append(
+({}, {})
++-*/%&|^~!<>=.,;:(){}[]?
+404 failed: {e}
+:{}
+<{v}>
+@{sp.line}:{sp.col}+{sp.len}
+Content-Length: {}\r\n
+HTTP/1.1 201 Created\r\nX-Seen: {}\r\nContent-Length: {}\r\n\r\n{}
+T {ln}
+[{a * b:>5}] [{p.x - p.y:<4}] [{sq(a) + sq(b):03}]
+[{n:>6}] [{n:<6}] [{n:^6}] [{n:*^7}] [{n:+}] [{m:06}] [{n:+06}] [{n: }]
+[{name:>8}] [{name:<8}] [{name:^9}] [{name:.3}] [{name:?}] [{}] [{:>7}]
+[{p:>30?}]
+`#{name}` needs a macro name
+`export` applies to functions: `export fn name(...) { ... }`
+`{bname}` expects a type and a count: `{bname}(T, n)`
+`{dotted}` needs the standard runtime, which `--no-stdruntime` removes
+`{name}` cannot be redefined
+`{name}` is redefined
+`{path}` is not valid UTF-8
+`{t.text}`
+`{t.text}` is not an integer
+`{v}` items are only allowed at the top level of a module
+a `try { ... }` block needs a `catch` handler
+a destructor is declared as `drop TypeName(self) { ... }`
+a } b
+after `{start.text}` directive
+after `{v}`
+after the type in `{bname}(T)`
+alive={} owner empty={}
+alive={} value={}
+any long: {}, all short: {}
+at {p:>10}
+cannot find module `{dotted}`
+cannot read `{path}`: {why}
+cannot read {env.arg(1)}
+cannot read {path}
+caught {e}
+cb_drop_{tyname}
+chunked failed: {e}
+circular import of module `{dotted}`
+close it with `}`, or write `{{` for a literal brace
+count {}
+count {} {}
+defined as `{mname}({ps})`
+did you mean `#{hint}`?
+done {}
+drop {}
+duplicate macro parameter `{t.text}`
+error {e.line}:{e.col} {e.msg}
+expected `>`, found {describe(tok(p))}
+expected `{` after `catch |name|`
+expected `{v}`{where}
+expected `{v}`{where}, found {describe(tok(p))}
+expected a string after `{start.text}`
+expected a type, found {describe(&t)}
+expected an expression, found {describe(&t)}
+expected an item (`fn`, `struct`, `enum`, `trait`, `const`, `error`, `import`, `impl`), found {describe(&t)}
+expected an item, found {describe(&t)}
+expected keyword `{v}`, found {describe(tok(p))}
+expected {what}, found keyword `{t.text}`
+expected {what}, found {describe(t)}
+expr {p.ref_text}
+extra tokens after `#{name} {first_id_text(&a)}`
+fatal: {ld.fatal}
+fields {p.x} and {p.y}
+first defined on line {old.line}; use `#undef {name}` first to silence this
+first {}
+get failed: {e}
+grew while held: {}
+hello {name}! {} {{braces}}
+http://127.0.0.1:{}
+https: {e}
+ids {} {} {}
+import chain: {chain}
+int {p.ref_int}
+invalid `{what}` string
+invalid digit in numeric literal `{body}{text[i]:c}`
+invalid fill character `{ch}`
+invalid suffix `{suffix}` for float literal
+invalid suffix `{suffix}` for integer literal
+kept {}
+keyword `{t.text}`
+key{}
+k{}
+leaf owners {}, root weak handles {}
+leaf's parent: {}
+len {}
+linked file `{val}` not found
+looked for: {rel}
+macro `{mname}` needs at least {fixed} argument{plural(fixed)}, found {sargs.len}
+macro `{mname}` takes {want} argument{plural(want)}, found {sargs.len}
+macro expansion of `{name}` is too deep
+map has {}
+methods can only be declared for a named type: `impl Point { ... }`
+missing digits after `{body[0..2]}`
+module name `{alias}` is imported more than once
+module {m.name} path={m.path} shown={m.shown} prefix={m.cprefix} entry={e} std={s}
+n={}
+name {p.ref_text}
+nested {n:x}
+nokey{}
+not reached {v}
+only functions can be declared inside `impl`, found {describe(tok(p))}
+only functions can be declared inside `trait`, found {describe(tok(p))}
+owners left: {}
+p = {p}, padded [{p:>10}] [{p:*<10}]
+parameter `{nm.text}` has no default, but the one before it does
+position of fig: {}
+post failed: {e}
+removed {}
+request failed: {e}
+returned after free: {}
+root alive: {}
+root owners {}
+single `}` in the format string
+std.{names[i]}
+sum = {}
+text {} {name} {0} {:>8.2}
+the fill must be a single ASCII character other than `{` and `}`
+the format type `{ty}` cannot format {what}
+the group at line {stack.at(gi).line} already has an `#else`
+the largest precision is {MAX_PREC}
+the largest width is {MAX_WIDTH}
+the precision {spec.prec} is too large for a float
+the precision {w} is too large
+the width {w} is too large
+to show an integer as a float write e.g. `{n:.2f}`
+total {}
+type parameter `{t.text}` is declared more than once
+unclosed `{`
+unclosed `{` in the format string
+unexpected `{rest}` in the format spec `{t}`
+unexpected `{s}` in `#if` expression
+unexpected `{t.text}` in `#if` expression
+unexpected character `{ch}`
+unknown `#pragma {u.trim()}` ignored
+unknown escape sequence `\\{e:c}`
+unknown preprocessor directive `#{name}`
+unterminated argument list for macro `{mname}`
+using {}
+valid types here: {good}
+variables must be initialized: expected `=`, found {describe(tok(p))}
+weak alive: {}
+write `}}` for a literal brace
+write e.g. `{n:#x}` for `0xff`
+{
+{ _x }
+{ a }
+{"id":1}
+{0:#x}
+{0} {1} {0} {who} {}
+{1 }
+{1a}
+{:+}
+{:,.2} {:+.1} {n:.1f} {}
+{:,} {:,} {:#_x} {:_}
+{:.9}
+{:>7}|{:.2}|
+{:>8.3f}
+{:?}
+{:?} {:?}
+{:?} {:?} {:?} {:?}
+{:?} {}
+{:d} {} {:>6}
+{a + b}
+{a + b} {sq(b)} {xs[1]}
+{a + b}-{sq(a):x}
+{a b}
+{a..b}
+{a.b:+08,.2f}
+{a:?} {b:?}
+{b:+}
+{b:5}
+{base}{k}
+{c.line}\t{c.text}
+{c} {d} {}
+{d.level} {d.file}:{d.line}:{d.col} {d.msg} || {d.note}
+{d.level} {d.line}:{d.col}+{d.len} {d.msg} || {d.label} || {d.help}
+{e:d}
+{f(x):>5}
+{i:02},
+{lineno}
+{m.get("k"):>4}
+{n
+{n:#}
+{n:,x}
+{n:.2}
+{n:q}
+{n:x} {n:X} {n:#x} {n:#b} {n:o} {n:#o} {n:08b} {:c}
+{name1} {name2} {name3}
+{name:?}
+{names[i]}.cb
+{nope}
+{now}
+{out}
+{owned:?}
+{p:?} {:?} {name:?} {n:?} {pi:?}
+{p:x}
+{pi} {pi:.2} {pi:10.3} {pi:<10.1}| {pi:e} {pi:.3e} {:g} {:08.2}
+{pp.counter}
+{p}
+{s:?}
+{t.line}:{t.col}+{t.len} {k} {hex(t.text)}
+{t.line}:{t.col}+{t.len} {k} {t.ival}
+{t.line}:{t.col}+{t.len} {k} {t.ival} {t.suffix}
+{t.line}:{t.col}+{t.len} {k} {t.suffix}
+{t.line}:{t.col}+{t.len} {k} {t.text}
+{t:?}
+{top:?}
+{v.i}
+{v1} {v2}
+{x:
+{x: >}
+{x:#?}
+{x:#}
+{x:*^12}
+{x:+c}
+{x:,x}
+{x:.101f}
+{x:.5000}
+{x:.}
+{x:0>5d}
+{x:5.3s}
+{x:99999999d}
+{x::y}
+{x:?}
+{x:?} {y:?} {z:?}
+{x:^<5}
+{x:_o}
+{x:cc}
+{x:{>5}
+{x:}>5}
+{xs[0]}
+{x}
+{{}}
+{{}} {a:?} {(a + 1) as f64 / 2.0:.2}
+{}
+{} + {} = {}
+{} -> {}
+{} / empty={}
+{} / {:?}
+{} alive={}
+{} and {:>10}
+{} body={}
+{} ok={} header={:?}
+{} {0}
+{} {}
+{} {} ok={} body={} type={}
+{} {} seen={} body={}
+{} {} {:>5} {name} {}
+{} {} {}
+{}{}{}
+{é:é>5}
+}
+root live:( {x}
+circular importg of module `{dotted}
+remove {}
+the width {w} is too lare
+{ineno}
+.expectedastring after `{start.text}`
+get failed: {e}
+invalid {whc0at}` string
+F`{dotted}` needs the standard runtime, whichc `--no-stdruntime` removes
+ex:1_o}
+{n:x} {n:X} {n:#x} {n:#b} n:o} {n:#o} {n:08b} {:c}
+a.b:+08,.2f,}
+key}
+{>8.3}X
+unexp.ected `{t.text}` in `#if` expression
+{.c9}^
+ids {} {} {
+v^alid types here {good}
+{name1} {name2} {naeme3}
+r'equst failed: {e}
+{:+}#
+{n ow}
+`#{name}` needs a macro name
+{:}>5}G
+{c} {} b{}
+{}{0}
+the width w} is too loarge
+import caain: {hain}
+uncleosed `{`
+{nmes[i]}.c
+{_x: }
+s{a b}(
+_{p:x}
+ftal: {ld.fatal}
+{x-:99999999d}
+write e.g. `{n:#x:}` for `0xff`
+{ut}>
+{basse}{k}
+close t with `}`, or wite `{{` fora literal brace
+unexpected `{t.text}` #in `#if` expr)esion
+{:+g}
+gexpected `{` after `cat?ch |name|` 
+{t.line}:{t.col}+{t.len} {k} {gt.ival}
+{ed}
+ufnknown escape seqence `\\{e:c}`
+-{x
+posiGtion of fig:[ {}
+th largest width is {MAX_WIDTH}
+posiotion of fig: {1}
+} {} ok={ body={} typ={}
+to show an integer as a# float wri}te e.g `{n:.2f}`
++-*/%&|^~!<>=.+,;:(){}[]?
+invalid suffix `{suffix}` f]or integer literal
+{x:_o_}
+`{dotted}` needs the standard runtime, which `--no-stdrntime removes
+variables must be initialized: expected `=`, found {describe(toFk(p))}
+expcted {what}b, found {describe(t)}
+fter `{start.text}` directive
+d{1a}
+chunksed filed:{e}
+felds {p.x} and {p.y}
+cbbGdrop_{tyname}
+  arg {r} spec={hex(Ep'.spec)}
+[{name:>8}] [{name:8}] [{name:^9}] [{name:.3}] [{name:?}] [{}] [{:>7}]
+{}  {:?
+sum  {}
+tol {}
+exected" `>`, found {^describe(tok(p))}
+{x:1#}
+ a }
+{e:}
+module {m.name} path={m.path} oshown={m.shown} prefix={m.cprefi.x} entry={e} stdg={s}
+{1o
+:{a .}
+invalid fill ch1aracter `{ch}`
+{:?}? {:?}
+  a }
+{bas-e}{}
+the precision {w} is oo large
+onlye functions can be declared inside `impl`, found {describe(tok(p))}
+{a:?} {1b:?}
+expr {p.re_text}
+u]nexpected`{rest}` in the format spec `{t}`
+noey>{E}
+{x0>5d}
+looked for: {el}
+the group at line {stack.at(sgi).line} already has an `#else`
+grew while held:] {}
+{:?} {:} {:?} {:?}
+x}
+parame:ter `{nm.text}` has no default, but the one <béefore it does
+keyword `{t.ext}`
+invalid su>ffx `{suf+fix}` for float literal
+  import {im.alias} -> {ld.mods.at(im.mod_idx).n(ame} @{im.line:{im.col}
+expected`>`, oundé {describe(tok(p))}
+variables must b)e initialized: exGpected `=`, found {describe(tok(p))}
+a des?tructor is declared as `drop TypeNam(self) { ... }`
+positio<nof fig: {}
+{baseg}{k}
+    heck {labe} ok
+epected an expression, f[oun {describe(&t)}
+error# {e.line}:{e.cool} {e.msg}
+({}, {})
+#warening {u.trim()}
+{t.line}:{t.col}+{t.len} {k} {t.s?uffix}
+dr+op {{}
+the format type `{ty}` cann format {wht}
+{s:d?}
+{x.101<}
+    check {la<bel} ok
+looked 1for: {rel}
+{:db {} {:>6}
+{< {}
+{{+}} {a:?x} {(a + 1) as f64 / 2.0:.2}
+grew whil_ held: {}
+{x:} {y:?} z:?}^
+c} ok{} header={:?}
+{} ok={} heaer={?}
+x: 
+}{a bs.}
+usi>ng {}
+404 faile: {e}
+{:-?} {?} {:?} {:?}
+gowners left: }
+{c} {d} }
+lookedfor:x rel}
+unexected {s}` in `#if` expression
+`{v}` itemsd are only allowed at thetop level of a moule
+{nae:?(}
+unknown e-scape sequen,ce `\\{e:c}`
+unexpected `f{t.text}` in `#if` expresion
+1 #g}
+n{-ested {n:x}
+ali]ve={} alue={}
+invlid `{what}` trig
+{a.:+08,.2f}
+linked file `{^val}` not found)
+'{x:.E}
+{d.level}{d.line}:{d.col}+{d.len} {d.}msg} || {d.label} || {d.help}
+cout {
+expeced a type, fond {describe(&t)}
+ame:?}
+missng digits afer `{body[0..2]}`
+expected an item (`fn`,) `struct`, `enum`, `trait`, `const`, `error`, `mport`, `impl`), found {describe(&t)}
+{f(x)#:>5}
+a} b
+{a + b}-{sq(a):x}a
+{_ed^}
+<the precision {w} is oo" large
+{t.line}:{t.cl}+{t.len} {k} {t.ival} {tsffix}
+"{p
+{c {d} {}
+{:,} {?:,} {:#_x} {:_}
+`{v}` items are only allow_ed Eat the top level of a module
+type paameter `{t.text}` is declared more than once
+grewwhile h:eld: {}
+Ekyf{}
+' { o.^append(
+the fill must be a single ASCII character otherthan `{` and `}`
+{:+}[
+alive={} ow1ner emptyG={}
+{.i}
+sum = }
+exp{ected `{` after `catch |name|`
+  error {err.msgx} || {h1}
+usig {}
+404E failed:} {}
+}
+e failed {e}
+{linno}
+{base>}{k]}
+l^ooEkedfor: {rel}
+the precision {s}pec.prec} is too large for a flat
+returneXd afte free: {}
+ids {} {} {'}
+{}
+o}
+`{bnae}` expects a type and a cou)nt: `{bname}a(T, n)`
+`{name}`i{Xs redefined
+{.a}
+linked file^ `val}` not found
+{} {}#ok={} boy={} type={}
+{:>8].3f}
+{f}
+unexp-ected `{s}`? in `#if` expresXsion
+chunked f,ailed: g{e}
+http://1+F2+7.0.0.1:{}
+{"n>ope}
+{dname:?}
+{p:x
+unclse0d `{` in the format strinfg
+postion of fig: {}
+ba ?} 
+:}
+{d.level}# {d.line}:{d.co}+{d.len} {d.msg} || {d.label} || c{d.help}
+{top?X+}
+expecétée `{` after `catch |name|`
+root owneer0s {}
+[F{a * b>5}] [{p.x - p.y:<4}] {sq(a) + sq(b):03}]
+x[]}
+{} :{}# {}
+    check{labl} ok
+to show an integer asa float write eg. `{n:.2f}`
+{} {} {
+_{x:.{}
+grew whle held: {}
+n>:d.2}
+{} /dempty={}
+avi}
+  eror {err.msg} || {h1}
+http://127.0.0.:>{}
+"{p"}.
+leaf'sparent: {}
+:ca,nnot _read `{path}`: {why}
+{glneno}
+ebxpected >`, found {describe(tok(p))}
+{x:12}
+{owed:
+{0E:#x}
+{ b}
+    spec fill={hex(sp.fill)} align={sp.align} sign={hex(sp.sign)} alt={sp.alt} zero^={sp.zero} width={sp.widt+h} group={sp.group} prec={sp.prc} type={sp.ty} plain={plain}
+E{x:}>5}
+{x:?} {y:? {z?}
+{nowé}
+  import {im."alias} -> {ld.mods.at(im.mod_idx).name} @{im.line}:{im.col}
+`{fpath}` eis not valid fUTF-8
+v}>
+after `{start.text}` directi1ve
+map habs }
+`{path}` s noot vald UTF-8
+{now}?
+after the tpe n `{bname}(T)`
+{"id":1
+{0:x}
+[{p:c>30^(?}]
+{} bod{}
+done :{}
+unterminated argument list f or macro +`{mname}`
+unterminated argument list for macro {mname}`
+HTTP/1.1 201 Created\r\nX-Seen: {}\r\Content-Length: {}\r\n\r\n{}
+unexpected `{r:est0}` in the format spec `{t}`
+{1a
+404 failed^: {e}
+chunked faed: {e}
+count {Xa}
+{a + b}
+writ?e `}}` for a literal brae
+count {} {}
+} + {F} ={}
+:?}
+Content-1Length: {}\r\n
+{F}{}{}
+:weak alive: {}
+did you mean `#{hint}`c?
+defined as `{mname}(ps})`
+chunked caied: {e}
+`{dotted}` needs the standard runtime, which `--no-stdruntim`{ removes
+noky{}
+^{e{d}
+ost failed: {e{}
+{ b_ {}
+k{
+after the ty.pe in `{bname}(T)`
+to show an integer as a floact write e'.g. `{n:.2f0}`
+root aliv: {}
+{x.}
+  err0or err.msg} || {h1}
+{d.level} {d.file}:{d.line}:{d.col} {d.ms} || {d.note
+{:,.2} {:+.1} {n:[.1f} {}
+'keywbord `{t.text}}`
+{nc.2}
+ {gc>tx }
+{ame1} {name}{name3}
+@{sp.line}:{sp.col}+{p.len}
+single `}` n the fo0rmat string
+{e:d
+`export` applis to functions: (`export fn name(...) { ... }`
+ids{} é{} {}
+only functons can be declard inside `trait`, found {describe(tok(p))}
+id you mean `#{hnt}`?
+expected- an item, found {describe(&t)}
+Content-Length {}\r\n
+invalid digit in numeic literal `{body}{text[i]:c}`
+{t.line}:{.col}+{t.ln} {k} {t.sffix}
+.{{}}ff
+invalid suffix`uffix}` for integer literal
+{v.X1i{}
+write `}` for a literal brace
+write `}}` for a literalbrace
+removed (1{}
+the fo+rmat type `{ty}` cannot format {what}
+{t.line}:{t.co}+{t.len} {k} {t.tet}
+wite e.g. `{n:#x}` f?or `0xff`
+{e:dG}
+afte[r `{v}`
+{x:.}
+expected keyword {v}`, found {descibe(tok(p))}
+a 1} {b
+canot find mo-dule `{dotted}`
+cannot read{pagh}
+eaf's parent: {}
+adefinef as `{mname}({ps})`
+macro `{mname}` needs at least {fixed} argument{plural(fixed), found {sargs.len}
+returned after free[: {}
+unexpected `{r?est}` in the format spec `{t}`
+{x {}
+module {m.name} péath={m.path} shown={m.shown} prefix={m.cprefix} entry={e} std={s}
+first defined on line {old.line}; use `#undef {name}` firstfc to silence this
+{a + b}{Esq(a):x
+404 failed:{e}
+thefill must be a single AS,CII character other than `{` and `}`
+{:>?7}|{:.2}|
+{}{
+migssing digit after `{body[0..2]}`
+{:?}c {:?}
+'a{{}}
+{a +F b} {sq(b) {xs[1]}
+firs é{}
+#eror" {u.Xtrim()}
+#error {u.trim()}
+{a  b} sq(b)} {xs[1]}
+invalid digit in numeric literal `{body}{ext.i]:c}`
+fields {p.x} an {p.y}
+unclGoefd `{`
+{:9999999d}>
+cnEnot read {pth}
+{x:9999999d](}
+close itd with `}`, or write `{{` for a literal> brace
+[{a * b:>5}] [{p.x - p.y:<4}>] [{sq(a) + séq(b):03}]
+`{ttext}` is not an integr
+macro `{mname}` needs at leas {fixed} argument{plural(fxed)}, fund {sargs.len}
+unknown escape sequence `\\{e:cE}`
+{} + {} = }
+g{namae?}
+{x:f^<5
+p}
+"{o}"
+{v1} {^v2}
+{:>} {:,} {:#_x} {:_}
+{} ?{0}
+{:>._3f}
+asfter `{start.tex}` irective
+{i:02,
+Erop {_}
+réoot ownes {}
+]htp://127.0.0.1:{}
+{"id":1
+x  :  specerror {e2.mg} || {h2}
+circular importof mbodule `{dotted}a`
+kpt {}
+{i:}01},
+expr {p.,ref_text}
+{:>7}|{:2}|
+{b:5}
+get failed<: {e}[
+unclse `{` in the format string
+did you mean `d{hint}`?E
+not rXeache {v}
+eaf{'s paresnt: {}
+{:0>d}
+{x:'x}[
+p
+{:,} {,} {:#_x} :_}
+cannot rad `{path}`: {w^hy}
+k#ept {}
+std.{né-ames[i]
+{t.lie}:{t.col}+{t.len} {k} {t.suffix}
+error {e.lie}:{e.col} {e.msg}
+not reaced 0g{v}
+{:8.3f}
+{m.get("k"):4}
+cose it with `}`,or write `{{` fo'r a literal brace
+{étop:}
+   s specerror {e2.msg || {h2}
+{,:5}X
+impor chain: {chainé}
+,ow}
+unexpected `{s}` in `#if`expression
+  arg {r spec={hex(p.spec)}
+expected {what}, found {descrbe(t)}
+{a}.
+{a + b}
+after th?e type in `{bname}(T)`
+{x:.500?0}
+{x}c
+{"}id":1}
+the argest precision is d{MAX_PREC}
+{x:.
+{x}G
+macro expansion of `]{name}` is too deep
+fn={}
+{t.line}:t.col}+{t.len {k} {hex(t.text)]}
+{a:?} b:?}
+expected `{` after 0#s`catch |name|`
+owne'rs eft: {}
+expected `>`, found {desc-rbe(tok(p))
+1404 failed : e}
+{:>7}|:.2}|
++-*/%&|^~é!<>=.,;:(){}[]?
+a dest^ructor is declared as `drop TypeName(self) { ... }`
+  lit {hex(p.élit)}
+tbh width {w is too large
+get failed:} {e}
+loked for: {rel}
+leaf's paent: {}c
+`export`e aplies to functions: `export fn name(...) { ... }`
+position of fi0g: }]
+{} 
+unerminated argumen list fr macro `{mname}`
+ivalid `{what} strig
+the frmat type `{ty}` cannot format {wha<t}
+not reac.hed {v}
+extra tokens after `#,{name} {first_id_text(&a)}`
+{name-1} {name2} {name}
+:}] {} {:>6}
+{x,x>}
+macro exansion of `{name}` as too deep
+expected {what}, found keyword `{t.text}`
+{:>7|{:.2}|
+u<sig {
+{0} ){} {0} {wo} {}
+`{path}"` is not valid UTF-8
+ettps: {e}
+?single `}` in the fomat string
+{name:>8}] [{name:<8}] [{name:^9}] [{name:.3} ,[{name:?}] [{}] [{:>7}]
+write `e}}` for a literal b_race
+k{é}s
+std."{naes[i}
+c{lineno}
+{a + b}-sqa):x}
+{} aive={}_
+:{x:{>5G}
+variables must be? initialized: expected `=`, found {describe(tok(p))}
+invalid asuffx `{suffix}` for integer literal
+onlfunctions can be declared inside `impl`, found {describe(tok(p))}
+}
+#error {u.trim(}
+`{t.text}` is not an ieger
+missing digits after `{body[0.2]}`
+irst {
+{0} {} ok={} body{} type={-}
+{Fx:5.3s}
+p = {p}, paded {p:>10}] [{p:*<10}]?
+invalid fill chara.cer `{ch}`
+`{name}` canot o<be redefined
+{t.line}:{t.col}+{t.en} {k} {hex(t.text)}
+{x:c)c}
+}{1a}
+} b
+Xtext {} {name} 1{0} {:>.2}
+cb_drop_{yname}
+unclo,sed {}`
+the pecision {w} is tooGlarge
+{i::02},
+{:wned:?}
+[{n:>6}] [{n:<6}_] [{n:^6}] [{n:*^7}] [{n:+}] [{m:06}] [{n:+06}] [({n: }]
+uclose `{`
+https {e}
++-*}/%&|^~!<>=.,;:(){}[]?
+{:5}
+ge fai.led: {Xe}
+0).{x}
+{{}} {a:?} {(a + 1) as f64 / 2.?0g.2}
+{:,} : {:#_x} {:_}
+unclosed `{` i the, forma string
+G44 failed: {e}
+nop
+[{a * b:>5} [{p.x - p.y:<4}] [{sq(0a) + sq(b):3}]
+missing digits after`{body[0e..2]}
+le-n{}
+first {defined on line {old.line}; use `#undef {name}` firstF to silence his
+expected an exprfession, found {descibe(&t)}
+[{oa * b>5}] [{p.x - p.y:<4}] [{sq(a) + sq(b):03}]
+{o}#
+expected keywor `{v}`, found {describe(tok(p))}
+noame {p.ref_ tex}
+  import {im.falias} -> {ld.mods.at(m.mod_i}dx).name} @{im.line}:{im.col}
+roo alive: {}
+{,} and {:>10}
+F{?x:*^12}
+{.9}
+hello {naGme}! {} {baces}}
+{t[aop:?}
+lnked file `{val}` not< found
+{:0d}
+e:d}
+#waérning {u.trim()}
+module name `{alias}` is imported more than onc-e
+{} {} {:>5} {namF} {}
+fter the type i `{bn#ame}(T)`
+{}- }
+{0} {1 {0}{who} {}
+} ^{} {:>5} name} {}
+{vG.i}
+is {} {} {
+the precision {w} is too large
+aliave={}owner empy={}
+ConteXn-Length: {}\r\n
+{:_o}
+  arg _{r spec=hex(p.spec)}
+  diective {dr.kind} {dr.value} @{dr..line}:{dr.col}
+caught {e}?
+only functions can be declared inside `trait`, found {describe(took(p))}
+{} + {G} = {}
+cannot find moule `{dottedd`
+)crcular import of modXule `{dotted}`
+after the type in `1{bname}(T)
+{v^.i{}
+{bc}
+{} -( {}
+expected a string aftfer `{start.text}`
+{x:.>
+o{:9}
+tet {} {name} {0} {:>8.2}
+{a  }
+leaf' paren: {}
+only fnctio ns can be declared inside `impl`, found {describe(tok(p))}
+usin {}
+}
+a destructor is declared as x`drop TypeName(sexlf) { ... }`
+} /? {:?}
+poition of fig: {}
+{ee:
+did yo<u mean `#{hiént}`?
+{nc:#}
+`{t.text}` is no[tan nteger
+invalid suffix `{suffix}` for float bliteral
+{t.line}:{t.col}+t.len} {+k} {hex(t.t{ext)}
+expecEted  type, found {describe(:&t)}
+El:en :{}
+{pi} {pi:.2} {pi:10.3} {pi:<10.1| {pi:e} {pi:.3e} {:g} {:08.2}
+the width 1{w} is too large
+{n:,x}
+v1} {2},
+defined s `{mname}({gps})`
+expected keyword `{v}`,found {describe(tok(p))}+
+{.i:02},
+total {_}G
+{pp.couner}
+{a..b}
+{é:é-F>}
+only functions can be declre.d inside `trait`, ound {describe(tok(p))}
+{e:éGd}
+{d.level} {d.file}:{d.)line}:{d.col}{d.msg} || {d.note
+hello {name}! {} {{braXc]es}}0
+{a bf}
+{n:,>x
+macro expasion of `{nam_e})` is too deep
+    chek {label} {c.msg} || {c.hep}
+crcular iemport of odule `{dotted}`
+rite `}}` fo{r a lit-eral brace
+{:d} ,{} {:6}
+{owned:?}_E
+{} {X,^} {:>5} {name} {}
+{xs[]}
+    spec fill={hex(sp.fill)} align={sp.align} sign={hex(sp.sign)} alt={sp.alt} zero={sp.zero} width={sp.width group={sp.group} prec={sp.prec} type={sp.ty} plain={plain}
+un,known escape sequence `\\{e:c}`
+ro(ot alive: {}
+{b:x}
+expected an item (`+fn`, `struct`, `enum`, `trait`, `const`, `error`, `im#port`, `impl), found {describe(&t)}
+{} + {} = {
+{:,.2} {:+.1} {:n:.1f} {}
+cb_drop_{btyname}
+{x:5F.3s}
+only fuénctions can be delared inside `impl`, found {describe(tok(p))}
+:>7}:.2}|
+gt fa[ile: {e}
+{} -> {}
+invfalid `{what}` xsting
+-"{p}"
+htp:x//127.0.0.1:{}
+the largestprecision is{MAX_PREC}
+{d.le-vel} {d.file}:{d.line}:{d.col} {d.msg} || {d.note}
+closed `{`
+  lit {ex(sp.lit)1}
+{t.line}{t.col}+{t.len} {k} {hex(t.text)}
+s{t:?
+'? { o.append(
+unexpcted }`{t.text}` in `#if` expresion
+{pp.,counter}
+did yxou mean `#{hint}`?
+`{t.tex`
+circula import of module `{dotted}`
+he formt type `{y}` cannot format {what}
+expe:cted astring after `{sta:rt.text}`
+methods can only be declared for a named teype: `i>mpl Point { ... }`
+ke:yword`{t.tet}`
+xinvalid suffix `{s]uffix}` for integer litgeral
+{b:}
+after `{star.text}` drectve
+vaclEid types here: {ood}
+type parameter `{t.text}` i declared more than o#nce
+} ok={G} header={:?}
+{>8.3f
+moule name `{alias}` is iported more than once
+tpe parameter `{t.text}` is dec lareFd more than once
+hello {na.me}! {} {{b races}
+chunked f'ailed: {e}
+404 ailed: {e}{
+missing digits after `{body[..2]}
+{t.line}:{0t.col}+{t.len} {k} {t:.text}
+macro `{{mname}` needs at least {fixed} argument{plural(fixed)}, found {sargs.len}
+weak alive:: {}
+circula'r import of module [`{dotted}`
+{xcc}}
+expecbated a string after `{start.text}`é
+name {p.ref_text}-
+{0:#,x}
+{} ok={} header=-{:?}
+{a>t.text}`
+the largest precisio0n is {MAX_PREC}
+write e.g. `{n:#` (for `0xff`
+  arg {r} spec={hex(p.pec)}
+{x.1e01f}
+eturnEed after free: {}
+{ /"{:?}
+"a +d b}
+usx]ing {b}
+{#}
+canot éread {path}
+{xf:0>5d}
+{}{}
+{:._2#}
+fatl: {ld[.fata}
+expected an item (`fn`, `struct`, `enum`, `trait`, `const`, `error`, `importX`, `impl`), foun {describe(&t)}
+1a
+{x:?}{y:? {bz:?}
+id":1}
+grew while hed:{}
+^{0:F#x}
+{nam,e:?}
+ownbersleft: {}
+:.
+x}0
+#wniéng {u.trim()}
+leaf wners {}, root weak Fhandes {}
+map has {0
+after [`{start.text}` direcive
+poition of ig: {
+alive={} downer empty={}
+0{vdi}
+>_{}
+reurned after free: {}
+{p:?} >{:?} {name:?} {n:? {p:?}
+invalid suffix `{suffix}` for integr literal
+to show an integer as a floaXt w{rite e.g. `{n:.2f}`
+out}^
+x:_o}
+owners lefbt: {}
+expeced a string afte `{start.text}`
+position of fi}g: {o}
+inva<ld suffix `{sufix}` for float literal
+fields {p.} and{p.y
+{namesi]}.c
+{b:+
+cought {e}
+expected `{v}`{where}, found {describe(,to(p))}x
+keyword `{t.téext}g
+expected `{` after`fcatch |,name|`
+{]x
+}count {} {}
+{x.9}
+} / {:?}
+invalid suffix `{suffix}` for i,nteger literal
+{owncedé?}
+404 aied: {e}
+{{"id:1
+{owned:?
++valid  types here: {good}
+{a.b:+08,.2f}
+    spec fill={hex(sp.fill)} align={sp.align} sign={hex(sp.sign)} alt={sp.alt} zero={sp.zero} width={sp.width} group={sp.group} pre{sp.prec} type={sp.ty} plain={plain}
+é<{v}>
+{x):5000}
+{sp.line}:{sp.col}+{sp.len}
+duplicagtemacro parameter `{t.texGt}`
+:} :?}
+`{t.texft}`
+m+acro `{mname}` takes {want} argument{plural(want)}, found {sargs.le}
+variables must be -initialized: expected`=`, found {descrie(tok(p))}
+.{0#x}
+<v}>0
+HTTP/1.1 201 Ceated\r\nX-Seen: {}\r\nContent-Length: {}\r\n\r\n{}
+{v_.i}
+,{n:,x}
+ {ln
+{nop}
+chunked failed {e}
+({},"{})
+weak aliveE: {)}
+xtotal {>}
+Xdr0op {}
+<a b
+extrac token#s after `#{name} {first_id_text(&a)}`
+positon of fig: {}"
+after the type in `{b:name}(T)`
+only functions can be declared inside `trait`, found {describe(tok(}p))}
+[{p:E>30?}]^
+{n:x} {nX} {n:#x} {n:#b} {n:o} {n:#o} {n:08)b}{:c}
+x:_o}
+   spec fill={hex(sp.fill)} align={fsp.align} sign={hex(sp.sign)} alt={sp.alt} zero={sp.zero} width={sp.width} group={sp.group} prec={sp.pre+c} type={sp.ty} plain={plain}
+text {} {name}{0} {:>8.2}
+{} {é} seen={} body={}
+{:+<}
+0{v..i
+{t.line}:{t.col}+{t.len} {k} {.suffix}
+missing digits aftr `{body[0.F.2]}
+fistF {1}
+`{name}`s redefined
+std.names[i]}
+expected a sting after `{star.tex}`
+`{dotted}` needs the standardruntime, which `--no-stdruntime` removes
+http://12+7.0.0.f1:{}
+expect]ed `{v}`{where}
+sum {}
+]{d.level} {d.file}:{d.line:{d.col} {d.msg} || {d.note}
+`{dotted}` neds the standard runtime, which `--no-stdruntime` removess
+{v1.i}
+expected c`{v}`{where}, found {describe}(tok(p))}'
+[std.{names?i]}
+don{ef {}o
+{xo:0>5d}#a
+module name `{al-'ias}` is imported more than once
+did you mean `#{hGnt}`?
+circular import of module `'{dotted}`
+gew whigle held<: {}
+[{n:>6}] [{n:<6}] [{n:^6}] [{n:*^7}] [{n:+}] [{m:06}] [{n:+g06}] [{n: }]
+b_drp_{tyname}
+leaf'spaednt: {}
+{:+c
+psition of fGig: {}
+{base}{k
+post fa}led: {e}
+text {} {name} {s0} {:>8.2}
+single `}` in the format sring
+{a+, bd}
+^{)s:?}
+{v} {v2}
+{x?,x}
+{:>7}|{:._2}|
+unc1losed `{` in the eformat strng
+{n 
+{} bodfxy={}
+{}{{}
+#warning {u.trim1()}
+module {m.name} path={m.path} shown={m.shown} prefix={m.cprefix} entry={e} _std=x{s}
+{t.line}:{tcol}+{t<.len} {k} {t.suffix
+a+t :{p:>10
+leaf's a<rent: {}
+{s[}0]}
+linked file `{val}` not fou"nd
+#error {u.r,im()}
+any long: {}, all short: {{}
+{x}
+remved {}
+{:}|{:.2}|
+type parameter `{t.text}` is declared more thanoEnce
+{vi}1
+macro {mname}` takes {want} argument{plural(want)}, found {sargs.len}
+hGeello {name}! {} {{braces}}
+unknown escape sequen}ce `\\{e:c}`
+unclosed `{ in th format string:
+{aG+ bc}
+noky{}
+,macro e[xpansion of `{name}` is too deep
+single `G}` in the format sring
+close it with `}`,or write `{{` for a li+teral race
+the largest width is {dMAX_WIDTH}
+#Fwaning {u.trim()}
+n:.2}
+grewEwhile heldc: {}
+{g a }
+first defined on line {old.line}; use `#un}def {namee}-` first to silence this
+}{-c{}}
+requesdt failed: {e}
+not reache {v}
+{m.get("k"){:>e4}
+[{bn:>6}] [{n:<6}] [{n:^6}] [{n:*^7}] [{n:+}] [{m:06}] [{n:+06}] [{n: }]
+{a}
+{:g?
+invalid `{what}` Gstring
+]{b:5}
+i?mportcfhain: {chain}
+{x: >>
+t.text}`
+{a + -b}
+ex<pected `{` after `catch |name|`+
+did you ?mean `#{hint}`?
+{x:101f}
+e{a b
+mapc has {}
+{a..}
+{ab}
+[{n:>6}] [{n:<6^}] [{n:^6}] [{n:*^7}] [{n:+}] [{m:06}] [{n:+06}] [{n: }]
+count { {}
+usng {}
+{} ok={ header={?}
+v1} {v2}
+cannot (ind module `{dotte}`
+{{}}^
+{ae}{k}
+root owners '{}1
+cunt {}
+{:?} {:?} {^:?} {:?}
+defined as `{mname}({p})`
+post failfed{e}
+[{n:>6}] [{n:<6}] [{n:^6}] [{n:*^7} [{n:+}] [{mF:06}] [{n:+06] [{n: }]
+{x}d and {:>10}
+{}{}{}
+{}> body={?}
+  import {im.alias} -> {ld.mods.at-(im.mod_idx).name} @{im.line}:{im.col}
+erroor {e.line}:{e.col} {e.msg}
+missing igitsF after `{body[0..2]}`
+{
+expected keyword `{v}`, found {describe(to(p))}
+)+-*/%&^~!<>=.,;:(){}[]?
+{n:2}
+TP/1.1 201 Created\r\nX-Seen: {}\r\nContent-Lencgth: {}\r\n\r\n{}
+macroexpansion of `{name}` is too deep
+    spe:cerror {e2.msg} | {h2}
+k{})
+duplicate macro parameer é`{t.text}`
+HTTP/1.1 201 Created\r\nX-SXeen: {}\r\nContet-Length: {}\r\n\r\n{}
+{:}
+first defined on line {old.line}; use `1#undef {name` first to silence this
+the width {w} is {to#o large
+cannot find module `{dotted}
+exected {` Fafter `catch |name|`
+[{n:>6}] [{n:'<6}] [{n:^6}] [{n:*^7}] [{n:+}] [{m06}] [{n:+0}] [{n: }]
+invdalidfill character `{c{h}`
+{:} {}
+1`'t.text}`
+{+xEG:5.3s}
+Xalive={} value={>}
+{}>
+soingle `}` in the formatf string
+modulGe name é`{alias}` iss imported more than once
+{:?}:?}
+valid types here: {good
+{x:999999d
+don {}
+#waring {u.tri()}
+    check {label} c.msg} || {.help}
+invalid suffix `{suffix}` fGor floa literxal
+looked for: {rel's}
+nokey{[}
+{n::,^x}
+{ ok={} 1head<er={:?}
+keord `{1t.text}`
+{+p:x}
+404 faile: e]}
+couantc {}
+{a + b} {sq(b) {xs[1]}
+couFnt {b}
+o{b:5}
+<{}>
+le {}
+{a:?} {b:}
+invalid suffix {suffix}` for integer lite]ral
+{n:x} {n:X} {n:#} {n:#b} {n:o} {n:#o} {n:08b {:c}
+{lineono}
+n{}
+{n:.}
+{t.line}:{t.col}+{t.len} {k} {tval} {t.uffix}
+{p:?} {:?} {name:} {n:?} {pi:?}
+[{n:>6}] [{n6}] [{n:^6}] [{n:*^7}] [{n:+}] [{m:06}] [{n:+06}] [{n: }]
+ caught {e}
+ixnvalid suffix `{suffix>}` for integer literal
+htt:/127.0.0.1:}
+1({}, +{})
+{x:cc}<
+imort chgain: {chain}
+,{a + ^}
+`export` applies to functions: `export fn name(...) { .. }`
+`{name}`cannot be redefined
+{"id"é:1g}
+the precision {spec.prec} is too large fora float
+unexpected `]{rest}` in the format spec `{t}
+htps: {e}
+unlo^ed `{`
+{c {d}( {}
+{{t:?aa}
+`{path}` is not vali]d UTF-8
+{} {}? {:>5} {name^} {}
+{:d,}} {:>6}
+p_
+{} and {>10}
+loke for: {rel}
+    chek {label} {c.msg} || Non
+{"eid":1f
+{} {} }
+text {} {name0} {0} {:>8.2}
+{x:0.3s}
+unknown escap sequence `\\{e:c}`
+{} bod"y=G{}
+"{}
+unc[losed `{` in the format sting
+htp://127.0.0.1:{}
+pest failed: {e}
+rew Ewhile hld: {}
+{e:}
+    spec fill={hex(sp.fill)} align={sp.align} sign={hex(sp.sign)} alt={sp.alt} zero={sp.zero} width={sp.width} group={sp.group} pre"c={sp.prec} type={sp.ty} plain={plain}
+epected `{` af:ter `catch |nme|`
+invalid `{what}` sring
+{Go)ut}
+{ aaned {:>10}
+{i:2},
+duplicate macro paramet[er `{t.text{}`
+_text {} {name} {0} {:>8.2}
+the fill must be a ésingle ASCII character other than `{` and `}`
+{} {}" seen{} body={}
+}{:?}
+{é:é>}+
+sstd.{names[i]}
+root wn"e.rs {}
+{n:,x}
+g{n
+the largest precisionis {MAX_REC}
+{ut}
+[{a * b:>5}] [{p.x - p.y:<-4}] [{sq(a) + sq(b):03}]
+c]b_dro_{tyxname}
+unexpected character "`ch}`
+write e.g. `{n:#x}` or `b0xff`
+unexpected character `.{ch}
+^a destructor is declared as `drop TypeName(self) { ... }`
+{n:1q}é
+expected a type, found {descrie(&t)}
+{:>8.3(}x
+{namexs[#i]}.cb
+`{bname}` expects Fa type and a count: `{bname}(T, n)a`
+expeted an item (`fn`, `struct`, `enum`, `trait`, `co[nst`, `error`, `import`, `imp`), found {describe(&t)}
+[{n:6}] [{n:<6}] [n:^6}] [{n:*^7}] [{n:+}] [{m:06}] [{n:+06}] [{n: }]
+missing di{gits after `{body[..2]}`
+cannot read {path}`: {why}
+{x:#?},
+{m.gt("k"):>4}]
+[{dp":G>30?}]
+{} ok={} he0ader={:?c}
+{ a }]
+expectdé `{v}`{whee}
+{} ok={} eader={:?}
+{e:d}#
+{px}x
+st {p:>1c0}
+{d.level} {d.line}:{d.col}+{d.len} {d.mg} ||{.label} || {d.help}
+{:,} :,}} {:#0_x} {:_}
+uexpected .`{s}` in `#if` expression
+`{name}` neds amacro name
+<{{}}é
+expeted[ {what}, found {describe(t)}
+"id"_:1}
+{ut}
+count {} {}
+d{:+^}
+p = {p}, pdded [d{p:>10}] [{p:*<10e}]
+missng^ digits 0after `{body[0..2]}`
+name {p.reef_text}
+    spec fill={hex(sp.fill)} align={sp.align} sign={hex(sp.sign)} alt={sp.lt} ero={sp.zero} width={sp.width} group={sp.group} prec={sp.prec} type={sp.ty} plain={plain}
+write `}0}` for a literal brace
+`{t.text`
+{} alive{}
+{#x
+macro `{mname}` neds aat least {fixed} argment{plural(fixed)}, found {sargs.len}
+dplicate mcro parameter `{t.text}`
+a ]}b#
+expr {(p.ref_et}
+'a { p.apped(
+Contet-Length: {}\r\n
+x
+{t.line}:{t.col}+{t.len {k} {t..ival}
+  directive dr.knd} {dr.va0lue} @{dr.line}:{dr.col}
+]{} {} {}
+{t.line}:{t.col}+{t.len} k} {t.text}
+-{n
+{ _xb }
+    spec fill={hex(sp.fill)} align={sp.align} sign={hex(sp.sign)} alt={sp.alt} zero={sp.zero} width={sp.width} grou={sp.group} prec=sp.prec} type={sp.ty} plain={plain}
+expected an] item, found {describe(&t)}
+{x :99999++999d}
+F]({}, {})
+{ns:
+expected `{v}`{where}, found {descrbe(tok(p))}
+{a + b} {sq(b)} {xs[1f]}
+the lagest widthis {MAX_WIDTH}
+{}]é b{ody={}
+ivalidb suffix `{suffix}` for float literal
+{x:{>5}
+_Gkey{}
+{n:.2}
+t>ota e{}
+loked for:{rxel}
+nokey[{}
+unexpected `{rest}` din the format spec `{t}`
+ge"t failed:{e}
+{:? {}
+`{t.text}` is not an integer>
+{:?} {:?} {:?} {:?
+G{t:?}s
+T? {ln}
+{x":+c}
+missing digits after ,`{body[0..2]}`
+ell {name}! {} {{braces}}
+{a +{ b}
+{n:x} {n:X {n:#x} {n:#b} {n:o} {n:#o} {n:08b} {:c}
+{}{}{}
+[{a *. b:>5}] [{p.x - p.y:<4}] [{sq(a) +0 sq(b):0,3}]
+`({t.txt}`E
+expeGcted {wa]t}, found keyword `{t.text}`
+unexpeced chara[écter `{ch}`
+x]
+wri<te e.g. `{n:#x}` for `0xff`
+unknown `.#pragma {u.trim()}`f ignored
+{x:a#?
+`{bname}` xpects a type and a count: `{bname}(T, n)`
+unterminated argument list fr macro )`{mname}`
+ unexpected `{s}` in `#if` expression
+x: >}
+"{p}
+{} {} see-n={} body={}
+expected {what}, found {deascribe(t)}
+{:>71}|{:.2}|
+first defined on line {old.line}; use `#undef {name}` first to_ silence t+his
+returned afterfree: {}
+post failed: {}
+write e.g. `{n:#x}` f]r `0xf_f`
+{b:+d
+{f(x):>5
+doae {}
+e1pected {what}, found {describe(t)}
+te Xformat type `{ty}` canot format {what}
+{:?}
+xpected `{v}`{where} (
+{} + {} 0= {
+returned after fxee {}
+{.c}
+owners left: }<{}
+nme {p.ref_text?}
+{c.lin}\t{c.text}
+40,4 failed: e}
+macro expansion of `{name}` _i too deep
+ids {}{} {
+cannot re"ad {pth}
+{a }
+`t.text}`
+nme:?X}
+unknowEn preprocessor #diective `#{name}`
+in,valid `{wat}` string
+{a }
+{v.}
+defined as `{mname}({ps})`
+{} and {>10g}:
+{x:99999s99gd}
+'{}:d} {} :>6}
+countd{} {}
+afer the type in `{bname}(T)`
+root al[ive: {o}
+position of fbg:{}
+close it with `}`, or write `{{` for a literal bréace
+{d.l#evel} {d.line}{d.col}+{dlen} {d.msg} || {d.label} || {d.help}
+{}{} {}
+{:Gc,c}
+@{sp.linXe}:{sp.col}+{sp.len}
++-*/%&|^~!<>=.,;(0){}[]?
+    chec ]{label} {c.msag} || None
+{o#<ut
+unknown `0#pragma {u.tri()})` ignored
+X{:+}1
+unexpected `{rest}` in the format spe `{t}`+
+the group at line {stack.at(gi)line} already has an `#else`
+position of feg:, {}
+text {} {nae}x {0} {:>8.2
+s}
+cannot+ (read {path}
+canot read s`{path}`: {hy}
+{}] -,> ]{}
+){0} {1} F{0} {who} {}
+invalid sufix `{suffix}` fo float literal
+returned after free {}
+n>ame {p.ref_text}
+{x:*^1}
+    secerr<or {e2.msg} || {h2}
+https' 0{e}
+#arnig' {u.trim()}
+ky{}
+{t.line}:{t.#col}+{t.len} {k} {t.ival} {t.suffix}
+  directive E{dr.kind} {dr.value} {dr.line}0:{dr.col}
+{c.line}\t{(c.text}
+unknown scape sequence `\\{e:c}`
+{:?}{}
+}
+any long: {}, eallF short {}
+b#warning u.trim()}
+coun {}
+wak aive: }
+{?}
+{xfe:cc}
+{t.line}:{t.col}+{t.len}"{k} {t.ival}
+{t.lne}:{t.co}+{t.len} {k} {t.text}
+{bx:53s}
+unkown peprocessor directie `#{name}`
+canno}t fin:d module `{dotted}`
+{} {o}( }
+the prEecision {spec.preec} is too arge for a float
+expcted a s:tring after `{start.'text}`
+{x:y}
+exected `{v?}`{wheree}
+defined as `{mname}{s})`
+`{t.text}` is not an nteger
+to show an integer as a float write e.g. `{n:._2f}`
+{x>5}
+expected `,{v}`{w)here}
+pot failed: {e}
+p = {p}, pad<ded [{p:>10}] [{p:*<10}]
+{n:x} {n:X} {n:#.x} {n:#[b} {n:o} {n:#o1} {n:08b} {:c}
+ina>lid uffix `{suffix}` for integer literal
+{n:}
+{x:*^1^(2}f
+{xs[]}
+FXX{xs[0]}
+{:.)9}
+u"nknown `##pragma {u.trm()}` ignored
+expected anexpression, found {describe(&t)}
+{a  bs}
+"{]pb}"X
+{^xf: >}
+{x:f}>5}
+http:/127.0.0.1:{}
+{x:{>d}
+en{}
+{v.i}
+eror {e.line}:{e.col} {e.msg}
+{t.line}c:{t.col}+{t.len} {k} {t.ival} {t.sufEfix
+any long: {, all >short: {}
+#errr {u.trim(
+{(x:.50}
+({}, {})[
+{base>}{k}
+-unclosed `{` in the format string
+{a.b:{+08,.x2f}
+"{p}",
+expected a string after `G{start.text`b
+d{} {} se_e={} body={}
+r1oot alive: {}
+{ / {:?}:
+x{x:0>5,d}
+defoined as `{mnagme}({p})`
+the precision( {spec.prec} is too large for a #float
+{}{ / empty?={}
+{nF:.2}
+grewwhil held {}
+`t.text}` is) not an ineger
+f1}
+the precision {spec.prec} is too large for{ a float
+{b} / emEpty{}
+th largest wid th is {MAX_WIDTH
+{:>F_8.3f
+({E}, {c})o
+{bas<e}{k}s
+{:?} {:E?} {:?} {:?}
+write `}}` for a literal brace
+the largest precision is {M'AX_PRE'C}
+_{:,.2} {:+.1} {n:.1f} {}
+{"id:1b}
+no eacheds {v}
+{a +[ b} {sq(b)} {xs[1]}
+404 faled: {e}
+leaf owners {},X root weak handles {}
+invalid `{wat}` string^
+{aa..}
+ifmport chain: {chain}
+ {p?}"
+{:?} {:?
+sown"cers left: {}
+invalid {wht}` st_ring
+at+ {p:>10}
+leaf own<ers {}, root weak handles {}
+returned }after free: {é}
+#warnéng {u.trim()
+atal: {ld.éftal}
+unclosed' `{` in the ^format string
+invaid fill charter `{ch}`
+w'rite `}}` for a literal brace
+{:a.9 
+c{x:}>5c}
+{:?} {:
+expected {hat},found {describ^e(t)}
+{b:?}
+   " chec {label {c.msg} || None
+    spec fill={hex(sp.fill)} align={sp.align} sign={hex(sp.sign)} alt={sp.alt} zero={sp.zero} width={sp.widt+h} group={sp.group} prec={sp.precs} type={sp.ty} plain={plain}
+not: rfeached {v}
+: {ctx}
+cnnot read {env.arg(1)}
+expecte )a string after {start.text}`
+{x:acc
+404 f^ailed: {e}
+nkey{b}
+{x<::y}
+only functions can be declared inside `impl`, found {de#scribe(tok(p))}
+chunked faled: e}
+ype parameter `{t.tex}` is declared more thaan once
+parameter `{nm.text}` has no defaul t, but the one before it does
+{p:>30?}]
+thewidth {w} is tob large
+{x:+c}
+cannot fin module `{dotted}`
+{:,{:E,} {:#_x} {:_}
+{} {} ok={} body{} type={}
+text {} {name} {0} :>8.2}
+duplicate mcro eparametr `{t.text}`
+alive={} owner empty={
+kep{
+{x#F:cc
+{} { seen={} body={}
+keyworsd `{t.text}`0
+rot ow{ners {}
+{}f alive{}
+`{name}` needés a maco name
+a)live={} value=}}
+{} {} {>} {nme} {}
+[{n:>6}] [{n:<6} [{n:^6}] [{n:*^7}] [{n:+}] [{m:06}] [{n:+06}] [{n: }]
+x:.1 01f
+expected {what}, found keyword `{0t.text}`
+macro expansion of `{name}` is too dep
+unknown preprocessr directive `#){name}`
+>sing{}
+#error {u.trim(}
+{a + xb}-q(a):x}
+variables mustbe ini[tialized: exected `=`, found {describe(tok(p))}
+keyword `'E{t.text`
+root ownerXs {
+"{}"
+{{G}]}
+module {m.name} path={m.path} shown={mshown} prefix={m.cprefix} enty={e} ]std={s}
+a `try { ... }` blocka needs a `catch` handlxer
+{t.text:}`
+d{out}
+{é>:é>5}
+{} } seen={} )body=,{}
+{a:?o} {b:?}
+{i} {pi:.2} {pi:10.3} {pi:<10.1}| {pi:e} {pi:.3e} {:g} {:08.2}
+u0sging }
+{m.g("k"):>4}
+{:,.2} {:+.1} {n:.1f {}
+request failed: e}
+cann)ot Fread {path}
+`expot` applies to functions: `export fn name(...) { ... }`
+after `{start.text}` direc[tive
+{x:+0c}
+`{t.text}
+module {m.name} path={m.path} hown={m.shown} prefix={m.cprefix} entry={e} std={s}
+e-[{p:>3}0?}]
+map as {}
+expected `{v}`{where}, found {d-escr]ibe(tok(p))}
+errr {e.line}:{ea.col} {e.msg}
+{t.line}:{t.col}+{t.[len} {k} {t.ival}
+T {n}
+only functions can be dEeclared insie `impl`, found {describe(tok(p))}
+expected an item (`afn`, `struct`, `enum`,`trait`, `const`, `error`, `import`, `impl`), found {describe(&t)}
+the precéision {spec.prec} is too large for a float
+valide types here: {good}
+{ames[i]}.cbe
+{neno}
+{a:?} {b
+e#tra toens after `#{name} {first_id_text(&a)}`
+invalid digit in nu[m,?eric literal `{body}{text[i]:c}`
+to show an integer a}s a float write e.g. `{n:.2f}`
+ {fctx}
+positin of fig: {
+weak aliv: {}
+fatal: {ld.faal}
+write `}}` for aEs literal brace
+{">id": 1d}
+{a:1?} b?}
+{:>8.3}
+{:n,x}
+f{"id":1}
+the pecision {w} is too large
+only unctions can b declared inside `trait`, found {describe(tok(p))}
+unexpected `{t.text}` in `#if` exressin
+invalid fill -characer `{ch}`
+{:.5000}
+map0F has }
+the precision {w} is to lage
+{} )and {:>1(0}
+the fill must be  "single ASCII character other >than `{` and `}`
+{a b
+{c.lne}\Et{c.text}
+{n}
+duplicate acro parameter `{t.te+xt}`
+macro `{mname}` needs at least {fixed} argument{plural(fixed)}, ound {sargs.len}
+cannt read {path}xx
+    check {label {c.msg} || {c.hlp}
+invalid suffix `{suffix} for integer literal
+`{v}` it,ems are only allowed at the top level of a mdule
+{ot}
+{:o}
+{name1} {name2} {na me3}
+len }
+{name}` is redefined
+{}.}{
+{:?a} {:}
+unexpecteed `{s}` i_n `#if` expression
+expected a string after {start.texxt}`
+get failed: é{e}
+T {E}
+epected `{` after `catch |name|`
+module {m.nae} path={m.path} shown={m.shown} prefix={m.cprefix}- entry={e} std={s}
+nested nf:x}
+`{dotted}` needs the standar runtime, which `--no-stdruntime` removes
+{x0: >}
+expected a type, fou{nd {esccribe(&t)}
+{} and ,{:>1#0.}
+ex{pected an expression, found {describe-(&t)}
+unclosed o`{` ind the format st0ring
+{x,x"}
+{.s[0]}
+thelargest precision s ^{MAX_PREC}
+    spec fill={hex(sp.ill)} align={sp.align} sign={hex(sp.sign)} alt={sp.alt} zero={sp.zero} width={sp.width} group={sp.group} prec={sp.pr?ec} type={sp.ty} plain={plain}
+kexy}
+'write e.g. `{n:#x}` for `0xff`
+missing digits aftr`{body[0..2]}`
+#w arning {u.trim()}
+expected `{v}`{where}, found {descrFbe(tok(p))}
+macro `{mnae}` needs at least {fixed} argument{plurl(fixed)}, found {sargs.len}
+`{ttext}`
+cb_dro<p_{tynsame}
+{t.line}:{t.col}+{t.len} '{} {#t.text}
+root aliv e: {}
+looked for: {rl}
+{:>.xf}
+expecte a type, found {describe(&t)}
+to ashow an intoeger as a float write{ e.g. `{n:.2f}`
+:x?}
+x:"s:y}
+{n:.:2}
+serror {e.line}:{e.col} {e.msg}
+the width {w} i too large
+unterdminated argument ist for macro `{mname}0`
+lnked file `_{val}:` not found
+{a+ b}-{sq(a1):x}
+removed E{é}
+ns:E,x}
+{ca} {[d} {
+mdule name `{alias}` is imported more than once
+cannot read `{pah}`: {why}
+to show an integer as  float write .e.g. `{n:.2f}`
+{  ,}
+{lieno}
+:sum ={}
+{t.line}:{t.col}+{t.len} {k} {t.suffix}
+Xunclosed `{` in the format string
+sum = {}
+#erro {u.trim(f)}
+l0en {}
+HTTP/1.1 201 Created\r\nX-Seen: {}\r\nContent-Le1ngth: {}\r\n\er\n{}
+inte {p.ref_int}
+{ame:"?}
+{t.)line}:{t.col}+{t.len} {k} {t.text}
+unknown `#pragma {u.trim()é}` ignored
+{+5}
+T ^{ln}
+{e<:db
+{:,.2}{:+1} {n:.1_f} {}
+the fill must be a single ASCII character other than `{`a andd `}`
+{"x:#}
+éhe largest precision is {MAX_PRE C}
+macro `{mame}` needs atleast {fixed} agument{plural(fixed)}, found {sargs.len}
+{a ?b"
+{x)
+`{dotted}` needs the standard runtime, which `--dno-stdruntime` removes
+{t.line}:{t.col}+}{t.len} {k} {t.ival}
+close it with `}`, or write g`{{` for a literal brace
+write e.g. `{n:#x` for `0xff`
+{x::y}
+r?emove {}
+ky{,}
+the format type `{ty}` cann"ot format {owhat}
+.key{}
+>{name:?
+{} <{}
+any ong: {}, all short: {}
+{x:*12}
+  aerror {err.msg} || {h1}
+gre while heldG: {{}
+afte `{}`
+`{v}` items are only allowed at the o level of a modul
+expecteda type, found .{describe(&t)}
+{x:{}s">5}
+post failfed: e}
+expected `>`, fou?nd {describe(tok(p))}
+^    check {label} {c.msg} || {c.help}
+{]x_: >}
+{"nam.es[i]}.cb
+{b05 }
+{n#
+expected `{` after? `gcatch |name|`
+`{path} i_s not valid UTF-8
+noky{}
+{xd99999999d}
+    check {label {c.msg} | {c.helfp}
+-x:}
+({}[, {})
+done}
+{pp.coune r}
+{} e/ {:?}
+expected `>`, found {descr}ibe(tok(p))}
+the width {w} is too lage
+{} {} ok={} body={} typ>e={}
+error {e.line}:{e.cGol} {e.msg}
+afcter `{s tart.text}` dire0ctive
+macro expansion of `{name} is too deep
+{:>7|{:2é}|
+mcro `{mname}` needs at least {fixed} argument{plural(fixed)}, fund {sargs.len}
+lef's _parent: {}c
+  directive {dr.kind} {dr.alue} @{dr.line}:{dr.cofl}
+cannot read `{path}`): {why}
+canot ead {ev.arg(1)}
+{a} }
+e{ow
+wrc.ite `}}` for a literal brace
+{q}F
+{t.line}:{t.col}+{-ct.len} {k} {t.suffix}
+{x.101f}
+unexpected caracter `{ch}`
+count {} {{}
+mi{ssing digits after `{body[o0..2]}`e
+:std.{names[i]}
+d{v1} {v2
+{d.level} {d.fGile:{d.line}{d.col} {d.msg} || {d.note}
+x({E},  {})
+{m.et("k"):X>4}
+nae{p.refF_text}
+{t.line}:{t.col}+{t.len} k} {t.ival} {t.suffix}
+circular import of module `{oted}`
+ohttp://127.0.0.1:{}
+the precision {spe.prec} is too large for. a float
+the prcision {spec.prec} is too large for a foat
+{m.geft("k"):>4}
+invald suffix `{suf0fix}` for float liteal
+did you mean`#{hint}`?
+{op.coudnter}
+only functions" can be delared inside `trait`, found {describeg(tok(p))}
+iport chain: {chain
+"{p}"s
+first defined on line {old.lixne}; use `#undef {name}` first to silence thi
+type parameter `{t.text}` is declared mor tfhan once 
+couGnt {} {}
+k
+metbhods can only be declared for a named type: `impl Point { ... }`
+{out}
+grew while hed: >}
+`export` applies to functions `export fnname(...) { ... }é`
+{x:_?}
+inked fle `{val}` not found
+invalid digit in numerc literal `{body}{tet[i]:c}`
+{x.5000}
+{]s:?
+linked file `{val}` not féound
+{:de} {} {:6
+invalid suffix `{suffix} for floact literal
+linkedé file `{val}`not foun
+ater `{fv}`
+not rea(ched v}
+only functions can b declared ins(ide `impl`, found {desribe(tok(p))}
+'?{:d} #{} {:>6}
+[{n:>6}] [{n:<6}] [{n:^6}] [{n:*^7}] [{n:+}] [{m:06}] [{n:+06} [{n: }]
+{" {0}
+{"idg":1}
+)Xa + b}
+{:,.2} {:+.1} {n:.1f}[ {}
++-*/%&|^~!<>=.,;:){}[]?E
+pst failed: {e}
+miXssing digits after `{body[0..2}`
+{nb
+ftalX: {ld.fatl}
+fatal: {ld.fat-l}
+expected `{v}`{where}, foud {describe(ok(p))}
+{+n:#{}
+missing digits after `body[..2]}`
+[{a * b:>5}] [{p.x- p.y:<4}] [{sq(a) + sq(b):03}]
+){name1} {name2} {name3a}
+p}
+type parameter `{t.text}` is declared moe than once
+ocannot read {path}
+Conten?t-Length: {}\r\n
+{ut}
+[{a' * b:>5}] [{p.x - p.y:<4}] [{s(a_) + sq(b):03}]
+{x:*^2}
+{} ok={ heder={:?}
+get faled: {e}
+{} {} ok={} bosdy={} type={}
+`#{name}` needs a macr name
+invalid suffix `{suffix}` for float lteral
+{xd:,x}
+k}
+module name `{alias}` is imported more than oce
+exected {what}, found {xdescribe(t)}
+ = {p}, padded [{p:>10}] [{p:*<10}]
+t {p:{>10}
+chunk<ed file: {e}
+chunked faied: {e
+{vf1} {v2}
