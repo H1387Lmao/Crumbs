@@ -538,6 +538,7 @@ fn parse_trait(p: *P, pb: bool) -> ast.Node! {
 }
 
 fn parse_trait_fn(p: *P) -> ast.Node! {
+    let first = p.p;
     let mut start = try expect_kw(p, "fn");
     let mut nm = try expect_ident(p, "function name");
     if is_op(p, "<") {
@@ -550,11 +551,16 @@ fn parse_trait_fn(p: *P) -> ast.Node! {
     if accept_op(p, "->") { ret = some(try parse_ret_type(p)); }
     let mut body: ast.Node? = null;
     if !accept_op(p, ";") { body = some(try parse_block(p)); }
+    let has_body = !body.is_none();
     let mut n = ast.new_node("TraitFn", ts(&nm));
     n.put_str("name", nm.text);
     n.put_nodes("params", params);
     n.put_opt("ret", ret);
     n.put_opt("body", body);
+    if has_body {                  // a default body is parsed again by each `impl` that uses it (see parse_default)
+        n.put_int("tok_lo", first);
+        n.put_int("tok_hi", p.p);
+    }
     n.put_span("full_span", sp(p, ts(&start)));
     return n;
 }
@@ -1832,4 +1838,30 @@ pub fn parse(text: str, errors: *List<lexer.Diag>) -> ast.Node {
     let m = parse_module(&p);
     for i in 0..p.lx.errors.len { errors.push(lexer.Diag { line: p.lx.errors.at(i).line, col: p.lx.errors.at(i).col, msg: String.from(p.lx.errors.at(i).msg) }); }
     return m;
+}
+
+// A default method of a trait, parsed again with `Self` standing for `impl_ty` (tokens lo..hi of the module's text).
+pub fn parse_default(text: str, lo: i64, hi: i64, impl_ty: *ast.Node, errors: *List<lexer.Diag>) -> ast.Node {
+    let mut lens: List<i64> = List.new();
+    let mut a = 0 as i64;
+    for i in 0..text.len + 1 {
+        if i == text.len || text[i] == '\n' {
+            lens.push(char_len(text, a, i));
+            a = i + 1;
+        }
+    }
+    let mut p = P { lx: lexer.LexResult { toks: List.new(), errors: List.new() }, p: 0, line_lens: lens, no_struct: false,
+                    impl_ty: List.new(), tb_names: List.new(), tb_vals: List.new(), undo: List.new(), undoing: false };
+    let mut all = lexer.LexResult { toks: List.new(), errors: List.new() };
+    lexer.lex_into(text, &all);
+    for i in lo..hi { p.lx.toks.push(clone_tok(all.toks.at(i))); }
+    p.lx.toks.push(clone_tok(all.toks.at(all.toks.len - 1)));
+    p.impl_ty.push(clone_node(impl_ty));
+    let mut res = ast.new_node("tmp", ast.span(1, 1, 1));
+    try {
+        res = try parse_fn(&p, true, false, "", false, false);
+    } catch {
+    }
+    for i in 0..p.lx.errors.len { errors.push(lexer.Diag { line: p.lx.errors.at(i).line, col: p.lx.errors.at(i).col, msg: String.from(p.lx.errors.at(i).msg) }); }
+    return res;
 }

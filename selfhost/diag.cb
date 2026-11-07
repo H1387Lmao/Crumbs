@@ -75,3 +75,21 @@ pub fn suggest(name: str, candidates: []str) -> String {
     if best.len > 0 && best_d <= limit { return best; }
     return String.empty();
 }
+
+// like `suggest`, for a list of names
+pub fn suggest_list(name: str, candidates: *List<String>) -> String {
+    let mut best = String.empty();
+    let mut best_d = 1000000000 as i64;
+    let ln = lower(name);
+    for i in 0..candidates.len {
+        let c: str = *candidates.at(i);
+        if c == name { continue; }
+        let d = edit_distance(ln, lower(c));
+        if d < best_d { best = String.from(c); best_d = d; }
+    }
+    let mut limit = name.len / 3 + 1;
+    if limit > 3 { limit = 3; }
+    if limit < 1 { limit = 1; }
+    if best.len > 0 && best_d <= limit { return best; }
+    return String.empty();
+}

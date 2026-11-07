@@ -1,0 +1,1052 @@
+// Semantic analysis, written in Crumbs. A port of src/crumbsc/checker.py, in stages: this file holds the data
+// model and the declaration phase (symbols, impls, traits, destructors, bounds).
+import std.map;
+import ast;
+import diag;
+import lexer;
+import loader;
+import parser;
+
+// ---- data model -------------------------------------------------------------------------------------
+
+pub struct TMeth { name: String, node: i64 }
+pub struct BoundList { tp: String, traits: List<i64> }
+
+pub struct Sym {
+    kind: String,                 // fn struct enum const error trait
+    name: String,
+    mod_idx: i64,
+    node: i64,                    // index into Checker.nodes
+    is_pub: bool,
+    full: String,
+    cname: String,
+    is_extern: bool,
+    is_export: bool,
+    variadic: bool,
+    tparams: List<String>,
+    csym: String,
+    has_csym: bool,
+    opaque: bool,
+    extern_struct: bool,
+    is_method: bool,
+    has_self: bool,
+    self_mut: bool,
+    method_name: String,
+    is_drop: bool,
+    code: i64,
+    variants: List<String>,
+    trait_methods: List<TMeth>,   // in order of first declaration
+    supers: List<i64>,
+    drop_sym: i64,                // -1: none
+    has_bounds: bool,
+    bounds: List<BoundList>,
+}
+
+pub struct CImp { alias: String, mod_idx: i64, node_line: i64, node_col: i64, used: bool }
+
+pub struct CMod {
+    syms: map.HashMap<i64>,
+    order: List<i64>,             // symbols in definition order
+    items: List<i64>,             // the module's items, as indices into Checker.nodes
+    imports: List<CImp>,
+}
+
+pub struct MEnt { name: String, sym: i64 }
+pub struct MethTab { key: String, entries: List<MEnt> }
+
+pub struct TImpl {
+    trait_full: String,
+    trait_sym: i64,
+    key: String,
+    tparams: List<String>,
+    bounds: ast.Val,              // the impl's `tbounds` (a dict value)
+    node: i64,
+    mod_idx: i64,
+    line: i64,
+    col: i64,
+    len: i64,
+}
+
+pub struct NameSym { name: String, sym: i64 }
+
+pub struct Checker {
+    ld: *loader.Loader,
+    d: diag.Diags,
+    nostd: bool,
+    nodes: List<ast.Node>,
+    syms: List<Sym>,
+    cmods: List<CMod>,            // indexed like Loader.mods
+    errors: List<i64>,
+    fns: List<i64>,
+    structs: List<i64>,
+    enums: List<i64>,
+    consts: List<i64>,
+    traits: List<i64>,
+    methods: List<MethTab>,
+    trait_impls: List<TImpl>,
+    prelude_types: List<NameSym>,
+    prelude_traits: List<NameSym>,
+    bound_seen: List<String>,
+}
+
+pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
+    let mut ck = Checker {
+        ld: ld, d: diag.new_diags(), nostd: nostd, nodes: List.new(), syms: List.new(), cmods: List.new(),
+        errors: List.new(), fns: List.new(), structs: List.new(), enums: List.new(), consts: List.new(),
+        traits: List.new(), methods: List.new(), trait_impls: List.new(), prelude_types: List.new(),
+        prelude_traits: List.new(), bound_seen: List.new(),
+    };
+    // move every module's items into the node arena; syms and later phases refer to them by index
+    for mi in 0..ld.mods.len {
+        let mut cm = CMod { syms: map.HashMap.new(), order: List.new(), items: List.new(), imports: List.new() };
+        let n = ld.mods.at(mi).ast.get("items").items.len;
+        for k in 0..n {
+            let id = ck.nodes.len;
+            ck.nodes.push(ast.clone_node(ld.mods.at(mi).ast.get("items").items.at(k).node.at(0)));
+            cm.items.push(id);
+        }
+        for i in 0..ld.mods.at(mi).imports.len {
+            let im = ld.mods.at(mi).imports.at(i);
+            cm.imports.push(CImp { alias: String.from(im.alias), mod_idx: im.mod_idx, node_line: im.line, node_col: im.col, used: false });
+        }
+        ck.cmods.push(cm);
+    }
+    return ck;
+}
+
+// ---- small helpers -----------------------------------------------------------------------------------
+
+fn new_sym(ck: *Checker, kind: str, name: str, mi: i64, node: i64, is_pub: bool) -> Sym {
+    let prefix: str = ck.ld.mods.at(mi).cprefix;
+    return Sym {
+        kind: String.from(kind), name: String.from(name), mod_idx: mi, node: node, is_pub: is_pub,
+        full: format("{prefix}.{name}"), cname: format("{prefix}__{name}"),
+        is_extern: false, is_export: false, variadic: false, tparams: List.new(), csym: String.empty(), has_csym: false,
+        opaque: false, extern_struct: false, is_method: false, has_self: false, self_mut: false,
+        method_name: String.empty(), is_drop: false, code: 0, variants: List.new(), trait_methods: List.new(),
+        supers: List.new(), drop_sym: -1, has_bounds: false, bounds: List.new(),
+    };
+}
+
+fn names_of(v: *ast.Val) -> List<String> {
+    let mut o: List<String> = List.new();
+    for i in 0..v.items.len { o.push(String.from(v.items.at(i).s)); }
+    return o;
+}
+
+fn path_of(n: *ast.Node) -> List<String> { return names_of(n.get("path")); }
+
+fn join_path(p: *List<String>) -> String {
+    let mut o = String.empty();
+    for i in 0..p.len { if i > 0 { o.push('.'); } o.append(*p.at(i)); }
+    return o;
+}
+
+fn child(v: *ast.Val, i: i64) -> *ast.Node { return v.items.at(i).node.at(0); }
+
+fn has_name(l: *List<String>, s: str) -> bool {
+    for i in 0..l.len { if *l.at(i) == s { return true; } }
+    return false;
+}
+
+fn is_prim_name(s: str) -> bool {
+    return s == "i8" || s == "i16" || s == "i32" || s == "i64" || s == "u8" || s == "u16" || s == "u32" || s == "u64"
+        || s == "f32" || s == "f64" || s == "bool" || s == "str" || s == "String" || s == "void";
+}
+
+fn is_reserved(s: str) -> bool {
+    if is_prim_name(s) || s == "error" || s == "null" { return true; }
+    let names = ["print", "println", "format", "panic", "assert", "alloc", "free", "exit", "to_str", "string_new",
+                 "string_from", "string_clear", "cstr", "from_cstr", "slice_of", "size_of", "drop", "drop_at", "write_at",
+                 "read_at", "gc_collect", "gc_bytes", "gc_collections", "alloc_in", "gc_collect_gen", "gc_gen_bytes",
+                 "gc_gen_collections"];
+    for i in 0..27 { if s == names[i] { return true; } }
+    return false;
+}
+
+// reports an error in module `mi`; `notes` are joined with " ## "
+fn err(ck: *Checker, mi: i64, sp: ast.Span, msg: str, label: str, help: str, notes: str) {
+    ck.d.file = String.from(ck.ld.mods.at(mi).shown);
+    ck.d.add_error_note(sp.line, sp.col, sp.len, msg, label, help, notes);
+}
+
+fn lookup_sym(ck: *Checker, mi: i64, name: str) -> i64 {
+    let p = ck.cmods.at(mi).syms.get(name);
+    if p == null { return -1; }
+    return *p;
+}
+
+fn lookup_named(l: *List<NameSym>, name: str) -> i64 {
+    for i in 0..l.len { if l.at(i).name == name { return l.at(i).sym; } }
+    return -1;
+}
+
+fn import_of(ck: *Checker, mi: i64, alias: str) -> i64 {
+    let cm = ck.cmods.at(mi);
+    for i in 0..cm.imports.len { if cm.imports.at(i).alias == alias { return i; } }
+    return -1;
+}
+
+fn node_line(ck: *Checker, sym: i64) -> i64 { return ck.nodes.at(ck.syms.at(sym).node).span.line; }
+
+// registers `s` in module `mi`; -1 (and an error) when the name is taken
+fn define(ck: *Checker, mi: i64, s: Sym, sp: ast.Span) -> i64 {
+    let name = String.from(s.name);
+    let old = lookup_sym(ck, mi, name);
+    if old >= 0 {
+        err(ck, mi, sp, format("the name `{name}` is defined multiple times"), "redefined here", "",
+            format("previous definition of `{name}` is at line {node_line(ck, old)}"));
+        return -1;
+    }
+    if is_reserved(name) {
+        err(ck, mi, sp, format("`{name}` is a reserved name and cannot be redefined"), "", "", "");
+        return -1;
+    }
+    if import_of(ck, mi, name) >= 0 {
+        err(ck, mi, sp, format("`{name}` conflicts with an imported module of the same name"), "", "", "");
+        return -1;
+    }
+    let id = ck.syms.len;
+    ck.syms.push(s);
+    ck.cmods.at(mi).syms.set(name, id);
+    ck.cmods.at(mi).order.push(id);
+    return id;
+}
+
+// ---- declaration ----------------------------------------------------------------------------------------
+
+pub fn declare(ck: *Checker, mi: i64) {
+    let nitems = ck.cmods.at(mi).items.len;
+    let mut drops: List<i64> = List.new();
+    let mut plain: List<i64> = List.new();
+    for k in 0..nitems {
+        let id = *ck.cmods.at(mi).items.at(k);
+        let it = ck.nodes.at(id);
+        if it.kind == "Fn" && !it.is_none("drop_for") { drops.push(id); } else { plain.push(id); }
+    }
+    for k in 0..plain.len {
+        let id = *plain.at(k);
+        declare_item(ck, mi, id);
+    }
+    for k in 0..drops.len { declare_drop(ck, mi, *drops.at(k)); }
+    for k in 0..nitems {
+        let id = *ck.cmods.at(mi).items.at(k);
+        if ck.nodes.at(id).kind == "Impl" { declare_impl(ck, mi, id); }
+    }
+}
+
+fn declare_item(ck: *Checker, mi: i64, id: i64) {
+    let kind = String.from(ck.nodes.at(id).kind);
+    let sp = ck.nodes.at(id).span;
+    let is_pub = param_flag(ck.nodes.at(id), "pub");
+    if kind == "Fn" {
+        let name = String.from(ck.nodes.at(id).str_of("name"));
+        let mut s = new_sym(ck, "fn", name, mi, id, is_pub);
+        s.is_extern = ck.nodes.at(id).get("extern").i != 0;
+        s.tparams = names_of(ck.nodes.at(id).get("tparams"));
+        s.variadic = ck.nodes.at(id).get("variadic").i != 0;
+        s.is_export = ck.nodes.at(id).get("export").i != 0;
+        if s.is_extern {
+            let cs = String.from(ck.nodes.at(id).str_of("cname_str"));
+            s.csym = cs.len > 0 ? cs : String.from(name);
+            s.has_csym = true;
+            let prefix: str = ck.ld.mods.at(mi).cprefix;
+            s.cname = format("cb_x_{prefix}__{name}");
+        } else if s.is_export {
+            s.cname = String.from(name);
+        }
+        let generic = s.tparams.len > 0;
+        let sid = define(ck, mi, s, sp);
+        if sid >= 0 && !generic { ck.fns.push(sid); }
+    } else if kind == "Struct" {
+        let name = String.from(ck.nodes.at(id).str_of("name"));
+        let mut s = new_sym(ck, "struct", name, mi, id, is_pub);
+        s.tparams = names_of(ck.nodes.at(id).get("tparams"));
+        s.extern_struct = ck.nodes.at(id).get("extern").i != 0;
+        s.opaque = ck.nodes.at(id).get("opaque").i != 0;
+        let generic = s.tparams.len > 0;
+        let sid = define(ck, mi, s, sp);
+        if sid >= 0 && !generic { ck.structs.push(sid); }
+    } else if kind == "Enum" {
+        let name = String.from(ck.nodes.at(id).str_of("name"));
+        let mut s = new_sym(ck, "enum", name, mi, id, is_pub);
+        let nv = ck.nodes.at(id).get("variants").items.len;
+        for k in 0..nv { s.variants.push(String.from(ck.nodes.at(id).get("variants").items.at(k).items.at(0).s)); }
+        if nv == 0 { err(ck, mi, sp, format("enum `{name}` has no variants"), "", "", ""); }
+        let mut seen: List<String> = List.new();
+        for k in 0..nv {
+            let vn = String.from(ck.nodes.at(id).get("variants").items.at(k).items.at(0).s);
+            let vs = ck.nodes.at(id).get("variants").items.at(k).items.at(1).span;
+            if has_name(&seen, vn) { err(ck, mi, vs, format("duplicate variant `{vn}` in enum `{name}`"), "", "", ""); }
+            seen.push(vn);
+        }
+        let sid = define(ck, mi, s, sp);
+        if sid >= 0 { ck.enums.push(sid); }
+    } else if kind == "Trait" {
+        let name = String.from(ck.nodes.at(id).str_of("name"));
+        let mut s = new_sym(ck, "trait", name, mi, id, is_pub);
+        let nm = ck.nodes.at(id).get("methods").items.len;
+        for k in 0..nm {
+            let f = child(ck.nodes.at(id).get("methods"), k);
+            let fname = String.from(f.str_of("name"));
+            let mut at = -1 as i64;
+            for q in 0..s.trait_methods.len { if s.trait_methods.at(q).name == fname { at = q; } }
+            if at >= 0 {
+                err(ck, mi, f.span, format("the trait `{name}` declares the method `{fname}` more than once"), "", "",
+                    format("the first one is at line {first_line_of(ck, id, fname)}"));
+            }
+            // the dict keeps the first position and the last node
+            if at >= 0 { s.trait_methods.at(at).node = k; } else { s.trait_methods.push(TMeth { name: fname, node: k }); }
+        }
+        if nm == 0 { err(ck, mi, sp, format("trait `{name}` has no methods"), "", "declare at least one `fn` inside it", ""); }
+        let sid = define(ck, mi, s, sp);
+        if sid >= 0 { ck.traits.push(sid); }
+    } else if kind == "Const" {
+        let name = String.from(ck.nodes.at(id).str_of("name"));
+        let mut s = new_sym(ck, "const", name, mi, id, is_pub);
+        if ck.nodes.at(id).get("extern").i != 0 {
+            s.is_extern = true;
+            let cs = String.from(ck.nodes.at(id).str_of("cname_str"));
+            s.csym = cs.len > 0 ? cs : String.from(name);
+            s.has_csym = true;
+        }
+        let sid = define(ck, mi, s, sp);
+        if sid >= 0 { ck.consts.push(sid); }
+    } else if kind == "ErrorDecl" {
+        let nn = ck.nodes.at(id).get("names").items.len;
+        for k in 0..nn {
+            let nm = String.from(ck.nodes.at(id).get("names").items.at(k).items.at(0).s);
+            let nsp = ck.nodes.at(id).get("names").items.at(k).items.at(1).span;
+            let mut s = new_sym(ck, "error", nm, mi, id, is_pub);
+            let sid = define(ck, mi, s, nsp);
+            if sid >= 0 {
+                ck.errors.push(sid);
+                ck.syms.at(sid).code = ck.errors.len;
+            }
+        }
+    }
+}
+
+// the line of the first method called `fname` in trait item `id`
+fn first_line_of(ck: *Checker, id: i64, fname: str) -> i64 {
+    let ms = ck.nodes.at(id).get("methods");
+    for k in 0..ms.items.len {
+        let f = child(ms, k);
+        if f.str_of("name") == fname { return f.span.line; }
+    }
+    return 0;
+}
+
+// ---- types as written: a canonical string, and readable text -------------------------------------------------
+
+fn inner_of(tn: *ast.Node) -> *ast.Node { return tn.node_of("inner"); }
+fn ptr_prefix(tn: *ast.Node) -> str { return tn.get("ro").i != 0 ? "*const " : "*"; }
+fn q(fallback: str) -> str { return fallback; }
+
+fn size_text(n: *ast.Node, fallback: str) -> String {
+    let sz = n.node_of("size");
+    if sz.has("value") {
+        let v = sz.get("value");
+        if v.tag == 2 { return v.s.len > 0 ? String.from(v.s) : format("{v.i}"); }
+        if v.tag == 1 { return String.from(v.i != 0 ? "True" : "False"); }
+    }
+    return String.from(fallback);
+}
+
+// Names are replaced by their full symbol names and `Self` by `selfc` (None when `has_self` is false), so two
+// spellings of the same type (`Point` / `geom.Point`) give the same string.
+fn canon(ck: *Checker, tn: *ast.Node, mi: i64, selfc: str, has_self: bool) -> String {
+    let k: str = tn.kind;
+    if k == "TName" {
+        let mut p = path_of(tn);
+        let nargs = tn.get("args").items.len;
+        if p.len == 1 && *p.at(0) == "Self" && nargs == 0 { return String.from(has_self ? selfc : "None"); }
+        let mut base = String.empty();
+        if p.len == 1 {
+            let mut sym = -1 as i64;
+            if !is_prim_name(*p.at(0)) {
+                sym = lookup_sym(ck, mi, *p.at(0));
+                if sym < 0 { sym = lookup_named(&ck.prelude_types, *p.at(0)); }
+            }
+            base = sym >= 0 ? String.from(ck.syms.at(sym).full) : String.from(*p.at(0));
+        } else if p.len == 2 && import_of(ck, mi, *p.at(0)) >= 0 {
+            let im = import_of(ck, mi, *p.at(0));
+            let tm = ck.cmods.at(mi).imports.at(im).mod_idx;
+            let sym = lookup_sym(ck, tm, *p.at(1));
+            base = sym >= 0 ? String.from(ck.syms.at(sym).full) : join_path(&p);
+        } else {
+            base = join_path(&p);
+        }
+        if nargs > 0 {
+            base.push('<');
+            for i in 0..nargs {
+                if i > 0 { base.push(','); }
+                base.append(canon(ck, child(tn.get("args"), i), mi, selfc, has_self));
+            }
+            base.push('>');
+        }
+        return base;
+    }
+    if k == "TPtr" || k == "TSlice" || k == "TArray" || k == "TErrUnion" || k == "TOpt" {
+        let inner = canon(ck, inner_of(tn), mi, selfc, has_self);
+        if k == "TPtr" { return format("{ptr_prefix(tn)}{inner}"); }
+        if k == "TSlice" { return format("[]{inner}"); }
+        if k == "TArray" { let sz = size_text(tn, "?"); return format("[{sz}]{inner}"); }
+        if k == "TErrUnion" { return format("{inner}!"); }
+        return format("{inner}?");
+    }
+    if k == "TFn" || k == "TClo" {
+        let mut ret = String.from("void");
+        if !tn.is_none("ret") { ret = canon(ck, tn.node_of("ret"), mi, selfc, has_self); }
+        let mut ps = String.empty();
+        for i in 0..tn.get("params").items.len {
+            if i > 0 { ps.push(','); }
+            ps.append(canon(ck, child(tn.get("params"), i), mi, selfc, has_self));
+        }
+        let kw = k == "TFn" ? "fn" : "clo";
+        return format("{kw}({ps})->{ret}");
+    }
+    return String.from("?");
+}
+
+fn tn_text(tn: *ast.Node) -> String {
+    let k: str = tn.kind;
+    if k == "TName" {
+        let mut p = path_of(tn);
+        let mut o = join_path(&p);
+        let nargs = tn.get("args").items.len;
+        if nargs > 0 {
+            o.push('<');
+            for i in 0..nargs {
+                if i > 0 { o.append(", "); }
+                o.append(tn_text(child(tn.get("args"), i)));
+            }
+            o.push('>');
+        }
+        return o;
+    }
+    if k == "TPtr" || k == "TSlice" || k == "TArray" || k == "TErrUnion" || k == "TOpt" {
+        let inner = tn_text(inner_of(tn));
+        if k == "TPtr" { return format("{ptr_prefix(tn)}{inner}"); }
+        if k == "TSlice" { return format("[]{inner}"); }
+        if k == "TArray" { let sz = size_text(tn, ".."); return format("[{sz}]{inner}"); }
+        if k == "TErrUnion" { return format("{inner}!"); }
+        return format("{inner}?");
+    }
+    if k == "TFn" || k == "TClo" {
+        let mut ps = String.empty();
+        for i in 0..tn.get("params").items.len {
+            if i > 0 { ps.append(", "); }
+            ps.append(tn_text(child(tn.get("params"), i)));
+        }
+        let mut ret = String.empty();
+        if !tn.is_none("ret") { let rt = tn_text(tn.node_of("ret")); ret = format(" -> {rt}"); }
+        if k == "TFn" { return format("fn({ps}){ret}"); }
+        return format("|{ps}|{ret}");
+    }
+    return String.from("?");
+}
+
+fn param_flag(p: *ast.Node, name: str) -> bool { return p.has(name) && p.get(name).i != 0; }
+
+fn sig_text(f: *ast.Node) -> String {
+    let mut ps = String.empty();
+    let params = f.get("params");
+    for i in 0..params.items.len {
+        let p = child(params, i);
+        if i > 0 { ps.append(", "); }
+        if param_flag(p, "self_param") { ps.append(param_flag(p, "self_mut") ? "mut self" : "self"); }
+        else {
+            let pn = String.from(p.str_of("name"));
+            let pt = tn_text(p.node_of("tyn"));
+            ps.append(format("{pn}: {pt}"));
+        }
+    }
+    let fname = String.from(f.str_of("name"));
+    let mut o = format("fn {fname}({ps})");
+    if !f.is_none("ret") { let rt = tn_text(f.node_of("ret")); o.append(format(" -> {rt}")); }
+    return o;
+}
+
+// ---- destructors ----------------------------------------------------------------------------------------------
+
+fn plain_tname_is(a: *ast.Node, tp: str) -> bool {
+    if a.kind != "TName" { return false; }
+    let p = a.get("path");
+    return p.items.len == 1 && a.get("args").items.len == 0 && p.items.at(0).s == tp;
+}
+
+// does `args` (type nodes) spell exactly the names `tps`, in order?
+fn args_match(args: *ast.Val, tps: *List<String>) -> bool {
+    if args.items.len != tps.len { return false; }
+    for i in 0..tps.len { if !plain_tname_is(child(args, i), *tps.at(i)) { return false; } }
+    return true;
+}
+
+fn angle(tps: *List<String>) -> String {
+    if tps.len == 0 { return String.empty(); }
+    let mut o = String.from("<");
+    for i in 0..tps.len { if i > 0 { o.append(", "); } o.append(*tps.at(i)); }
+    o.push('>');
+    return o;
+}
+
+fn declare_drop(ck: *Checker, mi: i64, id: i64) {
+    let dname = String.from(ck.nodes.at(id).str_of("drop_for"));
+    let sp = ck.nodes.at(id).span;
+    let st = lookup_sym(ck, mi, dname);
+    if st < 0 || ck.syms.at(st).kind != "struct" {
+        err(ck, mi, sp, format("cannot find struct `{dname}` in this module"),
+            "destructors must be declared in the module that defines the type",
+            format("write `drop {dname}(self) {{ ... }}` next to `struct {dname}`"), "");
+        return;
+    }
+    if ck.syms.at(st).opaque {
+        err(ck, mi, sp, format("`{ck.syms.at(st).name}` is an opaque C type and cannot have a destructor"), "",
+            format("give the wrapper struct a destructor instead, e.g. one that holds a `*{ck.syms.at(st).name}`"), "");
+        return;
+    }
+    if ck.syms.at(st).drop_sym >= 0 {
+        err(ck, mi, sp, format("`{ck.syms.at(st).name}` already has a destructor"), "", "",
+            format("the first one is at line {node_line(ck, ck.syms.at(st).drop_sym)}"));
+        return;
+    }
+    let n_expect = ck.syms.at(st).tparams.len;
+    let tys = ck.nodes.at(id).get("tparams");
+    let mut itps = names_of(tys);
+    let ty = child(ck.nodes.at(id).get("params"), 0).node_of("tyn").node_of("inner");
+    let args = ty.get("args");
+    let ok = itps.len == n_expect && args.items.len == n_expect && args_match(args, &itps);
+    if !ok {
+        let sname = String.from(ck.syms.at(st).name);
+        let want = angle(&ck.syms.at(st).tparams);
+        if n_expect > 0 {
+            err(ck, mi, sp, format("the destructor of `{sname}` must be generic over exactly the struct's type parameters"), "",
+                format("write `drop{want} {sname}{want}(self) {{ ... }}`"), "");
+        } else {
+            err(ck, mi, sp, format("`{sname}` is not generic, so its destructor takes no type parameters"), "",
+                format("write `drop{want} {sname}{want}(self) {{ ... }}`"), "");
+        }
+        return;
+    }
+    let fname = String.from(ck.nodes.at(id).str_of("name"));
+    let mut s = new_sym(ck, "fn", fname, mi, id, false);
+    s.tparams = itps;
+    s.is_drop = true;
+    let generic = s.tparams.len > 0;
+    let sid = define(ck, mi, s, sp);
+    if sid >= 0 {
+        ck.syms.at(st).drop_sym = sid;
+        if !generic { ck.fns.push(sid); }
+    }
+}
+
+// ---- traits -------------------------------------------------------------------------------------------------------
+
+fn bound_key(mi: i64, sp: ast.Span) -> String { return format("{mi}:{sp.line}:{sp.col}"); }
+
+// the trait symbol a path like `Shape` / `shapes.Shape` names (an error and -1 otherwise)
+fn resolve_trait(ck: *Checker, tn: *ast.Node, mi: i64, quiet_in: bool) -> i64 {
+    let mut quiet = quiet_in;
+    let mut path = path_of(tn);
+    let mut sym = -1 as i64;
+    if !quiet {
+        let key = bound_key(mi, tn.span);
+        if has_name(&ck.bound_seen, key) { quiet = true; }
+        ck.bound_seen.push(key);
+    }
+    if path.len == 1 {
+        sym = lookup_sym(ck, mi, *path.at(0));
+        if sym < 0 && import_of(ck, mi, *path.at(0)) < 0 { sym = lookup_named(&ck.prelude_traits, *path.at(0)); }
+    } else if path.len == 2 {
+        let im = import_of(ck, mi, *path.at(0));
+        if im < 0 {
+            if !quiet {
+                let p0 = String.from(*path.at(0));
+                err(ck, mi, tn.span, format("cannot find module `{p0}`"), "", format("add `import {p0};` at the top of the file"), "");
+            }
+            return -1;
+        }
+        ck.cmods.at(mi).imports.at(im).used = true;
+        let tm = ck.cmods.at(mi).imports.at(im).mod_idx;
+        sym = lookup_sym(ck, tm, *path.at(1));
+        if sym >= 0 && ck.syms.at(sym).kind == "trait" && !ck.syms.at(sym).is_pub && ck.syms.at(sym).mod_idx != mi {
+            if !quiet {
+                let p0 = String.from(*path.at(0));
+                let p1 = String.from(*path.at(1));
+                err(ck, mi, tn.span, format("trait `{p1}` is private to module `{p0}`"), "", "mark it `pub` in its module", "");
+            }
+            return -1;
+        }
+    }
+    if sym >= 0 && ck.syms.at(sym).kind == "trait" { return sym; }
+    if quiet { return -1; }
+    let name = join_path(&path);
+    if sym >= 0 {
+        err(ck, mi, tn.span, format("`{name}` is a {ck.syms.at(sym).kind}, not a trait"), "expected a trait here", "", "");
+        return -1;
+    }
+    let scope_mod = path.len == 1 ? mi : ck.cmods.at(mi).imports.at(import_of(ck, mi, *path.at(0))).mod_idx;
+    let mut names: List<String> = List.new();
+    let order = &ck.cmods.at(scope_mod).order;
+    for i in 0..order.len {
+        let sid = *order.at(i);
+        if ck.syms.at(sid).kind == "trait" { names.push(String.from(ck.syms.at(sid).name)); }
+    }
+    let sg = diag.suggest_list(*path.at(path.len - 1), &names);
+    err(ck, mi, tn.span, format("cannot find trait `{name}` in this scope"), "not found",
+        sg.len > 0 ? format("a trait with a similar name exists: `{sg}`") : String.empty(), "");
+    return -1;
+}
+
+fn same_sig(ck: *Checker, tf: *ast.Node, f: *ast.Node, tm: i64, mi: i64, selfc: str) -> bool {
+    let tp = tf.get("params");
+    let fp = f.get("params");
+    if tp.items.len != fp.items.len { return false; }
+    for i in 0..tp.items.len {
+        let a = child(tp, i);
+        let b = child(fp, i);
+        let sa = param_flag(a, "self_param");
+        let sb = param_flag(b, "self_param");
+        if sa != sb || (sa && param_flag(a, "self_mut") != param_flag(b, "self_mut")) { return false; }
+        if !sa && canon(ck, a.node_of("tyn"), tm, selfc, true) != canon(ck, b.node_of("tyn"), mi, selfc, true) { return false; }
+    }
+    let ra = tf.is_none("ret") ? String.from("void") : canon(ck, tf.node_of("ret"), tm, selfc, true);
+    let rb = f.is_none("ret") ? String.from("void") : canon(ck, f.node_of("ret"), mi, selfc, true);
+    return ra == rb;
+}
+
+fn find_timpl(ck: *Checker, trait_full: str, key: str) -> i64 {
+    for i in 0..ck.trait_impls.len {
+        if ck.trait_impls.at(i).trait_full == trait_full && ck.trait_impls.at(i).key == key { return i; }
+    }
+    return -1;
+}
+
+fn sorted_names(l: *List<String>) -> List<String> {
+    let mut o: List<String> = List.new();
+    for i in 0..l.len { o.push(String.from(*l.at(i))); }
+    for i in 0..o.len {
+        for j in i + 1..o.len {
+            let a: str = *o.at(i);
+            let b: str = *o.at(j);
+            if b.compare(a) < 0 {
+                let t = String.from(a);
+                o.set(i, String.from(b));
+                o.set(j, t);
+            }
+        }
+    }
+    return o;
+}
+
+// the TraitFn node `name` of trait `tr` (its last declaration)
+fn trait_fn(ck: *Checker, tr: i64, name: str) -> *ast.Node {
+    let tms = &ck.syms.at(tr).trait_methods;
+    for i in 0..tms.len {
+        if tms.at(i).name == name { return child(ck.nodes.at(ck.syms.at(tr).node).get("methods"), tms.at(i).node); }
+    }
+    panic("no such trait method");
+}
+
+fn has_trait_fn(ck: *Checker, tr: i64, name: str) -> bool {
+    let tms = &ck.syms.at(tr).trait_methods;
+    for i in 0..tms.len { if tms.at(i).name == name { return true; } }
+    return false;
+}
+
+// Checks an `impl Trait for Type` block; returns the functions to register (the impl's own plus the trait's default
+// methods it does not override). `ok` is false after an error that stops the impl.
+fn conform(ck: *Checker, mi: i64, it_id: i64, trait: i64, key: str, tname: str, fns: List<ast.Node>, ok: *bool) -> List<ast.Node> {
+    let tm = ck.syms.at(trait).mod_idx;
+    let trait_full = String.from(ck.syms.at(trait).full);
+    let trait_name = String.from(ck.syms.at(trait).name);
+    let it_span = ck.nodes.at(it_id).span;
+    let mut itps = names_of(ck.nodes.at(it_id).get("tparams"));
+    let mut shown = String.from(tname);
+    if itps.len > 0 { shown = format("{tname}{angle(&itps)}"); }
+    let prev = find_timpl(ck, trait_full, key);
+    if prev >= 0 {
+        err(ck, mi, it_span, format("`{shown}` already implements the trait `{trait_name}`"), "conflicting implementation", "",
+            format("the first `impl` is at line {ck.trait_impls.at(prev).line}"));
+        *ok = false;
+        return List.new();
+    }
+    let mut strays: List<i64> = List.new();
+    let selfc = canon(ck, ck.nodes.at(it_id).node_of("tyn"), mi, "", false);
+    let mut have: List<String> = List.new();
+    for i in 0..fns.len {
+        let f = fns.at(i);
+        let fname = String.from(f.str_of("name"));
+        if has_name(&have, fname) {
+            err(ck, mi, f.span, format("the method `{fname}` is defined more than once in this `impl`"), "", "", "");
+            strays.push(i);
+            continue;
+        }
+        have.push(String.from(fname));
+        if !has_trait_fn(ck, trait, fname) {
+            let mut avail: List<String> = List.new();
+            for q in 0..ck.syms.at(trait).trait_methods.len { avail.push(String.from(ck.syms.at(trait).trait_methods.at(q).name)); }
+            let mut sorted = sorted_names(&avail);
+            let sg = diag.suggest_list(fname, &sorted);
+            err(ck, mi, f.span, format("`{fname}` is not a member of the trait `{trait_name}`"), "not in the trait",
+                sg.len > 0 ? format("did you mean `{sg}`?") : format("declare it in `trait {trait_name}`, or move it to a plain `impl {tname} {{ ... }}` block"), "");
+            strays.push(i);
+            continue;
+        }
+        let tf = trait_fn(ck, trait, fname);
+        if !same_sig(ck, tf, f, tm, mi, selfc) {
+            let n1 = format("the trait declares `{sig_text(tf)}` at line {tf.span.line}");
+            let n2 = format("this impl has `{sig_text(f)}`");
+            err(ck, mi, f.span, format("the method `{fname}` does not match its declaration in the trait `{trait_name}`"),
+                "different signature", "make the receiver, the parameter types and the return type agree with the trait",
+                format("{n1} ## {n2}"));
+        }
+    }
+    let mut missing: List<String> = List.new();
+    for q in 0..ck.syms.at(trait).trait_methods.len {
+        let n = String.from(ck.syms.at(trait).trait_methods.at(q).name);
+        if trait_fn(ck, trait, n).is_none("body") && !has_name(&have, n) { missing.push(n); }
+    }
+    if missing.len > 0 {
+        let mut list = String.empty();
+        let mut notes = String.empty();
+        for q in 0..missing.len {
+            if q > 0 { list.append(", "); notes.append(" ## "); }
+            let mn = String.from(*missing.at(q));
+            let ml = trait_fn(ck, trait, mn).span.line;
+            list.append(format("`{mn}`"));
+            notes.append(format("`{mn}` is declared at line {ml} of the trait"));
+        }
+        let m0 = String.from(*missing.at(0));
+        err(ck, mi, it_span, format("not all required methods of `{trait_name}` are implemented for `{shown}`: {list}"),
+            "missing implementations", format("add `fn {m0}(...) {{ ... }}` to this `impl`"), notes);
+    }
+    let mut out: List<ast.Node> = List.new();
+    for i in 0..fns.len {
+        let mut stray = false;
+        for q in 0..strays.len { if *strays.at(q) == i { stray = true; } }
+        if !stray { out.push(ast.clone_node(fns.at(i))); }
+    }
+    for q in 0..ck.syms.at(trait).trait_methods.len {
+        let n = String.from(ck.syms.at(trait).trait_methods.at(q).name);
+        let tf = trait_fn(ck, trait, n);
+        if !tf.is_none("body") && !has_name(&have, n) {
+            let lo = tf.get("tok_lo").i;
+            let hi = tf.get("tok_hi").i;
+            let mut perrs: List<lexer.Diag> = List.new();
+            let node = parser.parse_default(ck.ld.mods.at(tm).text, lo, hi, ck.nodes.at(it_id).node_of("tyn"), &perrs);
+            ck.d.file = String.from(ck.ld.mods.at(tm).shown);
+            for e in perrs { ck.d.add_error(e.line, e.col, 1, e.msg, "", ""); }
+            let mut node2 = node;
+            node2.put_str("default_of", trait_name);
+            out.push(node2);
+        }
+    }
+    let info = TImpl { trait_full: trait_full, trait_sym: trait, key: String.from(key), tparams: itps,
+                       bounds: ast.clone_val(ck.nodes.at(it_id).get("tbounds")), node: it_id, mod_idx: mi,
+                       line: it_span.line, col: it_span.col, len: it_span.len };
+    ck.trait_impls.push(info);
+    *ok = true;
+    return out;
+}
+
+// ---- impls -----------------------------------------------------------------------------------------------------------
+
+fn find_table(ck: *Checker, key: str) -> i64 {
+    for i in 0..ck.methods.len { if ck.methods.at(i).key == key { return i; } }
+    ck.methods.push(MethTab { key: String.from(key), entries: List.new() });
+    return ck.methods.len - 1;
+}
+
+fn table_get(ck: *Checker, t: i64, name: str) -> i64 {
+    let e = &ck.methods.at(t).entries;
+    for i in 0..e.len { if e.at(i).name == name { return e.at(i).sym; } }
+    return -1;
+}
+
+// `{**a, **b}` for two `tbounds` dict values
+fn merge_tbounds(a: *ast.Val, b: *ast.Val) -> ast.Val {
+    let mut out = ast.clone_val(a);
+    let mut i = 0 as i64;
+    while i < b.items.len {
+        let mut found = -1 as i64;
+        let mut k = 0 as i64;
+        while k < out.items.len {
+            if out.items.at(k).s == b.items.at(i).s { found = k; }
+            k += 2;
+        }
+        if found >= 0 { out.items.set(found + 1, ast.clone_val(b.items.at(i + 1))); }
+        else {
+            out.items.push(ast.clone_val(b.items.at(i)));
+            out.items.push(ast.clone_val(b.items.at(i + 1)));
+        }
+        i += 2;
+    }
+    return out;
+}
+
+fn declare_impl(ck: *Checker, mi: i64, id: i64) {
+    let tyn_span = ck.nodes.at(id).node_of("tyn").span;
+    let mut path = path_of(ck.nodes.at(id).node_of("tyn"));
+    let nargs = ck.nodes.at(id).node_of("tyn").get("args").items.len;
+    let mut itps = names_of(ck.nodes.at(id).get("tparams"));
+    let mut sym = -1 as i64;
+    let mut key = String.empty();
+    if path.len == 1 && is_prim_name(*path.at(0)) && *path.at(0) != "void" {
+        key = String.from(*path.at(0));
+        if nargs > 0 || itps.len > 0 {
+            err(ck, mi, tyn_span, format("`{key}` is not generic, so its `impl` takes no type parameters"), "", "", "");
+            return;
+        }
+    } else {
+        if path.len == 1 {
+            sym = lookup_sym(ck, mi, *path.at(0));
+            if sym < 0 { sym = lookup_named(&ck.prelude_types, *path.at(0)); }
+        } else if path.len == 2 {
+            let im = import_of(ck, mi, *path.at(0));
+            if im >= 0 {
+                ck.cmods.at(mi).imports.at(im).used = true;
+                sym = lookup_sym(ck, ck.cmods.at(mi).imports.at(im).mod_idx, *path.at(1));
+            }
+        }
+        if sym < 0 || (ck.syms.at(sym).kind != "struct" && ck.syms.at(sym).kind != "enum") {
+            let pj = join_path(&path);
+            err(ck, mi, tyn_span, format("cannot find the type `{pj}` to attach methods to"),
+                "not a struct, enum or built-in type", "", "");
+            return;
+        }
+        if ck.syms.at(sym).kind == "struct" && ck.syms.at(sym).opaque {
+            err(ck, mi, tyn_span, format("`{ck.syms.at(sym).name}` is an opaque C type and cannot have methods"), "",
+                "wrap it in a Crumbs struct and put the methods there", "");
+            return;
+        }
+        key = String.from(ck.syms.at(sym).full);
+        let stps = &ck.syms.at(sym).tparams;
+        let ok = nargs == stps.len && stps.len == itps.len && args_match(ck.nodes.at(id).node_of("tyn").get("args"), &itps);
+        if !ok {
+            let sname = String.from(ck.syms.at(sym).name);
+            let want = angle(stps);
+            if stps.len > 0 {
+                err(ck, mi, tyn_span, format("an `impl` for `{sname}` must be generic over exactly its type parameters"), "",
+                    format("write `impl{want} {sname}{want} {{ ... }}`"), "");
+            } else {
+                err(ck, mi, tyn_span, format("`{sname}` is not generic, so its `impl` takes no type parameters"), "",
+                    format("write `impl{want} {sname}{want} {{ ... }}`"), "");
+            }
+            return;
+        }
+    }
+    let table = find_table(ck, key);
+    let tname = String.from(*path.at(path.len - 1));
+    let mut fns: List<ast.Node> = List.new();
+    let nf = ck.nodes.at(id).get("fns").items.len;
+    for i in 0..nf { fns.push(ast.clone_node(child(ck.nodes.at(id).get("fns"), i))); }
+    let mut has_trait = false;
+    if !ck.nodes.at(id).is_none("trait") {
+        has_trait = true;
+        let trait = resolve_trait(ck, ck.nodes.at(id).node_of("trait"), mi, false);
+        if trait < 0 { return; }
+        let mut ok = false;
+        fns = conform(ck, mi, id, trait, key, tname, fns, &ok);
+        if !ok { return; }
+    }
+    let mut impl_tbounds = ast.clone_val(ck.nodes.at(id).get("tbounds"));
+    for i in 0..fns.len {
+        let fname = String.from(fns.at(i).str_of("name"));
+        let fsp = fns.at(i).span;
+        let old = table_get(ck, table, fname);
+        if old >= 0 {
+            err(ck, mi, fsp, format("`{tname}` already has a method named `{fname}`"), "", "",
+                format("the first one is at line {node_line(ck, old)}"));
+            continue;
+        }
+        let f_pub = fns.at(i).get("pub").i != 0;
+        let mut node = ast.clone_node(fns.at(i));
+        let full_name = format("{tname}.{fname}");
+        node.set("name", ast.v_str(full_name));
+        let mut tp = names_of(ck.nodes.at(id).get("tparams"));
+        let fps = names_of(fns.at(i).get("tparams"));
+        for q in 0..fps.len { tp.push(String.from(*fps.at(q))); }
+        node.set("tparams", ast.v_list(strs_vals(&tp)));
+        let mut ftb = fns.at(i).has("tbounds") ? ast.clone_val(fns.at(i).get("tbounds")) : empty_dict();
+        node.set("tbounds", merge_tbounds(&impl_tbounds, &ftb));
+        let params = fns.at(i).get("params");
+        let has_self = params.items.len > 0 && child(params, 0).str_of("name") == "self";
+        let self_mut = has_self && (param_flag(child(params, 0), "self_mut") || param_flag(child(params, 0), "mut"));
+        let nid = ck.nodes.len;
+        ck.nodes.push(node);
+        let mut s = new_sym(ck, "fn", full_name, mi, nid, f_pub || has_trait);
+        s.tparams = tp;
+        let prefix: str = ck.ld.mods.at(mi).cprefix;
+        s.cname = format("{prefix}__{tname}__m_{fname}");
+        s.is_method = true;
+        s.method_name = String.from(fname);
+        s.has_self = has_self;
+        s.self_mut = self_mut;
+        let generic = s.tparams.len > 0;
+        let sid = define(ck, mi, s, fsp);
+        if sid >= 0 {
+            ck.methods.at(table).entries.push(MEnt { name: String.from(fname), sym: sid });
+            if !generic { ck.fns.push(sid); }
+        }
+    }
+}
+
+fn empty_dict() -> ast.Val {
+    let mut v = ast.v_list(List.new());
+    v.tag = 9;
+    return v;
+}
+
+fn strs_vals(l: *List<String>) -> List<ast.Val> {
+    let mut o: List<ast.Val> = List.new();
+    for i in 0..l.len { o.push(ast.v_str(*l.at(i))); }
+    return o;
+}
+
+// ---- bounds and supertraits -------------------------------------------------------------------------------------------
+
+pub fn resolve_bounds(ck: *Checker, mi: i64) {
+    let mut snapshot: List<i64> = List.new();
+    for i in 0..ck.cmods.at(mi).order.len { snapshot.push(*ck.cmods.at(mi).order.at(i)); }
+    for si in 0..snapshot.len {
+        let s = *snapshot.at(si);
+        let skind = String.from(ck.syms.at(s).kind);
+        if skind == "trait" {
+            let n = ck.nodes.at(ck.syms.at(s).node).get("supers").items.len;
+            for k in 0..n {
+                let tn = child(ck.nodes.at(ck.syms.at(s).node).get("supers"), k);
+                let sup = resolve_trait(ck, tn, mi, false);
+                let mut known = false;
+                for q in 0..ck.syms.at(s).supers.len { if *ck.syms.at(s).supers.at(q) == sup { known = true; } }
+                if sup >= 0 && !known {
+                    if sup == s {
+                        err(ck, mi, tn.span, format("trait `{ck.syms.at(s).name}` cannot be its own supertrait"), "", "", "");
+                    } else {
+                        ck.syms.at(s).supers.push(sup);
+                    }
+                }
+            }
+            continue;
+        }
+        if skind != "fn" && skind != "struct" { continue; }
+        let nd = ck.nodes.at(ck.syms.at(s).node);
+        if !nd.has("tbounds") { continue; }
+        let tb = nd.get("tbounds");
+        if tb.items.len == 0 { continue; }
+        ck.syms.at(s).has_bounds = true;
+        let mut i = 0 as i64;
+        while i < tb.items.len {
+            let tp = String.from(tb.items.at(i).s);
+            let tns = tb.items.at(i + 1);
+            for k in 0..tns.items.len {
+                let tr = resolve_trait(ck, child(tns, k), mi, false);
+                if tr >= 0 {
+                    let mut bi = -1 as i64;
+                    for q in 0..ck.syms.at(s).bounds.len { if ck.syms.at(s).bounds.at(q).tp == tp { bi = q; } }
+                    if bi < 0 {
+                        ck.syms.at(s).bounds.push(BoundList { tp: String.from(tp), traits: List.new() });
+                        bi = ck.syms.at(s).bounds.len - 1;
+                    }
+                    let mut dup = false;
+                    for q in 0..ck.syms.at(s).bounds.at(bi).traits.len { if *ck.syms.at(s).bounds.at(bi).traits.at(q) == tr { dup = true; } }
+                    if !dup { ck.syms.at(s).bounds.at(bi).traits.push(tr); }
+                }
+            }
+            i += 2;
+        }
+    }
+    let nitems = ck.cmods.at(mi).items.len;
+    for k in 0..nitems {
+        let id = *ck.cmods.at(mi).items.at(k);
+        if ck.nodes.at(id).kind != "Impl" { continue; }
+        let tb = ck.nodes.at(id).get("tbounds");
+        let mut i = 0 as i64;
+        while i < tb.items.len {
+            let tns = tb.items.at(i + 1);
+            for q in 0..tns.items.len { resolve_trait(ck, child(tns, q), mi, false); }
+            i += 2;
+        }
+    }
+}
+
+// Every impl of a trait needs impls of that trait's supertraits; supertrait lists must not form a cycle.
+pub fn check_trait_impls(ck: *Checker) {
+    for ti in 0..ck.traits.len {
+        let tr = *ck.traits.at(ti);
+        let mut seen: List<String> = List.new();
+        let mut stack: List<i64> = List.new();
+        for q in 0..ck.syms.at(tr).supers.len { stack.push(*ck.syms.at(tr).supers.at(q)); }
+        while stack.len > 0 {
+            let x = stack.pop() catch { panic("unreachable"); };
+            if x == tr {
+                let tmi = ck.syms.at(tr).mod_idx;
+                err(ck, tmi, ck.nodes.at(ck.syms.at(tr).node).span,
+                    format("the supertraits of `{ck.syms.at(tr).name}` form a cycle"), "a trait cannot require itself", "", "");
+                ck.syms.at(tr).supers = List.new();
+                break;
+            }
+            if has_name(&seen, ck.syms.at(x).full) { continue; }
+            seen.push(String.from(ck.syms.at(x).full));
+            for q in 0..ck.syms.at(x).supers.len { stack.push(*ck.syms.at(x).supers.at(q)); }
+        }
+    }
+    // in order of line number (the sort is stable)
+    let mut order: List<i64> = List.new();
+    for i in 0..ck.trait_impls.len { order.push(i); }
+    for i in 1..order.len {
+        let mut j = i;
+        while j > 0 && ck.trait_impls.at(*order.at(j)).line < ck.trait_impls.at(*order.at(j - 1)).line {
+            let t = *order.at(j);
+            order.set(j, *order.at(j - 1));
+            order.set(j - 1, t);
+            j -= 1;
+        }
+    }
+    for oi in 0..order.len {
+        let info = ck.trait_impls.at(*order.at(oi));
+        let tr = info.trait_sym;
+        for q in 0..ck.syms.at(tr).supers.len {
+            let sup = *ck.syms.at(tr).supers.at(q);
+            if find_timpl(ck, ck.syms.at(sup).full, info.key) < 0 {
+                let tn = ck.nodes.at(info.node).node_of("tyn");
+                let tp = path_of(tn);
+                let last = String.from(*tp.at(tp.len - 1));
+                let sp = ast.span(info.line, info.col, info.len);
+                err(ck, info.mod_idx, sp,
+                    format("the trait `{ck.syms.at(tr).name}` requires `{ck.syms.at(sup).name}`, but `{last}` does not implement it"),
+                    format("`{last}: {ck.syms.at(sup).name}` is required first"),
+                    format("add `impl {ck.syms.at(sup).name} for {last} {{ ... }}`"), "");
+            }
+        }
+    }
+}
+
+// the first phases of `Checker._run`
+pub fn run_decl(ck: *Checker) {
+    let n = ck.ld.order.len;
+    for oi in 0..n {
+        let mi = *ck.ld.order.at(oi);
+        declare(ck, mi);
+        let name = String.from(ck.ld.mods.at(mi).name);
+        let is_std = ck.ld.mods.at(mi).is_std;
+        if name == "std.list" && is_std && !ck.nostd {
+            let s = lookup_sym(ck, mi, "List");
+            if s >= 0 { ck.prelude_types.push(NameSym { name: String.from("List"), sym: s }); }
+        }
+        if name == "std.iter" && is_std && !ck.nostd {
+            let names = ["Iter", "Pair", "Indexed"];
+            for q in 0..3 {
+                let s = lookup_sym(ck, mi, names[q]);
+                if s >= 0 { ck.prelude_types.push(NameSym { name: String.from(names[q]), sym: s }); }
+            }
+        }
+        if name == "std.fmt" && is_std && !ck.nostd {
+            let s = lookup_sym(ck, mi, "Display");
+            if s >= 0 { ck.prelude_traits.push(NameSym { name: String.from("Display"), sym: s }); }
+        }
+    }
+    for oi in 0..n { resolve_bounds(ck, *ck.ld.order.at(oi)); }
+    check_trait_impls(ck);
+}

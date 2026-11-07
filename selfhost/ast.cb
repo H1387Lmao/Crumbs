@@ -49,6 +49,16 @@ impl Node {
         let a = Attr { name: String.from(name), v: v };
         self.attrs.push(a);
     }
+    // replaces the attribute if it exists (Python's `node.name = value`)
+    pub fn set(mut self, name: str, v: Val) {
+        for i in 0..self.attrs.len {
+            if self.attrs.at(i).name == name {
+                self.attrs.at(i).v = v;
+                return;
+            }
+        }
+        self.put(name, v);
+    }
     pub fn put_str(mut self, name: str, s: str) { self.put(name, v_str(s)); }
     pub fn put_int(mut self, name: str, i: i64) { self.put(name, v_int(i)); }
     pub fn put_bool(mut self, name: str, b: bool) { self.put(name, v_bool(b)); }
@@ -77,6 +87,22 @@ impl Node {
     pub fn str_of(self, name: str) -> str { return self.get(name).s; }
     pub fn node_of(self, name: str) -> *Node { return self.get(name).node.at(0); }
     pub fn is_none(self, name: str) -> bool { return self.get(name).tag == 0; }
+}
+
+pub fn clone_val(v: *Val) -> Val {
+    let mut out = Val { tag: v.tag, i: v.i, s: String.from(v.s), node: List.new(), items: List.new(), span: v.span };
+    for i in 0..v.node.len { out.node.push(clone_node(v.node.at(i))); }
+    for i in 0..v.items.len { out.items.push(clone_val(v.items.at(i))); }
+    return out;
+}
+
+pub fn clone_node(n: *Node) -> Node {
+    let mut out = Node { kind: String.from(n.kind), span: n.span, attrs: List.new() };
+    for i in 0..n.attrs.len {
+        let a = n.attrs.at(i);
+        out.attrs.push(Attr { name: String.from(a.name), v: clone_val(&a.v) });
+    }
+    return out;
 }
 
 // ---- dumping (the format of tools/astdump.py) --------------------------------------------------
@@ -147,6 +173,7 @@ pub fn dump_node(out: *String, n: *Node) {
     let mut first = true;
     for k in 0..order.len {
         let a = n.attrs.at(*order.at(k));
+        if a.name == "tok_lo" || a.name == "tok_hi" { continue; }     // bookkeeping the Python tree keeps as tokens
         if !first { out.push(','); }
         first = false;
         out.append(a.name);
