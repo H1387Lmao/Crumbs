@@ -64,6 +64,7 @@ fn main() -> void! {
     sema.finalize_impls(&ck);
     for oi in 0..ck.ld.order.len {
         let mi = *ck.ld.order.at(oi);
+        if ck.ld.mods.at(mi).path.contains("/std/") { continue; }
         println("module {ck.ld.mods.at(mi).name}");
         for q in 0..ck.cmods.at(mi).items.len {
             let id = *ck.cmods.at(mi).items.at(q);
@@ -73,9 +74,11 @@ fn main() -> void! {
     }
     for i in 0..n_loader {
         let e = ck.ld.d.items.at(i);
+        if e.file.contains("/std/") { continue; }
         println("{e.level} {e.file}:{e.line}:{e.col} {e.msg}");
     }
     for e in ck.d.items {
+        if e.file.contains("/std/") { continue; }
         println("{e.level} {e.file}:{e.line}:{e.col}+{e.len} {e.msg} || {e.label} || {e.help} || {e.note}");
     }
 }

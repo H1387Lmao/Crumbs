@@ -8,6 +8,7 @@ import loader;
 import parser;
 import types;
 import creserved;
+import fmtspec;
 
 // ---- data model -------------------------------------------------------------------------------------
 
@@ -144,6 +145,7 @@ pub struct Checker {
     entry_mod: i64,
     opt_consumed: List<i64>,
     impl_recs: List<ImplRec>,
+    gc_mode: String,
     recv_wrap: bool,
 }
 
@@ -157,7 +159,7 @@ pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
         nc: false, nc_mi: 0, nc_span: ast.span(0, 0, 1), nc_msg: String.empty(),
         locals: List.new(), scopes: List.new(), moved: List.new(), has_fn: false, fn_sym: -1, fn_ret: types.VOID, fn_names: List.new(),
         fn_loops: 0, fn_rdepth: 0, loop_stack: List.new(), reinit_line: 0, reinit_col: 0, glue: List.new(), glue_busy: List.new(),
-        strict: false, entry_name: String.from("main"), opt_consumed: List.new(), impl_recs: List.new(), recv_wrap: false, main_sym: -1, entry_mod: ld.order.len > 0 ? *ld.order.at(ld.order.len - 1) : 0,
+        strict: false, entry_name: String.from("main"), opt_consumed: List.new(), impl_recs: List.new(), gc_mode: String.from("auto"), recv_wrap: false, main_sym: -1, entry_mod: ld.order.len > 0 ? *ld.order.at(ld.order.len - 1) : 0,
     };
     // move every module's items into the node arena; syms and later phases refer to them by index
     for mi in 0..ld.mods.len {
@@ -2597,6 +2599,7 @@ pub fn check(ck: *Checker, e: *ast.Node, exp: i64, eu: bool) -> i64 {
     else if k == "ArrayLit" { t = ex_arraylit(ck, e, hint); }
     else if k == "ArrayRepeat" { t = ex_arrayrepeat(ck, e, hint); }
     else if k == "Ternary" { t = ex_ternary(ck, e, hint); }
+    else if k == "FStr" { t = ex_fstr(ck, e); }
     else if k == "NamedArg" {
         here(ck, e.span, "named arguments only work when calling a function that is declared with `fn`", "not allowed here",
              "pass the value positionally");
@@ -3469,7 +3472,7 @@ fn ex_call_inner(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     let c = e.node_of("callee");
     let mi = ck.cur_mod;
     if c.kind == "Ident" && is_builtin_name(c.str_of("name")) && lookup_local(ck, c.str_of("name")) < 0 {
-        return unimpl(ck, e, "builtin calls");
+        return builtin(ck, e, String.from(c.str_of("name")));
     }
     let mut ent = Ent { kind: 0, idx: -1 };
     if c.kind == "Ident" || c.kind == "Field" { ent = entity(ck, c); }
@@ -3604,7 +3607,8 @@ fn st_let(ck: *Checker, s: *ast.Node) {
     let ann = has_ann ? resolve_type(ck, s.node_of("tyn"), ck.cur_mod, false) : -1;
     let init = s.node_of("init");
     let mut t = check(ck, init, ann, false);
-    set_flag(s, "afree", false);
+    let is_alloc = init.kind == "Call" && init.has("builtin") && init.str_of("builtin") == "alloc" && t != types.POISON;
+    set_flag(s, "afree", is_alloc && !has_glue(ck, init.get("elem").i));
     if has_ann && ann == types.STR && t == types.STRING {
         set_flag(init, "coerce", true);
         t = types.STR;
@@ -4425,4 +4429,610 @@ pub fn finalize_impls(ck: *Checker) {
             orig.set("body", ast.v_node(body));
         }
     }
+}
+
+// ---- builtins and format strings --------------------------------------------------------------------------------------------------
+
+fn display_help(ck: *Checker, t: i64) -> String {
+    let k = tk(ck, t);
+    if k == types.K_OPT { return String.from("unwrap it first (`x ?? default`, `x.unwrap()`), or show it with `{x:?}`"); }
+    if k == types.K_STRUCT || k == types.K_ENUM || k == types.K_ARR || k == types.K_SLICE {
+        return String.from("implement `Display` for it (`impl Display for T { fn to_string(self) -> String { .. } }`), or use `{x:?}` for the automatic representation");
+    }
+    return String.empty();
+}
+
+// can the automatic `{:?}` representation show a value of type `t`? Returns the offending type (-1 for none)
+fn debuggable(ck: *Checker, t: i64, seen: *List<String>) -> i64 {
+    let k = tk(ck, t);
+    if t == types.POISON || types.is_numeric(t) || t == types.BOOL || t == types.STR || t == types.STRING || t == types.ERR
+        || k == types.K_ENUM || k == types.K_PTR || k == types.K_FN { return -1; }
+    if k == types.K_ARR || k == types.K_SLICE || k == types.K_OPT { return debuggable(ck, ck.types.tys.at(t).inner, seen); }
+    if k == types.K_STRUCT {
+        let sid = ck.types.tys.at(t).sym;
+        let full = String.from(ck.syms.at(sid).full);
+        if has_name(seen, full) { return -1; }
+        seen.push(full);
+        for i in 0..ck.syms.at(sid).fields.len {
+            let bad = debuggable(ck, ck.syms.at(sid).fields.at(i).ty, seen);
+            if bad >= 0 { return bad; }
+        }
+        return -1;
+    }
+    return t;
+}
+
+// the `to_string` method of `impl Display for T` (-1 if none)
+fn display_impl(ck: *Checker, t: i64) -> i64 {
+    let tr = lookup_named(&ck.prelude_traits, "Display");
+    let k = tk(ck, t);
+    if tr < 0 || (k != types.K_STRUCT && k != types.K_ENUM) { return -1; }
+    let key = type_key(ck, t);
+    if find_timpl(ck, ck.syms.at(tr).full, key) < 0 { return -1; }
+    return meth_find(ck, key, "to_string");
+}
+
+fn new_call_node(sp: ast.Span, callee: ast.Node) -> ast.Node {
+    let mut c = ast.new_node("Call", sp);
+    c.set("callee", ast.v_node(callee));
+    c.set("args", ast.v_list(List.new()));
+    c.set("targ", ast.v_none());
+    c.set("targs", ast.v_list(List.new()));
+    return c;
+}
+
+// `e.to_string()` as a checked call node when the type of `e` implements Display
+fn display_call(ck: *Checker, e: *ast.Node, t: i64, out: *ast.Node) -> bool {
+    if display_impl(ck, t) < 0 { return false; }
+    let mut f = ast.new_node("Field", e.span);
+    f.set("obj", ast.v_node(ast.clone_node(e)));
+    f.set("name", ast.v_str("to_string"));
+    f.set("name_span", ast.v_span(e.span));
+    let mut call = new_call_node(e.span, f);
+    call.set("disp_src", ast.v_node(ast.clone_node(e)));
+    let ty = check(ck, &call, -1, false);
+    if ty == types.POISON { return false; }
+    *out = call;
+    return true;
+}
+
+fn is_simple_arg(k: str) -> bool { return k == "Ident" || k == "Int" || k == "Float" || k == "Str" || k == "Bool" || k == "Field"; }
+
+fn fix_spans_val(v: *ast.Val, sp: ast.Span) {
+    if v.tag == 4 { fix_spans(v.node.at(0), sp); }
+    else if v.tag == 5 || v.tag == 9 { for i in 0..v.items.len { fix_spans_val(v.items.at(i), sp); } }
+}
+
+fn fix_spans(n: *ast.Node, sp: ast.Span) {
+    n.span = sp;
+    for i in 0..n.attrs.len {
+        let nm: str = n.attrs.at(i).name;
+        if nm.ends_with("span") { n.attrs.at(i).v = ast.v_span(sp); }
+        else { fix_spans_val(&n.attrs.at(i).v, sp); }
+    }
+}
+
+// parses the expression written inside `{...}`; false after an error
+fn parse_fmt_expr(ck: *Checker, text: str, at: *ast.Node, out: *ast.Node) -> bool {
+    let mut ex = ast.new_node("tmp", at.span);
+    let mut msg = String.empty();
+    if !parser.parse_expr_text(text, &ex, &msg) {
+        here(ck, at.span, format("`{{{text}}}` is not a valid placeholder"), "in this format string",
+             format("the expression did not parse ({msg}); placeholders hold nothing, a number, or an expression: `{{}}`, `{{0}}`, `{{a + b}}`"));
+        return false;
+    }
+    fix_spans(&ex, at.span);
+    *out = ex;
+    return true;
+}
+
+fn arg_expr(a: *ast.Node) -> *ast.Node { return a.kind == "NamedArg" ? a.node_of("expr") : a; }
+
+// the template literal becomes an FStr node; false after an error
+fn fmt_args(ck: *Checker, e: *ast.Node, name: str) -> bool {
+    let tidx = name == "assert" ? 1 : 0;
+    let nargs = e.get("args").items.len;
+    if nargs <= tidx { return true; }
+    let t = child(e.get("args"), tidx);
+    if t.kind == "FStr" { return true; }
+    if t.kind != "Str" {
+        if name == "format" {
+            here(ck, t.span, "the first argument of `format` must be a string literal", "expected a literal",
+                 "the literal is the template: `format(\"{} of {}\", a, b)`");
+            return false;
+        }
+        return true;
+    }
+    let tv: str = t.get("value").s;
+    if name != "format" && !tv.contains("{") && !tv.contains("}") { return true; }
+    let mut items: List<fmtspec.Piece> = List.new();
+    let mut se = fmtspec.SpecError { msg: String.empty(), help: String.empty(), has_help: false };
+    let mut bad = false;
+    try {
+        try fmtspec.parse_template(tv, &items, &se);
+    } catch {
+        bad = true;
+    }
+    if bad {
+        here(ck, t.span, se.msg, "in this format string", se_help(&se));
+        return false;
+    }
+    let mut pos: List<i64> = List.new();          // indices into e.args
+    let mut named_names: List<String> = List.new();
+    let mut named_idx: List<i64> = List.new();
+    let mut ok = true;
+    let mut seen_named = false;
+    for ai in tidx + 1..nargs {
+        let a = child(e.get("args"), ai);
+        if a.kind == "NamedArg" {
+            seen_named = true;
+            let an = String.from(a.str_of("name"));
+            let mut at = -1 as i64;
+            for q in 0..named_names.len { if *named_names.at(q) == an { at = q; } }
+            if at >= 0 {
+                here(ck, a.get("name_span").span, format("the argument `{an}` is given twice"), "", "");
+                ok = false;
+                *named_idx.at(at) = ai;
+            } else {
+                named_names.push(an);
+                named_idx.push(ai);
+            }
+        } else if seen_named {
+            here(ck, a.span, "a positional argument cannot follow a named argument", "", "put the `name = value` arguments last");
+            ok = false;
+        } else {
+            pos.push(ai);
+        }
+    }
+    if !ok { return false; }
+    let mut pos_uses: List<i64> = List.new();
+    for i in 0..pos.len { pos_uses.push(0); }
+    let mut named_uses: List<i64> = List.new();
+    for i in 0..named_names.len { named_uses.push(0); }
+    let mut parts: List<ast.Val> = List.new();
+    let mut nxt = 0 as i64;
+    for q in 0..items.len {
+        let it = items.at(q);
+        if !it.is_arg {
+            let mut p = ast.new_node("FPart", t.span);
+            p.set("lit", ast.v_bytes(it.lit));
+            p.set("expr", ast.v_none());
+            p.set("spec", ast.v_str(""));
+            p.set("spec_span", ast.v_none());
+            parts.push(ast.v_node(p));
+            continue;
+        }
+        let mut ex = ast.new_node("tmp", t.span);
+        let mut rk = it.ref_kind;
+        let mut ri = it.ref_int;
+        if rk == 0 { rk = 1; ri = nxt; nxt += 1; }
+        if rk == 1 {
+            if ri >= pos.len {
+                let np = pos.len;
+                let was = np == 1 ? "was" : "were";
+                here(ck, t.span, format("the format string uses argument {ri} but only {np} {was} given"), "in this format string",
+                     np == 0 ? "add the value after the string, or name it: `{total}` with `total = ...`" : "");
+                return false;
+            }
+            ex = ast.clone_node(child(e.get("args"), *pos.at(ri)));
+            *pos_uses.at(ri) = *pos_uses.at(ri) + 1;
+        } else if rk == 3 {
+            if !parse_fmt_expr(ck, it.ref_text, t, &ex) { return false; }
+        } else {
+            let mut ni = -1 as i64;
+            for z in 0..named_names.len { if *named_names.at(z) == it.ref_text { ni = z; } }
+            if ni >= 0 {
+                ex = ast.clone_node(child(e.get("args"), *named_idx.at(ni)).node_of("expr"));
+                *named_uses.at(ni) = *named_uses.at(ni) + 1;
+            } else {
+                let segs = split_dots(it.ref_text);
+                let mut cur = ast.new_node("Ident", t.span);
+                cur.set("name", ast.v_str(*segs.at(0)));
+                for z in 1..segs.len {
+                    let mut f = ast.new_node("Field", t.span);
+                    f.set("obj", ast.v_node(cur));
+                    f.set("name", ast.v_str(*segs.at(z)));
+                    f.set("name_span", ast.v_span(t.span));
+                    cur = f;
+                }
+                ex = cur;
+            }
+        }
+        let mut part = ast.new_node("FPart", t.span);
+        part.set("lit", ast.v_none());
+        part.set("expr", ast.v_node(ex));
+        part.set("spec", ast.v_str(it.spec));
+        part.set("spec_span", ast.v_span(t.span));
+        parts.push(ast.v_node(part));
+    }
+    for i in 0..pos.len {
+        let a = child(e.get("args"), *pos.at(i));
+        if *pos_uses.at(i) == 0 {
+            here(ck, a.span, "this argument is never used by the format string", "unused argument", "add a `{}` for it");
+            ok = false;
+        } else if *pos_uses.at(i) > 1 && !is_simple_arg(a.kind) {
+            here(ck, a.span, "an argument used more than once must be a simple value", "", "bind it to a variable first, then use `{name}`");
+            ok = false;
+        }
+    }
+    for i in 0..named_names.len {
+        let a = child(e.get("args"), *named_idx.at(i));
+        let an = String.from(*named_names.at(i));
+        if *named_uses.at(i) == 0 {
+            here(ck, a.get("name_span").span, format("the argument `{an}` is never used by the format string"), "unused argument",
+                 format("add `{{{an}}}` to the string"));
+            ok = false;
+        } else if *named_uses.at(i) > 1 && !is_simple_arg(a.node_of("expr").kind) {
+            here(ck, a.node_of("expr").span, "an argument used more than once must be a simple value", "", "bind it to a variable first, then use `{name}`");
+            ok = false;
+        }
+    }
+    if !ok { return false; }
+    let mut fs = ast.new_node("FStr", t.span);
+    fs.set("parts", ast.v_list(parts));
+    let mut out: List<ast.Val> = List.new();
+    for i in 0..tidx { out.push(ast.clone_val(e.get("args").items.at(i))); }
+    out.push(ast.v_node(fs));
+    e.set("args", ast.v_list(out));
+    return true;
+}
+
+fn split_dots(s: str) -> List<String> {
+    let mut o: List<String> = List.new();
+    let mut cur = String.empty();
+    for i in 0..s.len {
+        if s[i] == '.' { o.push(cur); cur = String.empty(); } else { cur.push(s[i]); }
+    }
+    o.push(cur);
+    return o;
+}
+
+fn se_help(se: *fmtspec.SpecError) -> String { return se.has_help ? String.from(se.help) : String.empty(); }
+fn ck_help(c: *fmtspec.Checked) -> String { return c.has_help ? String.from(c.help) : String.empty(); }
+
+fn spec_text(s: *fmtspec.Spec) -> String {
+    let alt = s.alt ? 1 : 0;
+    let zero = s.zero ? 1 : 0;
+    return format("Spec({s.fill},{s.align},{s.sign},{alt},{zero},{s.width},{s.group},{s.prec},{s.ty})");
+}
+
+fn ann_raw(s: String) -> ast.Val { let mut v = ast.v_str(""); v.tag = 14; v.s = s; return v; }
+
+fn fpart(ck: *Checker, part: *ast.Node) {
+    set_nil(part, "pspec");
+    set_nil(part, "mode");
+    let expr = part.node_of("expr");
+    let mut spec = fmtspec.new_spec();
+    let mut have_spec = false;
+    let stext = String.from(part.str_of("spec"));
+    let sp_span = (part.has("spec_span") && part.get("spec_span").tag == 6) ? part.get("spec_span").span : part.span;
+    if stext.len > 0 {
+        let mut se = fmtspec.SpecError { msg: String.empty(), help: String.empty(), has_help: false };
+        let mut bad = false;
+        try {
+            spec = try fmtspec.parse_spec(stext, &se);
+        } catch {
+            bad = true;
+        }
+        if bad { here(ck, sp_span, se.msg, "in this format spec", se_help(&se)); }
+        else { have_spec = true; }
+    }
+    let t = check(ck, expr, -1, false);
+    if t == types.POISON { return; }
+    if tk(ck, t) == types.K_EU {
+        let ts = ty_str(ck, t);
+        here(ck, expr.span, format("cannot interpolate a value of type `{ts}`"), "has a possible error", "handle the error first with `try` or `catch`");
+        return;
+    }
+    if !have_spec { spec = fmtspec.new_spec(); }
+    part.set("pspec", ann_raw(spec_text(&spec)));
+    let debug = spec.ty == "?";
+    let mut kind = "other";
+    let mut mode = "";
+    if debug {
+        let mut seen: List<String> = List.new();
+        let bad = debuggable(ck, t, &seen);
+        if bad >= 0 {
+            let bs = ty_str(ck, bad);
+            here(ck, expr.span, format("cannot show a value of type `{bs}` with `:?`"), "",
+                 "the automatic representation covers numbers, text, enums, pointers, arrays, slices and structs of those");
+            return;
+        }
+        mode = "debug";
+    } else {
+        let mut shown = ast.new_node("tmp", expr.span);
+        let tk0 = tk(ck, t);
+        if display_call(ck, expr, t, &shown) {
+            part.set("src", ast.v_node(ast.clone_node(shown.node_of("callee").node_of("obj"))));
+            part.set("expr", ast.v_node(shown));
+            mode = "text";
+            kind = "text";
+            part.set("mode", ast.v_str(mode));
+            let mut msg = fmtspec.check_for(&spec, kind);
+            if !msg.ok { here(ck, sp_span, msg.msg, "in this format spec", ck_help(&msg)); }
+            return;
+        }
+        if types.is_int(t) { mode = "int"; kind = "int"; }
+        else if types.is_float(t) { mode = "float"; kind = "float"; }
+        else if t == types.BOOL { mode = "bool"; kind = "bool"; }
+        else if t == types.STR || t == types.STRING || t == types.ERR { mode = "text"; kind = "text"; }
+        else if tk0 == types.K_ENUM { mode = "enum"; kind = "enum"; }
+        else if tk0 == types.K_PTR || tk0 == types.K_FN { mode = "ptr"; kind = "ptr"; }
+        else {
+            let ts = ty_str(ck, t);
+            here(ck, expr.span, format("cannot interpolate a value of type `{ts}`"), "no text representation", display_help(ck, t));
+            return;
+        }
+    }
+    part.set("mode", ast.v_str(mode));
+    part.set("src", ast.v_node(ast.clone_node(part.node_of("expr"))));
+    if !debug {
+        let mut msg = fmtspec.check_for(&spec, kind);
+        if !msg.ok { here(ck, sp_span, msg.msg, "in this format spec", ck_help(&msg)); }
+    }
+}
+
+fn ex_fstr(ck: *Checker, e: *ast.Node) -> i64 {
+    if ck.nostd { need_std(ck, ck.cur_mod, e.span, "string interpolation"); }
+    let n = e.get("parts").items.len;
+    for i in 0..n {
+        let part = child(e.get("parts"), i);
+        if part.get("expr").tag == 0 { continue; }
+        if part.has("src") { part.set("expr", ast.v_node(ast.clone_node(part.node_of("src")))); }
+        fpart(ck, part);
+        if !part.has("src") { part.set("src", ast.v_node(ast.clone_node(part.node_of("expr")))); }
+    }
+    return types.STR;
+}
+
+fn replace_arg(e: *ast.Node, i: i64, n: ast.Node) { *e.get("args").items.at(i) = ast.v_node(n); }
+
+fn arity(ck: *Checker, e: *ast.Node, name: str, nmin: i64, nmax: i64) -> bool {
+    let n = e.get("args").items.len;
+    if n < nmin || n > nmax {
+        let want = nmin == nmax ? format("{nmin}") : format("{nmin} to {nmax}");
+        here(ck, e.span, format("`{name}` takes {want} argument(s) but {n} were supplied"), "", "");
+        check_all_args(ck, e);
+        return false;
+    }
+    return true;
+}
+
+fn is_printable(ck: *Checker, t: i64) -> bool {
+    let k = tk(ck, t);
+    return types.is_numeric(t) || t == types.BOOL || t == types.STR || t == types.STRING || t == types.ERR
+        || k == types.K_ENUM || k == types.K_PTR || k == types.K_FN;
+}
+
+fn nostd_banned(n: str) -> bool {
+    let names = ["print", "println", "alloc", "free", "exit", "to_str", "string_new", "string_from", "string_clear", "cstr", "format",
+                 "gc_collect", "gc_bytes", "gc_collections", "alloc_in", "gc_collect_gen", "gc_gen_bytes", "gc_gen_collections"];
+    for i in 0..18 { if names[i] == n { return true; } }
+    return false;
+}
+
+fn builtin(ck: *Checker, e: *ast.Node, name: String) -> i64 {
+    e.set("builtin", ast.v_str(name));
+    let mi = ck.cur_mod;
+    if ck.nostd && nostd_banned(name) {
+        need_std(ck, mi, e.span, format("`{name}`"));
+        check_all_args(ck, e);
+        return types.POISON;
+    }
+    if name == "gc_collect_gen" && ck.gc_mode != "manual" {
+        let why = ck.gc_mode == "off" ? String.from("the collector is off (`--no-gc`)") : format("this build uses `--gc-mode={ck.gc_mode}`");
+        here_n(ck, e.span, "`gc_collect_gen` needs the manual collector mode", "not available in this build",
+               "build with `--gc-mode=manual` (cookie: `gc_mode = \"manual\"`) to decide yourself when each generation is collected; `gc_collect()` works in every mode", why);
+        check_all_args(ck, e);
+        return types.POISON;
+    }
+    if name == "print" || name == "println" || name == "format" || name == "panic" || name == "assert" {
+        if !fmt_args(ck, e, name) {
+            for i in 0..e.get("args").items.len { check(ck, arg_expr(child(e.get("args"), i)), -1, false); }
+            return types.POISON;
+        }
+    }
+    let na = e.get("args").items.len;
+    if name == "format" {
+        if na == 0 {
+            here(ck, e.span, "`format` takes a format string: `format(\"{} items\", n)`", "", "");
+            return types.POISON;
+        }
+        check(ck, child(e.get("args"), 0), -1, false);
+        return types.STRING;
+    }
+    if name == "print" || name == "println" {
+        for i in 0..na {
+            let a = child(e.get("args"), i);
+            let t = check(ck, a, -1, false);
+            if t == types.POISON { continue; }
+            let mut shown = ast.new_node("tmp", a.span);
+            if display_call(ck, a, t, &shown) { replace_arg(e, i, shown); continue; }
+            if !is_printable(ck, t) {
+                let ts = ty_str(ck, t);
+                here(ck, a.span, format("cannot print a value of type `{ts}`"), "", display_help(ck, t));
+            }
+        }
+        return types.VOID;
+    }
+    if name == "string_new" { arity(ck, e, name, 0, 0); return types.STRING; }
+    if name == "string_from" {
+        if arity(ck, e, name, 1, 1) { expect(ck, child(e.get("args"), 0), types.STR, false); }
+        return types.STRING;
+    }
+    if name == "string_clear" {
+        if arity(ck, e, name, 1, 1) {
+            let a = child(e.get("args"), 0);
+            let t = check(ck, a, -1, false);
+            if t != types.POISON && !types.eq(&ck.types, t, types.ptr(&ck.types, types.STRING, false)) {
+                let ts = ty_str(ck, t);
+                here(ck, a.span, format("`string_clear` expects `*String`, found `{ts}`"), "", "pass `&s` (declared `let mut`)");
+            }
+        }
+        return types.VOID;
+    }
+    if name == "to_str" {
+        if arity(ck, e, name, 1, 1) {
+            let a = child(e.get("args"), 0);
+            let t = check(ck, a, -1, false);
+            let mut shown = ast.new_node("tmp", a.span);
+            let got = t != types.POISON && display_call(ck, a, t, &shown);
+            if got {
+                set_flag(&shown, "owned", true);
+                replace_arg(e, 0, shown);
+            } else if t != types.POISON && !(types.is_numeric(t) || t == types.BOOL || t == types.STR || t == types.STRING || t == types.ERR || tk(ck, t) == types.K_ENUM) {
+                let ts = ty_str(ck, t);
+                here(ck, a.span, format("cannot convert a value of type `{ts}` to `str`"), "", display_help(ck, t));
+            }
+        }
+        return types.STR;
+    }
+    if name == "panic" {
+        if arity(ck, e, name, 1, 1) { expect(ck, child(e.get("args"), 0), types.STR, false); }
+        return types.VOID;
+    }
+    if name == "assert" {
+        if arity(ck, e, name, 1, 2) {
+            expect(ck, child(e.get("args"), 0), types.BOOL, false);
+            if e.get("args").items.len == 2 { expect(ck, child(e.get("args"), 1), types.STR, false); }
+        }
+        return types.VOID;
+    }
+    if name == "exit" {
+        if arity(ck, e, name, 1, 1) { expect(ck, child(e.get("args"), 0), types.I32, false); }
+        return types.VOID;
+    }
+    if name == "alloc" {
+        let t = resolve_type(ck, e.node_of("targ"), mi, false);
+        if na != 1 {
+            here(ck, e.span, "`alloc` takes a type and a count: `alloc(T, n)`", "", "");
+            check_all_args(ck, e);
+            return types.POISON;
+        }
+        let a0 = child(e.get("args"), 0);
+        let nt = check(ck, a0, untyped(ck, a0) ? types.I64 : -1, false);
+        if nt != types.POISON && !types.is_int(nt) {
+            let ns = ty_str(ck, nt);
+            here(ck, a0.span, format("allocation count must be an integer, found `{ns}`"), "", "");
+        }
+        set_tyn(e, "elem", t);
+        return t == types.POISON ? types.POISON : types.slc(&ck.types, t);
+    }
+    if name == "alloc_in" { return unimpl(ck, e, "`alloc_in` (regions)"); }
+    if name == "gc_collections" || name == "gc_bytes" { arity(ck, e, name, 0, 0); return types.I64; }
+    if name == "gc_collect" { arity(ck, e, name, 0, 0); return types.VOID; }
+    if name == "gc_collect_gen" || name == "gc_gen_bytes" || name == "gc_gen_collections" {
+        if arity(ck, e, name, 1, 1) { expect(ck, child(e.get("args"), 0), types.I64, false); }
+        return name == "gc_collect_gen" ? types.VOID : types.I64;
+    }
+    if name == "cstr" {
+        if arity(ck, e, name, 1, 1) {
+            let a = child(e.get("args"), 0);
+            let t = check(ck, a, -1, false);
+            if t != types.POISON && t != types.STR && t != types.STRING {
+                let ts = ty_str(ck, t);
+                here(ck, a.span, format("`cstr` expects a `str` or `String`, found `{ts}`"), "", "");
+            }
+        }
+        return types.ptr(&ck.types, types.U8, false);
+    }
+    if name == "from_cstr" {
+        if arity(ck, e, name, 1, 1) {
+            let a = child(e.get("args"), 0);
+            let t = check(ck, a, -1, false);
+            if t != types.POISON && !(tk(ck, t) == types.K_PTR && (ck.types.tys.at(t).inner == types.U8 || ck.types.tys.at(t).inner == types.I8)) {
+                let ts = ty_str(ck, t);
+                here(ck, a.span, format("`from_cstr` expects a `*u8` (a NUL-terminated C string), found `{ts}`"), "", "cast other pointers first: `p as *u8`");
+            }
+        }
+        return types.STR;
+    }
+    if name == "slice_of" {
+        if arity(ck, e, name, 2, 2) {
+            let a0 = child(e.get("args"), 0);
+            let a1 = child(e.get("args"), 1);
+            let pt = check(ck, a0, -1, false);
+            let nt = check(ck, a1, untyped(ck, a1) ? types.I64 : -1, false);
+            if nt != types.POISON && !types.is_int(nt) {
+                let ns = ty_str(ck, nt);
+                here(ck, a1.span, format("a slice length must be an integer, found `{ns}`"), "", "");
+            }
+            if pt == types.POISON { return types.POISON; }
+            if tk(ck, pt) != types.K_PTR || ck.types.tys.at(pt).inner == types.VOID {
+                let ps = ty_str(ck, pt);
+                here(ck, a0.span, format("`slice_of` expects a typed pointer, found `{ps}`"), "", "cast a `*void` first: `p as *T`");
+                return types.POISON;
+            }
+            return types.slc(&ck.types, ck.types.tys.at(pt).inner);
+        }
+        return types.POISON;
+    }
+    if name == "size_of" {
+        let t = resolve_type(ck, e.node_of("targ"), mi, false);
+        if t != types.POISON && !sized(ck, t, mi, e.node_of("targ").span) { return types.I64; }
+        set_tyn(e, "elem", t);
+        return types.I64;
+    }
+    if name == "drop" {
+        if arity(ck, e, name, 1, 1) {
+            let a = child(e.get("args"), 0);
+            check(ck, a, -1, false);
+            consume(ck, a);
+        }
+        return types.VOID;
+    }
+    if name == "drop_at" {
+        if arity(ck, e, name, 1, 1) {
+            let a = child(e.get("args"), 0);
+            let t = check(ck, a, -1, false);
+            if t != types.POISON && (tk(ck, t) != types.K_PTR || ck.types.tys.at(t).inner == types.VOID) {
+                let ts = ty_str(ck, t);
+                here(ck, a.span, format("`drop_at` expects a typed pointer, found `{ts}`"), "", "");
+            }
+        }
+        return types.VOID;
+    }
+    if name == "write_at" {
+        if arity(ck, e, name, 2, 2) {
+            let a0 = child(e.get("args"), 0);
+            let a1 = child(e.get("args"), 1);
+            let pt = check(ck, a0, -1, false);
+            if pt != types.POISON && (tk(ck, pt) != types.K_PTR || ck.types.tys.at(pt).inner == types.VOID) {
+                let ps = ty_str(ck, pt);
+                here(ck, a0.span, format("`write_at` expects a typed pointer, found `{ps}`"), "", "");
+                check(ck, a1, -1, false);
+            } else if pt == types.POISON {
+                check(ck, a1, -1, false);
+            } else {
+                expect(ck, a1, ck.types.tys.at(pt).inner, false);
+            }
+        }
+        return types.VOID;
+    }
+    if name == "read_at" {
+        if arity(ck, e, name, 1, 1) {
+            let a = child(e.get("args"), 0);
+            let t = check(ck, a, -1, false);
+            if t == types.POISON { return types.POISON; }
+            if tk(ck, t) != types.K_PTR || ck.types.tys.at(t).inner == types.VOID {
+                let ts = ty_str(ck, t);
+                here(ck, a.span, format("`read_at` expects a typed pointer, found `{ts}`"), "", "");
+                return types.POISON;
+            }
+            return ck.types.tys.at(t).inner;
+        }
+        return types.POISON;
+    }
+    // free
+    if arity(ck, e, name, 1, 1) {
+        let a = child(e.get("args"), 0);
+        let t = check(ck, a, -1, false);
+        if t != types.POISON && tk(ck, t) != types.K_SLICE && t != types.STRING {
+            let ts = ty_str(ck, t);
+            here(ck, a.span, format("`free` expects a slice or a `String`, found `{ts}`"), "", "");
+        } else if t == types.STRING {
+            consume(ck, a);
+        }
+    }
+    return types.VOID;
 }

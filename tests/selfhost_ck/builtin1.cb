@@ -1,0 +1,37 @@
+import std.mem;
+struct P { x: i64 }
+enum E { A, B }
+impl P { fn show(self) -> str { return "p"; } }
+fn main() {
+    let a = 5;
+    let b: i64 = 7;
+    let s = "hi";
+    let st = string_from("x");
+    println("plain");
+    println("a = {a} b = {b} s = {s}");
+    println("{} and {}", a, b);
+    println("{0} {1} {0}", a, b);
+    println("{x} {y}", x = a, y = b);
+    println("{a:>5} {b:08.2} {a:x} {a:#b} {s:?} {a + b}");
+    let f = format("{a}-{b}");
+    let g = format("{:>4}|{:<4}|", a, b);
+    let h = to_str(a);
+    let buf = alloc(i32, 10);
+    buf[0] = 1;
+    let n = size_of(i64);
+    let cs = cstr(s);
+    let fs = from_cstr(cs);
+    let sl = slice_of(cs, 3);
+    assert(a > 0);
+    assert(a > 0, "positive");
+    println(s, a, b, true, 2.5);
+    let e = E.A;
+    println("{e} {e:?}");
+    free(buf);
+    free(sl);
+    let p = P { x: 1 };
+    let xs = [1, 2];
+    println("{xs:?}");
+    println("{p:?}");
+    panic("bye");
+}

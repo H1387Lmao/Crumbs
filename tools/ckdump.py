@@ -10,8 +10,9 @@ from crumbsc.codegen import C_RESERVED
 from crumbsc.parser import N
 from crumbsc.types import Ty
 from crumbsc.checker import Sym
+from crumbsc.fmtspec import Spec
 
-SKIP = {"kind", "span", "toks", "eof", "src"}
+SKIP = {"kind", "span", "toks", "eof"}
 
 
 def esc(b, prefix=""):
@@ -46,6 +47,8 @@ def dump(v):
         return "f"
     if isinstance(v, Span):
         return sp(v)
+    if isinstance(v, Spec):
+        return f"Spec({v.fill},{v.align},{v.sign},{int(v.alt)},{int(v.zero)},{v.width},{v.group},{v.prec},{v.type})"
     if isinstance(v, Ty):
         return f"T({v})"
     if isinstance(v, Sym):
@@ -86,10 +89,14 @@ def main():
     except CompileError as e:
         print(f"fatal: {e}")
     for m in mods:
+        if "/std/" in m.path.replace("\\", "/"):
+            continue
         print(f"module {m.name}")
         for it in m.ast.items:
             print("item " + dump(it))
     for i, e in enumerate(d.items):
+        if "/std/" in e.span.src.path.replace("\\", "/"):
+            continue
         if i < n_loader:
             print(f"{e.level} {e.span.src.path}:{e.span.line}:{e.span.col} {e.msg}")
             continue

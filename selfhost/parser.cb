@@ -1865,3 +1865,39 @@ pub fn parse_default(text: str, lo: i64, hi: i64, impl_ty: *ast.Node, errors: *L
     for i in 0..p.lx.errors.len { errors.push(lexer.Diag { line: p.lx.errors.at(i).line, col: p.lx.errors.at(i).col, msg: String.from(p.lx.errors.at(i).msg) }); }
     return res;
 }
+
+// The expression written inside `{...}` of a format string. On a syntax error `msg` holds the first diagnostic and false is returned.
+pub fn parse_expr_text(text: str, out: *ast.Node, msg: *String) -> bool {
+    let mut lens: List<i64> = List.new();
+    let mut a = 0 as i64;
+    for i in 0..text.len + 1 {
+        if i == text.len || text[i] == '\n' {
+            lens.push(char_len(text, a, i));
+            a = i + 1;
+        }
+    }
+    let mut p = P { lx: lexer.LexResult { toks: List.new(), errors: List.new() }, p: 0, line_lens: lens, no_struct: false, impl_ty: List.new(),
+                    tb_names: List.new(), tb_vals: List.new(), undo: List.new(), undoing: false };
+    lexer.lex_into(text, &p.lx);
+    let mut res = ast.new_node("tmp", ast.span(1, 1, 1));
+    let mut threw = false;
+    try {
+        res = try parse_expr(&p);
+    } catch {
+        threw = true;
+    }
+    if p.lx.errors.len == 0 && !threw && tok(&p).kind != lexer.TK.Eof {
+        let sp = ts(tok(&p));
+        add_error(&p, sp.line, sp.col, "unexpected text after the expression");
+    }
+    if p.lx.errors.len > 0 {
+        *msg = String.from(p.lx.errors.at(0).msg);
+        return false;
+    }
+    if threw {
+        *msg = String.from("not a valid expression");
+        return false;
+    }
+    *out = res;
+    return true;
+}
