@@ -1,0 +1,49 @@
+const N: i64 = 10;
+const K: i32 = 3;
+enum Color { Red, Green }
+struct P { x: i64, y: i64 }
+fn add(a: i64, b: i64) -> i64 { return a + b * 2; }
+fn pick(c: Color) -> i32 {
+    if c == Color.Red { return 1; }
+    return 2;
+}
+fn loops(n: i32) -> i32 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < n {
+        s += i;
+        i++;
+        if s > 100 { break; }
+        if i == 3 { continue; }
+    }
+    loop { s -= 1; if s < 0 { break; } }
+    return s;
+}
+fn fp(f: fn(i64) -> i64, x: i64) -> i64 { return f(x); }
+fn dbl(x: i64) -> i64 { return x * 2; }
+fn main() {
+    let a = add(1, 2);
+    let b: i64 = 5;
+    let c = a + b;
+    let u: u8 = 200;
+    let w: i64 = u as i64 + c;
+    let f = 1.5;
+    let g: f32 = 2.0;
+    let h = f as f32 + g;
+    let bb = !(a > b) && c != 0;
+    let s = "hi";
+    let z = s == "hi";
+    let k: i32 = K + 1;
+    let p = pick(Color.Green);
+    let r = fp(dbl, 4);
+    let q = N;
+    let mut pp = 0;
+    pp += 3;
+    pp = pp << 2;
+    let t = -a;
+    let n = ~u;
+    let x = loops(p);
+    let y = (k as i64) * 2 + (x as i64);
+    let ptr = &pp;
+    let v = *ptr + 1;
+}

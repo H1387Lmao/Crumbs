@@ -1,0 +1,80 @@
+// Loads a program, runs the checker and prints the annotated syntax trees and diagnostics (the format of tools/ckdump.py).
+import std.env;
+import ast;
+import loader;
+import sema;
+
+fn ann_text(ck: *sema.Checker, v: *ast.Val) -> String {
+    if v.tag == 10 {
+        if v.i < 0 { return String.from("None"); }
+        return format("T({sema.ty_str(ck, v.i)})");
+    }
+    if v.tag == 11 { return format("S({ck.syms.at(v.i).full})"); }
+    let l = ck.locals.at(v.i);
+    return format("L({l.name}@{l.span.line}:{l.span.col})");
+}
+
+fn rewrite_val(ck: *sema.Checker, v: *ast.Val) {
+    if v.tag >= 10 && v.tag <= 12 {
+        let s = ann_text(ck, v);
+        v.s = s;
+        v.tag = 14;
+        return;
+    }
+    if v.tag == 4 { rewrite_node(ck, v.node.at(0)); }
+    if v.tag == 5 || v.tag == 9 { for i in 0..v.items.len { rewrite_val(ck, v.items.at(i)); } }
+}
+
+fn rewrite_node(ck: *sema.Checker, n: *ast.Node) {
+    for i in 0..n.attrs.len { rewrite_val(ck, &n.attrs.at(i).v); }
+}
+
+fn rewrite_id(ck: *sema.Checker, id: i64) { rewrite_node(ck, ck.nodes.at(id)); }
+
+fn dump_id(ck: *sema.Checker, id: i64) {
+    let mut out = String.from("item ");
+    ast.dump_node(&out, ck.nodes.at(id));
+    println("{out}");
+}
+
+fn main() -> void! {
+    let path = env.arg(1);
+    let mut std_dir = String.from("src/std");
+    let mut nostd = false;
+    for i in 2..env.arg_count() {
+        let a: str = env.arg(i);
+        if a == "--nostd" { nostd = true; }
+        if a.starts_with("--std=") { std_dir = String.from(a[6..a.len]); }
+    }
+    let mut ld = loader.new_loader(std_dir, nostd);
+    if nostd { ld.predefined.push(loader.Define { name: String.from("CB_NO_STDRUNTIME"), value: String.from("1"), undef: false }); }
+    let mut fatal = false;
+    try {
+        try loader.load_entry(&ld, path);
+    } catch {
+        println("fatal: {ld.fatal}");
+        fatal = true;
+    }
+    if fatal { return; }
+    let n_loader = ld.d.items.len;
+    let mut ck = sema.new_checker(&ld, nostd);
+    sema.run_decl(&ck);
+    sema.run_sigs(&ck);
+    sema.run_bodies(&ck);
+    for oi in 0..ck.ld.order.len {
+        let mi = *ck.ld.order.at(oi);
+        println("module {ck.ld.mods.at(mi).name}");
+        for q in 0..ck.cmods.at(mi).items.len {
+            let id = *ck.cmods.at(mi).items.at(q);
+            rewrite_id(&ck, id);
+            dump_id(&ck, id);
+        }
+    }
+    for i in 0..n_loader {
+        let e = ck.ld.d.items.at(i);
+        println("{e.level} {e.file}:{e.line}:{e.col} {e.msg}");
+    }
+    for e in ck.d.items {
+        println("{e.level} {e.file}:{e.line}:{e.col}+{e.len} {e.msg} || {e.label} || {e.help} || {e.note}");
+    }
+}

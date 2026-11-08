@@ -11,7 +11,7 @@ import preproc;
 error CompileErr;
 
 pub struct DirectiveRec { kind: String, value: String, line: i64, col: i64 }
-pub struct ImportRef { alias: String, mod_idx: i64, line: i64, col: i64 }
+pub struct ImportRef { alias: String, mod_idx: i64, line: i64, col: i64, len: i64 }
 pub struct Define { name: String, value: String, undef: bool }
 
 pub struct Module {
@@ -206,7 +206,7 @@ fn load(ld: *Loader, path: str, logical: str, stack: *List<i64>) -> i64! {
                            "use `import ... as other_name;` to disambiguate");
             continue;
         }
-        ld.mods.at(mi).imports.push(ImportRef { alias: alias, mod_idx: dep, line: aline, col: acol });
+        ld.mods.at(mi).imports.push(ImportRef { alias: alias, mod_idx: dep, line: aline, col: acol, len: alen });
     }
     ld.order.push(mi);
     return mi;

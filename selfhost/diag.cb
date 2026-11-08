@@ -1,9 +1,9 @@
 // Diagnostics for the stages after lexing (mirrors the part of src/crumbsc/diag.py the stages need).
 pub struct Diagnostic { level: String, file: String, line: i64, col: i64, len: i64, msg: String, label: String, help: String, note: String }
 
-pub struct Diags { items: List<Diagnostic>, file: String }
+pub struct Diags { items: List<Diagnostic>, file: String, context: String }
 
-pub fn new_diags() -> Diags { return Diags { items: List.new(), file: String.empty() }; }
+pub fn new_diags() -> Diags { return Diags { items: List.new(), file: String.empty(), context: String.empty() }; }
 
 impl Diags {
     fn dup(self, level: str, line: i64, col: i64, msg: str) -> bool {
@@ -14,15 +14,28 @@ impl Diags {
     }
     fn add(mut self, level: str, line: i64, col: i64, len: i64, msg: str, label: str, help: str, note: str) {
         if self.dup(level, line, col, msg) { return; }
+        let mut note2 = String.from(note);
+        if self.context.len > 0 {
+            if note2.len > 0 { note2.append(" ## "); }
+            note2.append(self.context);
+        }
         self.items.push(Diagnostic { level: String.from(level), file: String.from(self.file), line: line, col: col,
                                      len: len > 1 ? len : 1, msg: String.from(msg), label: String.from(label),
-                                     help: String.from(help), note: String.from(note) });
+                                     help: String.from(help), note: note2 });
     }
     pub fn add_error(mut self, line: i64, col: i64, len: i64, msg: str, label: str, help: str) {
         self.add("error", line, col, len, msg, label, help, "");
     }
     pub fn add_warn(mut self, line: i64, col: i64, len: i64, msg: str, label: str, help: str) {
         self.add("warning", line, col, len, msg, label, help, "");
+    }
+    pub fn add_warn_note(mut self, line: i64, col: i64, len: i64, msg: str, label: str, help: str, note: str) {
+        self.add("warning", line, col, len, msg, label, help, note);
+    }
+    pub fn error_count(self) -> i64 {
+        let mut n = 0 as i64;
+        for d in self.items { if d.level == "error" { n += 1; } }
+        return n;
     }
     pub fn add_error_note(mut self, line: i64, col: i64, len: i64, msg: str, label: str, help: str, note: str) {
         self.add("error", line, col, len, msg, label, help, note);

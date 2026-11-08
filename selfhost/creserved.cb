@@ -1,0 +1,22 @@
+// C identifiers that Crumbs names must not collide with (generated from src/crumbsc/codegen.py: C_RESERVED).
+
+pub fn is_c_reserved(s: str) -> bool {
+    let names = [
+        "EOF", "INFINITY", "INT_MAX", "INT_MIN", "M_PI", "NAN", "NULL", "SIZE_MAX", "_Bool", "_Complex",
+        "_Imaginary", "abort", "abs", "acos", "asin", "asm", "atan", "atan2", "atexit", "atof", "atoi",
+        "auto", "bool", "break", "calloc", "case", "ceil", "char", "clock", "const", "continue", "cos",
+        "default", "do", "double", "else", "enum", "errno", "exit", "exp", "extern", "fabs", "fabsf", "false",
+        "fclose", "fflush", "float", "floor", "fmod", "fopen", "for", "fprintf", "fputs", "fread", "free",
+        "fwrite", "gamma", "getchar", "getenv", "goto", "if", "index", "inline", "int", "int16_t", "int32_t",
+        "int64_t", "int8_t", "intptr_t", "isinf", "isnan", "j0", "j1", "labs", "llabs", "log", "log10",
+        "log2", "long", "main", "malloc", "memcmp", "memcpy", "memmove", "memset", "pow", "printf",
+        "ptrdiff_t", "putchar", "puts", "qsort", "rand", "realloc", "register", "restrict", "return",
+        "rindex", "round", "scanf", "short", "signal", "signed", "sin", "size_t", "sizeof", "snprintf",
+        "sprintf", "sqrt", "sqrtf", "srand", "static", "stderr", "stdin", "stdout", "strchr", "strcmp",
+        "strcpy", "strlen", "strncmp", "strstr", "strtod", "strtof", "strtol", "struct", "switch", "system",
+        "tan", "time", "true", "trunc", "typedef", "typeof", "uint16_t", "uint32_t", "uint64_t", "uint8_t",
+        "uintptr_t", "union", "unsigned", "void", "volatile", "while", "y0", "y1",
+    ];
+    for i in 0..144 { if names[i] == s { return true; } }
+    return false;
+}

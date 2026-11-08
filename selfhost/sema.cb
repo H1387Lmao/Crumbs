@@ -7,6 +7,7 @@ import lexer;
 import loader;
 import parser;
 import types;
+import creserved;
 
 // ---- data model -------------------------------------------------------------------------------------
 
@@ -16,6 +17,15 @@ pub struct BoundList { tp: String, traits: List<i64> }
 pub struct CVal { kind: i64, i: i64, s: String }     // kind: 0 int, 1 float (value not tracked), 2 bool, 3 bytes
 pub struct SField { name: String, ty: i64, span: ast.Span }
 pub struct NameTy { name: String, ty: i64 }
+
+pub struct Local {
+    name: String, ty: i64, is_mut: bool, cname: String, span: ast.Span, used: bool, is_param: bool, glue: bool,
+    rdepth: i64, id: i64, captured: bool, written: bool, region_handle: bool,
+}
+pub struct MovedEnt { local: i64, line: i64 }
+pub struct Scope { names: List<String>, ids: List<i64> }
+pub struct LoopFrame { breaks: List<List<MovedEnt>>, conts: List<List<MovedEnt>> }
+pub struct GlueEnt { key: String, v: bool }
 
 pub struct Sym {
     kind: String,                 // fn struct enum const error trait
@@ -58,7 +68,7 @@ pub struct Sym {
     drop_inst: i64,
 }
 
-pub struct CImp { alias: String, mod_idx: i64, node_line: i64, node_col: i64, used: bool }
+pub struct CImp { alias: String, mod_idx: i64, node_line: i64, node_col: i64, node_len: i64, used: bool }
 
 pub struct CMod {
     syms: map.HashMap<i64>,
@@ -113,6 +123,24 @@ pub struct Checker {
     nc_mi: i64,
     nc_span: ast.Span,
     nc_msg: String,
+    locals: List<Local>,
+    scopes: List<Scope>,
+    moved: List<MovedEnt>,
+    has_fn: bool,                 // a function body is being checked
+    fn_sym: i64,                  // its symbol (-1 outside functions)
+    fn_ret: i64,
+    fn_names: List<String>,
+    fn_loops: i64,
+    fn_rdepth: i64,
+    loop_stack: List<LoopFrame>,
+    reinit_line: i64,             // the identifier being re-assigned (0: none)
+    reinit_col: i64,
+    glue: List<GlueEnt>,
+    glue_busy: List<String>,
+    strict: bool,
+    entry_name: String,
+    main_sym: i64,
+    entry_mod: i64,
 }
 
 pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
@@ -123,6 +151,9 @@ pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
         prelude_traits: List.new(), bound_seen: List.new(),
         types: types.new_arena(), tenv: List.new(), cur_mod: 0, inst_cache: map.HashMap.new(), n_inst: 0, pending: List.new(),
         nc: false, nc_mi: 0, nc_span: ast.span(0, 0, 1), nc_msg: String.empty(),
+        locals: List.new(), scopes: List.new(), moved: List.new(), has_fn: false, fn_sym: -1, fn_ret: types.VOID, fn_names: List.new(),
+        fn_loops: 0, fn_rdepth: 0, loop_stack: List.new(), reinit_line: 0, reinit_col: 0, glue: List.new(), glue_busy: List.new(),
+        strict: false, entry_name: String.from("main"), main_sym: -1, entry_mod: ld.order.len > 0 ? *ld.order.at(ld.order.len - 1) : 0,
     };
     // move every module's items into the node arena; syms and later phases refer to them by index
     for mi in 0..ld.mods.len {
@@ -135,7 +166,7 @@ pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
         }
         for i in 0..ld.mods.at(mi).imports.len {
             let im = ld.mods.at(mi).imports.at(i);
-            cm.imports.push(CImp { alias: String.from(im.alias), mod_idx: im.mod_idx, node_line: im.line, node_col: im.col, used: false });
+            cm.imports.push(CImp { alias: String.from(im.alias), mod_idx: im.mod_idx, node_line: im.line, node_col: im.col, node_len: im.len, used: false });
         }
         ck.cmods.push(cm);
     }
@@ -356,6 +387,7 @@ fn declare_item(ck: *Checker, mi: i64, id: i64) {
             let nm = String.from(ck.nodes.at(id).get("names").items.at(k).items.at(0).s);
             let nsp = ck.nodes.at(id).get("names").items.at(k).items.at(1).span;
             let mut s = new_sym(ck, "error", nm, mi, id, is_pub);
+            s.ty = types.ERR;
             let sid = define(ck, mi, s, nsp);
             if sid >= 0 {
                 ck.errors.push(sid);
@@ -1947,4 +1979,1979 @@ pub fn check_struct_cycles(ck: *Checker) {
 pub fn run_sigs(ck: *Checker) {
     for oi in 0..ck.ld.order.len { resolve_sigs(ck, *ck.ld.order.at(oi)); }
     check_ffi(ck);
+}
+
+// =====================================================================================================================
+// ---- function bodies: expressions and statements -----------------------------------------------------------------
+// =====================================================================================================================
+
+pub struct Ent { kind: i64, idx: i64 }           // kind: 0 none, 1 module, 2 symbol, 3 bad
+
+fn warn(ck: *Checker, mi: i64, sp: ast.Span, msg: str, label: str, help: str, notes: str) {
+    ck.d.file = String.from(ck.ld.mods.at(mi).shown);
+    ck.d.add_warn_note(sp.line, sp.col, sp.len, msg, label, help, notes);
+}
+
+fn here(ck: *Checker, sp: ast.Span, msg: str, label: str, help: str) { err(ck, ck.cur_mod, sp, msg, label, help, ""); }
+fn here_n(ck: *Checker, sp: ast.Span, msg: str, label: str, help: str, notes: str) { err(ck, ck.cur_mod, sp, msg, label, help, notes); }
+fn warn_here(ck: *Checker, sp: ast.Span, msg: str, label: str, help: str) { warn(ck, ck.cur_mod, sp, msg, label, help, ""); }
+
+fn unimpl(ck: *Checker, e: *ast.Node, what: str) -> i64 {
+    here(ck, e.span, format("UNIMPLEMENTED in the Crumbs checker: {what}"), "", "");
+    return types.POISON;
+}
+
+fn is_arith(op: str) -> bool { return op == "+" || op == "-" || op == "*" || op == "/" || op == "%"; }
+fn is_bitwise(op: str) -> bool { return op == "&" || op == "|" || op == "^"; }
+fn is_shift(op: str) -> bool { return op == "<<" || op == ">>"; }
+fn is_cmp(op: str) -> bool { return op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">="; }
+
+// ---- annotations on nodes ----------------------------------------------------------------------------------------
+
+fn ety(e: *ast.Node) -> i64 { return e.has("ty") ? e.get("ty").i : -2; }
+fn set_ty(e: *ast.Node, t: i64) { e.set("ty", ast.v_tag(10, t)); }
+fn set_tyn(e: *ast.Node, name: str, t: i64) { e.set(name, ast.v_tag(10, t)); }
+fn set_flag(e: *ast.Node, name: str, b: bool) { e.set(name, ast.v_bool(b)); }
+fn set_nil(e: *ast.Node, name: str) { e.set(name, ast.v_none()); }
+fn flag(e: *ast.Node, name: str) -> bool { return e.has(name) && e.get(name).i != 0 && e.get(name).tag == 1; }
+fn is_set(e: *ast.Node, name: str) -> bool { return e.has(name) && e.get(name).tag != 0; }
+fn has_suffix(e: *ast.Node) -> bool { return e.has("suffix") && e.get("suffix").tag != 0; }
+
+fn int_text(e: *ast.Node) -> String {
+    let v = e.get("value");
+    if v.s.len > 0 { return String.from(v.s); }
+    return format("{v.i}");
+}
+
+fn int_is_zero(e: *ast.Node) -> bool { return e.kind == "Int" && e.get("value").s.len == 0 && e.get("value").i == 0; }
+
+// ---- integer ranges (as decimal text, so that u64 and i64 limits are exact) ----------------------------------------------
+
+fn lo_text(t: i64) -> str {
+    if !types.signed(t) { return "0"; }
+    let b = types.bits(t);
+    if b == 8 { return "-128"; }
+    if b == 16 { return "-32768"; }
+    if b == 32 { return "-2147483648"; }
+    return "-9223372036854775808";
+}
+
+fn hi_text(t: i64) -> str {
+    let b = types.bits(t);
+    if types.signed(t) {
+        if b == 8 { return "127"; }
+        if b == 16 { return "32767"; }
+        if b == 32 { return "2147483647"; }
+        return "9223372036854775807";
+    }
+    if b == 8 { return "255"; }
+    if b == 16 { return "65535"; }
+    if b == 32 { return "4294967295"; }
+    return "18446744073709551615";
+}
+
+// magnitude comparison of two non-negative decimal strings: -1, 0, 1
+fn cmp_mag(a: str, b: str) -> i64 {
+    if a.len != b.len { return a.len < b.len ? -1 : 1; }
+    for i in 0..a.len {
+        if a[i] != b[i] { return a[i] < b[i] ? -1 : 1; }
+    }
+    return 0;
+}
+
+// does the value (sign and decimal magnitude) lie in the range of integer type `t`?
+fn in_range(neg: bool, mag: str, t: i64) -> bool {
+    if mag == "0" { return true; }
+    if neg {
+        if !types.signed(t) { return false; }
+        let lo: str = lo_text(t);
+        return cmp_mag(mag, lo[1..lo.len]) <= 0;
+    }
+    return cmp_mag(mag, hi_text(t)) <= 0;
+}
+
+// ---- scopes and locals -----------------------------------------------------------------------------------------------
+
+fn push_scope(ck: *Checker) { ck.scopes.push(Scope { names: List.new(), ids: List.new() }); }
+
+fn pop_scope(ck: *Checker) {
+    let sc = ck.scopes.pop() catch { panic("scope underflow"); };
+    for i in 0..sc.ids.len {
+        let id = *sc.ids.at(i);
+        let nm = String.from(ck.locals.at(id).name);
+        if !ck.locals.at(id).used && !ck.locals.at(id).is_param && !nm.starts_with("_") {
+            warn_here(ck, ck.locals.at(id).span, format("unused variable `{nm}`"), "",
+                      format("if this is intentional, rename it to `_{nm}`"));
+        }
+    }
+}
+
+fn lookup_local(ck: *Checker, name: str) -> i64 {
+    let mut i = ck.scopes.len;
+    while i > 0 {
+        i -= 1;
+        let sc = ck.scopes.at(i);
+        for q in 0..sc.names.len { if *sc.names.at(q) == name { return *sc.ids.at(q); } }
+    }
+    return -1;
+}
+
+fn alloc_cname(ck: *Checker, name: str) -> String {
+    let mut base = String.from(name);
+    if creserved.is_c_reserved(name) || name.starts_with("cb_") || name.starts_with("__") { base.push('_'); }
+    let mut cand = String.from(base);
+    let mut k = 0 as i64;
+    while has_name(&ck.fn_names, cand) {
+        k += 1;
+        cand = format("{base}__{k}");
+    }
+    ck.fn_names.push(String.from(cand));
+    return cand;
+}
+
+fn new_local(ck: *Checker, name: str, ty: i64, is_mut: bool, cname: String, sp: ast.Span, is_param: bool) -> i64 {
+    let id = ck.locals.len;
+    ck.locals.push(Local { name: String.from(name), ty: ty, is_mut: is_mut, cname: cname, span: sp, used: false, is_param: is_param,
+                           glue: false, rdepth: 0, id: id + 1, captured: false, written: false, region_handle: false });
+    return id;
+}
+
+fn declare_local(ck: *Checker, name: str, ty: i64, is_mut: bool, sp: ast.Span, is_param: bool) -> i64 {
+    let top = ck.scopes.len - 1;
+    if name == "null" {
+        here(ck, sp, "`null` is a reserved name", "", "it is the null pointer literal");
+        let cn = alloc_cname(ck, "null_");
+        return new_local(ck, name, ty, is_mut, cn, sp, is_param);
+    }
+    let mut at = -1 as i64;
+    for q in 0..ck.scopes.at(top).names.len { if *ck.scopes.at(top).names.at(q) == name { at = q; } }
+    if at >= 0 && !is_param {
+        let old = *ck.scopes.at(top).ids.at(at);
+        let ol = ck.locals.at(old).span.line;
+        here_n(ck, sp, format("variable `{name}` is already declared in this scope"), "redeclared here",
+               "use a different name, or assign to the existing variable (declare it with `let mut`)",
+               format("first declared at line {ol}"));
+    }
+    let cn = alloc_cname(ck, name);
+    let id = new_local(ck, name, ty, is_mut, cn, sp, is_param);
+    let g = ty != types.POISON && has_glue(ck, ty);
+    ck.locals.at(id).glue = g;
+    ck.locals.at(id).rdepth = ck.has_fn ? ck.fn_rdepth : 0;
+    if at >= 0 { *ck.scopes.at(top).ids.at(at) = id; }
+    else { ck.scopes.at(top).names.push(String.from(name)); ck.scopes.at(top).ids.push(id); }
+    return id;
+}
+
+// ---- destructors and moves ------------------------------------------------------------------------------------------
+
+fn drop_fn_of(ck: *Checker, sid: i64) -> i64 {
+    if ck.syms.at(sid).base >= 0 { return ck.syms.at(sid).drop_inst; }
+    return ck.syms.at(sid).tparams.len == 0 ? ck.syms.at(sid).drop_sym : -1;
+}
+
+fn has_glue(ck: *Checker, t: i64) -> bool {
+    let k = tk(ck, t);
+    if t == types.STRING { return true; }
+    if k == types.K_ARR || k == types.K_OPT { return has_glue(ck, ck.types.tys.at(t).inner); }
+    if k == types.K_CLO { return true; }
+    if k != types.K_STRUCT { return false; }
+    let key = String.from(ck.types.tys.at(t).key);
+    for i in 0..ck.glue.len { if ck.glue.at(i).key == key { return ck.glue.at(i).v; } }
+    if has_name(&ck.glue_busy, key) { return false; }
+    ck.glue_busy.push(String.from(key));
+    let sid = ck.types.tys.at(t).sym;
+    let mut r = drop_fn_of(ck, sid) >= 0;
+    let nf = ck.syms.at(sid).fields.len;
+    for i in 0..nf { if !r && has_glue(ck, ck.syms.at(sid).fields.at(i).ty) { r = true; } }
+    let mut keep: List<String> = List.new();
+    for i in 0..ck.glue_busy.len { if *ck.glue_busy.at(i) != key { keep.push(String.from(*ck.glue_busy.at(i))); } }
+    ck.glue_busy = keep;
+    ck.glue.push(GlueEnt { key: key, v: r });
+    return r;
+}
+
+fn moved_at(l: *List<MovedEnt>, local: i64) -> i64 {
+    for i in 0..l.len { if l.at(i).local == local { return i; } }
+    return -1;
+}
+
+fn copy_moved(l: *List<MovedEnt>) -> List<MovedEnt> {
+    let mut o: List<MovedEnt> = List.new();
+    for i in 0..l.len { o.push(MovedEnt { local: l.at(i).local, line: l.at(i).line }); }
+    return o;
+}
+
+fn set_moved(l: *List<MovedEnt>, local: i64, line: i64) {
+    let at = moved_at(l, local);
+    if at >= 0 { l.at(at).line = line; } else { l.push(MovedEnt { local: local, line: line }); }
+}
+
+// the first state to mention a variable wins
+fn merge_moved(m0: *List<MovedEnt>, states: *List<List<MovedEnt>>) -> List<MovedEnt> {
+    if states.len == 0 { return copy_moved(m0); }
+    let mut out: List<MovedEnt> = List.new();
+    for s in 0..states.len {
+        for i in 0..states.at(s).len {
+            if moved_at(&out, states.at(s).at(i).local) < 0 { out.push(MovedEnt { local: states.at(s).at(i).local, line: states.at(s).at(i).line }); }
+        }
+    }
+    return out;
+}
+
+// `e` is used by value where ownership is taken: a variable is moved, anything else must be a temporary
+fn consume(ck: *Checker, e: *ast.Node) {
+    let t = ety(e);
+    if t == -2 || t == types.POISON || !has_glue(ck, t) || flag(e, "coerce") { return; }
+    let k: str = e.kind;
+    if k == "Ident" && e.has("local") && e.get("local").tag == 12 {
+        let loc = e.get("local").i;
+        if ck.locals.at(loc).captured {
+            let nm = String.from(e.str_of("name"));
+            here(ck, e.span, format("cannot move `{nm}` out of a closure's captured variables"), "a closure can run more than once",
+                 "clone it, or borrow it with `&`");
+            return;
+        }
+        set_flag(e, "move", true);
+        set_moved(&ck.moved, loc, e.span.line);
+        return;
+    }
+    if k == "Call" || k == "StructLit" || k == "ArrayLit" || k == "Binary" || k == "Try" || k == "Catch" || k == "Ternary" {
+        set_flag(e, "owned", true);
+        return;
+    }
+    let mut what = "";
+    if k == "Field" && e.has("mode") && (e.str_of("mode") == "field" || e.str_of("mode") == "ptrfield") { what = "a struct field"; }
+    else if k == "Index" { what = "an array or slice element"; }
+    else if k == "Unary" && e.str_of("op") == "*" { what = "a pointer"; }
+    if what.len > 0 {
+        let ts = ty_str(ck, t);
+        here(ck, e.span, format("cannot move a `{ts}` out of {what}"), "its type has a destructor, so it cannot be copied",
+             "borrow it with `&`, or use `read_at(p)` to take ownership of raw storage");
+    }
+}
+
+// ---- control-flow analysis --------------------------------------------------------------------------------------------
+
+fn has_break_val(v: *ast.Val) -> bool {
+    if v.tag == 4 { return has_break(v.node.at(0)); }
+    if v.tag == 5 {
+        for i in 0..v.items.len { if has_break_val(v.items.at(i)) { return true; } }
+    }
+    return false;
+}
+
+fn has_break(n: *ast.Node) -> bool {
+    if n.kind == "Break" { return true; }
+    if n.kind == "While" || n.kind == "Loop" || n.kind == "For" { return false; }
+    for i in 0..n.attrs.len {
+        if n.attrs.at(i).name == "span" || n.attrs.at(i).name == "ty" { continue; }
+        if has_break_val(&n.attrs.at(i).v) { return true; }
+    }
+    return false;
+}
+
+fn terminates(ck: *Checker, s: *ast.Node) -> bool {
+    let k: str = s.kind;
+    if k == "Return" || k == "Throw" || k == "Break" || k == "Continue" { return true; }
+    if k == "ExprStmt" {
+        let e = s.node_of("expr");
+        return e.kind == "Call" && e.has("builtin") && (e.str_of("builtin") == "panic" || e.str_of("builtin") == "exit");
+    }
+    if k == "Block" {
+        let n = s.get("stmts").items.len;
+        for i in 0..n { if terminates(ck, s.get("stmts").items.at(i).node.at(0)) { return true; } }
+        return false;
+    }
+    if k == "Region" { return terminates(ck, s.node_of("body")); }
+    if k == "TryBlock" { return terminates(ck, s.node_of("body")) && terminates(ck, s.node_of("handler")); }
+    if k == "If" {
+        return !s.is_none("els") && terminates(ck, s.node_of("then")) && terminates(ck, s.node_of("els"));
+    }
+    if k == "Match" {
+        if !flag(s, "exhaustive") || s.get("arms").items.len == 0 { return false; }
+        for i in 0..s.get("arms").items.len {
+            if !terminates(ck, s.get("arms").items.at(i).node.at(0).node_of("body")) { return false; }
+        }
+        return true;
+    }
+    if k == "Loop" { return !has_break(s.node_of("body")); }
+    if k == "While" {
+        let c = s.node_of("cond");
+        return c.kind == "Bool" && c.get("value").i != 0 && !has_break(s.node_of("body"));
+    }
+    return false;
+}
+
+// ---- name resolution --------------------------------------------------------------------------------------------------
+
+fn syms_of_kind_names(ck: *Checker, mi: i64, a: str, b: str, out: *List<String>) {
+    let cm = ck.cmods.at(mi);
+    for q in 0..cm.order.len {
+        let s = ck.syms.at(*cm.order.at(q));
+        if s.kind == a || s.kind == b { out.push(String.from(s.name)); }
+    }
+}
+
+fn entity(ck: *Checker, e: *ast.Node) -> Ent {
+    let none = Ent { kind: 0, idx: -1 };
+    let mi = ck.cur_mod;
+    if e.kind == "Ident" {
+        let name = String.from(e.str_of("name"));
+        if lookup_local(ck, name) >= 0 { return none; }
+        let im = import_of(ck, mi, name);
+        if im >= 0 {
+            ck.cmods.at(mi).imports.at(im).used = true;
+            return Ent { kind: 1, idx: ck.cmods.at(mi).imports.at(im).mod_idx };
+        }
+        let s = lookup_sym(ck, mi, name);
+        if s >= 0 {
+            let kd: str = ck.syms.at(s).kind;
+            if kd == "struct" || kd == "enum" || kd == "fn" { return Ent { kind: 2, idx: s }; }
+            return none;
+        }
+        let p = lookup_named(&ck.prelude_types, name);
+        if p >= 0 { return Ent { kind: 2, idx: p }; }
+        return none;
+    }
+    if e.kind == "Field" {
+        let base = entity(ck, e.node_of("obj"));
+        if base.kind == 1 {
+            let md = base.idx;
+            let name = String.from(e.str_of("name"));
+            let mname = String.from(ck.ld.mods.at(md).name);
+            let s = lookup_sym(ck, md, name);
+            if s < 0 {
+                let mut cands: List<String> = List.new();
+                for q in 0..ck.cmods.at(md).order.len { cands.push(String.from(ck.syms.at(*ck.cmods.at(md).order.at(q)).name)); }
+                let sg = diag.suggest_list(name, &cands);
+                here(ck, e.get("name_span").span, format("module `{mname}` has no member `{name}`"), "",
+                     sg.len > 0 ? format("did you mean `{sg}`?") : String.empty());
+                return Ent { kind: 3, idx: -1 };
+            }
+            if !ck.syms.at(s).is_pub {
+                here(ck, e.get("name_span").span, format("`{name}` is private to module `{mname}`"), "private item",
+                     format("mark it `pub` in `{mname}` to export it"));
+                return Ent { kind: 3, idx: -1 };
+            }
+            return Ent { kind: 2, idx: s };
+        }
+    }
+    return none;
+}
+
+// ---- helpers for diagnostics and conversions ------------------------------------------------------------------------------
+
+fn mismatch(ck: *Checker, e: *ast.Node, exp: i64, got: i64, what: str) {
+    let mut help = String.empty();
+    if types.is_float(exp) && e.kind == "Int" && !has_suffix(e) {
+        help = format("write the literal as a float, e.g. `{int_text(e)}.0`");
+    } else if types.is_numeric(exp) && types.is_numeric(got) {
+        help = format("convert explicitly with `as {ty_str(ck, exp)}`");
+    } else if exp == types.BOOL && types.is_numeric(got) {
+        help = String.from("compare explicitly, e.g. `x != 0`");
+    } else if got == types.VOID {
+        help = String.from("this expression produces no value");
+    }
+    let es = ty_str(ck, exp);
+    let gs = ty_str(ck, got);
+    here(ck, e.span, what, format("expected `{es}`, found `{gs}`"), help);
+}
+
+fn ro_violation(ck: *Checker, e: *ast.Node, t: i64, exp: i64) -> bool {
+    if tk(ck, t) == types.K_PTR && tk(ck, exp) == types.K_PTR && ck.types.tys.at(t).ro && !ck.types.tys.at(exp).ro
+        && types.same(&ck.types, t, exp) && !flag(e, "recv_ok") {
+        let es = ty_str(ck, exp);
+        let ts = ty_str(ck, t);
+        let ei = ty_str(ck, ck.types.tys.at(exp).inner);
+        here(ck, e.span, "cannot turn a read-only pointer into a writable one", format("expected `{es}`, found `{ts}`"),
+             format("take `*const {ei}` instead, or cast with `as` if you really must"));
+        return true;
+    }
+    return false;
+}
+
+// `*T` converts implicitly to `*void` (as in C), never the other way round
+fn ptr_ok(ck: *Checker, exp: i64, t: i64) -> bool {
+    return tk(ck, exp) == types.K_PTR && ck.types.tys.at(exp).inner == types.VOID && tk(ck, t) == types.K_PTR;
+}
+
+fn lint(ck: *Checker, sp: ast.Span, msg: str, label: str, help: str) {
+    if ck.strict {
+        let h = help.len > 0 ? format("{help} (error because of --strict-casts)") : String.from("error because of --strict-casts");
+        here(ck, sp, msg, label, h);
+    } else {
+        warn_here(ck, sp, msg, label, help);
+    }
+}
+
+// the type both numeric operands are converted to (-1 if there is no lossless choice)
+fn common_type(a: i64, b: i64) -> i64 {
+    if types.is_float(a) || types.is_float(b) {
+        if types.is_float(a) && types.is_float(b) { return types.F64; }
+        return types.is_float(a) ? a : b;
+    }
+    if types.signed(a) == types.signed(b) { return types.bits(a) >= types.bits(b) ? a : b; }
+    let s = types.signed(a) ? a : b;
+    let u = types.signed(a) ? b : a;
+    if types.bits(s) > types.bits(u) { return s; }
+    let need = types.bits(u) * 2;
+    if need == 16 { return types.I16; }
+    if need == 32 { return types.I32; }
+    if need == 64 { return types.I64; }
+    return -1;
+}
+
+// 0 none, 1 widen, 2 checked, 3 lossy, 4 fnarrow, 5 bad
+fn conv_kind(src: i64, dst: i64) -> i64 {
+    if src == dst { return 0; }
+    if types.is_int(src) && types.is_int(dst) {
+        let widen = types.signed(src) == types.signed(dst) ? types.bits(dst) >= types.bits(src)
+            : (!types.signed(src) && types.signed(dst) && types.bits(dst) > types.bits(src));
+        return widen ? 1 : 2;
+    }
+    if types.is_int(src) && types.is_float(dst) {
+        return types.bits(src) <= (dst == types.F32 ? 24 : 53) ? 1 : 3;
+    }
+    if types.is_float(src) && types.is_float(dst) { return src == types.F32 ? 1 : 4; }
+    return 5;
+}
+
+fn kind_name(k: i64) -> str {
+    if k == 1 { return "widen"; }
+    if k == 2 { return "checked"; }
+    if k == 3 { return "lossy"; }
+    return "fnarrow";
+}
+
+// records an implicit conversion on `node` (src -> dst); false after reporting an error
+fn apply_conv(ck: *Checker, node: *ast.Node, src: i64, dst: i64) -> bool {
+    set_nil(node, "conv");
+    let mut kind = conv_kind(src, dst);
+    if kind == 0 { return true; }
+    let ss = ty_str(ck, src);
+    let ds = ty_str(ck, dst);
+    if kind == 5 {
+        mismatch(ck, node, dst, src, "mismatched types");
+        return false;
+    }
+    if kind == 2 {
+        let v = const_eval(ck, node, ck.cur_mod);
+        if ck.nc {
+            ck.nc = false;
+            kind = 2;
+        } else if v.kind == 0 {
+            let neg = v.i < 0;
+            let mag = neg ? format("{0 - v.i}") : format("{v.i}");
+            if !in_range(neg, mag, dst) {
+                here(ck, node.span, format("constant value {v.i} does not fit in `{ds}`"),
+                     format("valid range is {lo_text(dst)}..={hi_text(dst)}"), "");
+                return false;
+            }
+            kind = 1;
+        } else {
+            kind = 2;
+        }
+        if kind == 2 {
+            let sg = types.signed(src);
+            let dg = types.signed(dst);
+            let sign = sg && !dg ? format("signed `{ss}` to unsigned `{ds}`")
+                : (!sg && dg ? format("unsigned `{ss}` to signed `{ds}`")
+                : (types.bits(src) > types.bits(dst) ? format("`{ss}` to narrower `{ds}`") : format("`{ss}` to `{ds}`")));
+            lint(ck, node.span, format("implicit conversion from {sign} may not fit"),
+                 "checked at runtime: panics if the value is out of range",
+                 format("use `x as {ds}` to truncate on purpose, or widen the destination type"));
+        }
+    } else if kind == 3 {
+        lint(ck, node.span, format("implicit conversion from `{ss}` to `{ds}` may lose precision"),
+             format("`{ds}` cannot represent every `{ss}` exactly"), format("use `x as {ds}` if the rounding is intended"));
+    } else if kind == 4 {
+        lint(ck, node.span, "implicit conversion from `f64` to `f32` loses precision", "",
+             "use `x as f32` if the rounding is intended");
+    }
+    let mut items: List<ast.Val> = List.new();
+    items.push(ast.v_tag(10, src));
+    items.push(ast.v_tag(10, dst));
+    items.push(ast.v_str(kind_name(kind)));
+    node.set("conv", ast.v_list(items));
+    return true;
+}
+
+// both operands of a binary operation converted to a common numeric type (-1 on error)
+fn binary_conv(ck: *Checker, e: *ast.Node, lt: i64, rt: i64) -> i64 {
+    let op: str = e.str_of("op");
+    let ct = common_type(lt, rt);
+    let opsp = e.get("op_span").span;
+    if ct < 0 {
+        let ls = ty_str(ck, lt);
+        let rs = ty_str(ck, rt);
+        here(ck, opsp, format("cannot mix `{ls}` and `{rs}` in `{op}`"), "no integer type can represent every value of both",
+             "cast one side explicitly, e.g. `x as i64` (negative values or large values may change)");
+        return -1;
+    }
+    let ok = apply_conv(ck, e.node_of("l"), lt, ct) && apply_conv(ck, e.node_of("r"), rt, ct);
+    if !ok { return -1; }
+    if types.is_int(lt) && types.is_int(rt) && types.signed(lt) != types.signed(rt) {
+        let sg = types.signed(lt) ? lt : rt;
+        let us = types.signed(lt) ? rt : lt;
+        let sgs = ty_str(ck, sg);
+        let uss = ty_str(ck, us);
+        let cts = ty_str(ck, ct);
+        if op == "<" || op == ">" || op == "<=" || op == ">=" {
+            lint(ck, opsp, format("comparing signed `{sgs}` with unsigned `{uss}`"), format("both operands are converted to `{cts}`"),
+                 "cast one side explicitly (e.g. `x as i32`) to make the intent clear");
+        } else if is_bitwise(op) {
+            lint(ck, opsp, format("`{op}` mixes signed `{sgs}` and unsigned `{uss}` operands"),
+                 format("both operands are converted to `{cts}` (the signed one is sign-extended)"),
+                 "cast one side explicitly to make the bit pattern you want unambiguous");
+        }
+    }
+    return ct;
+}
+
+// converts the checked expression `e` (of type `t`) implicitly to `exp`, or reports a mismatch
+fn coerce(ck: *Checker, e: *ast.Node, t: i64, exp: i64) -> i64 {
+    set_nil(e, "conv");
+    set_nil(e, "wrap_opt");
+    if tk(ck, exp) == types.K_OPT && !types.same(&ck.types, t, exp) {
+        if t == types.POISON { return types.POISON; }
+        if coerce(ck, e, t, ck.types.tys.at(exp).inner) == types.POISON { return types.POISON; }
+        set_tyn(e, "wrap_opt", exp);
+        return exp;
+    }
+    if exp == types.STR && t == types.STRING {
+        set_flag(e, "coerce", true);
+        return exp;
+    }
+    if types.is_numeric(t) && types.is_numeric(exp) && t != exp {
+        return apply_conv(ck, e, t, exp) ? exp : types.POISON;
+    }
+    if ro_violation(ck, e, t, exp) { return types.POISON; }
+    if ptr_ok(ck, exp, t) { return exp; }
+    if tk(ck, exp) == types.K_PTR && tk(ck, t) == types.K_PTR && types.same(&ck.types, t, exp) && ck.types.tys.at(exp).ro && !ck.types.tys.at(t).ro {
+        return exp;
+    }
+    if !types.same(&ck.types, t, exp) {
+        mismatch(ck, e, exp, t, "mismatched types");
+        return types.POISON;
+    }
+    consume(ck, e);
+    return t;
+}
+
+fn expect(ck: *Checker, e: *ast.Node, exp: i64, eu_ok: bool) -> i64 {
+    let t = check(ck, e, exp, eu_ok);
+    return coerce(ck, e, t, exp);
+}
+
+fn is_null(ck: *Checker, e: *ast.Node) -> bool {
+    return e.kind == "Ident" && e.str_of("name") == "null" && lookup_local(ck, "null") < 0;
+}
+
+fn untyped(ck: *Checker, e: *ast.Node) -> bool {
+    let k: str = e.kind;
+    if k == "Ident" && e.str_of("name") == "null" && lookup_local(ck, "null") < 0 { return true; }
+    if k == "Int" || k == "Float" { return !has_suffix(e); }
+    if k == "Unary" && e.str_of("op") == "-" { return untyped(ck, e.node_of("expr")); }
+    if k == "Binary" && (is_arith(e.str_of("op")) || is_bitwise(e.str_of("op"))) {
+        return untyped(ck, e.node_of("l")) && untyped(ck, e.node_of("r"));
+    }
+    return false;
+}
+
+fn lit_is_float(e: *ast.Node) -> bool {
+    if e.kind == "Float" { return true; }
+    if e.kind == "Unary" { return lit_is_float(e.node_of("expr")); }
+    if e.kind == "Binary" { return lit_is_float(e.node_of("l")) || lit_is_float(e.node_of("r")); }
+    return false;
+}
+
+// ---- the expression dispatcher ----------------------------------------------------------------------------------------------
+
+pub fn check(ck: *Checker, e: *ast.Node, exp: i64, eu: bool) -> i64 {
+    let mut hint = exp;
+    if exp >= 0 && tk(ck, exp) == types.K_OPT && !is_null(ck, e) && e.kind != "Ternary" { hint = ck.types.tys.at(exp).inner; }
+    let k: str = e.kind;
+    let mut t = types.POISON;
+    if k == "Int" { t = ex_int(ck, e, hint, false); }
+    else if k == "Float" { t = ex_float(e, hint, ck); }
+    else if k == "Bool" { t = types.BOOL; }
+    else if k == "Str" { t = types.STR; }
+    else if k == "Ident" { t = ex_ident(ck, e, hint); }
+    else if k == "Field" { t = ex_field(ck, e, hint); }
+    else if k == "Unary" { t = ex_unary(ck, e, hint); }
+    else if k == "Binary" { t = ex_binary(ck, e, hint); }
+    else if k == "Cast" { t = ex_cast(ck, e, hint); }
+    else if k == "IncDec" { t = ex_incdec(ck, e); }
+    else if k == "Call" { t = ex_call(ck, e, hint); }
+    else if k == "NamedArg" {
+        here(ck, e.span, "named arguments only work when calling a function that is declared with `fn`", "not allowed here",
+             "pass the value positionally");
+        check(ck, e.node_of("expr"), -1, false);
+        t = types.POISON;
+    }
+    else { t = unimpl(ck, e, e.kind); }
+    set_ty(e, t);
+    if tk(ck, t) == types.K_EU && !eu {
+        let ts = ty_str(ck, t);
+        here(ck, e.span, format("unhandled error union `{ts}`"), "this call can fail",
+             "propagate with `try expr`, or handle it with `expr catch default` / `expr catch |e| { ... }`");
+        set_ty(e, types.POISON);
+        return types.POISON;
+    }
+    return t;
+}
+
+// ---- literals -------------------------------------------------------------------------------------------------------------
+
+fn suffix_type(s: str) -> i64 {
+    if s == "f32" { return types.F32; }
+    if s == "f64" { return types.F64; }
+    return types.prim_named(s);
+}
+
+fn ex_int(ck: *Checker, e: *ast.Node, exp: i64, neg: bool) -> i64 {
+    let mag = int_text(e);
+    let mut ty = types.I32;
+    if has_suffix(e) { ty = suffix_type(e.str_of("suffix")); }
+    else if exp >= 0 && types.is_int(exp) { ty = exp; }
+    if types.is_int(ty) {
+        let isneg = neg && mag != "0";
+        if !in_range(isneg, mag, ty) {
+            let mut hint = String.empty();
+            let sg0 = isneg ? "-" : "";
+            if !has_suffix(e) && (exp < 0 || !types.is_int(exp)) {
+                if in_range(isneg, mag, types.I64) {
+                    hint = format("integers default to `i32`; write `{sg0}{mag}i64` or annotate the variable type");
+                } else if in_range(isneg, mag, types.U64) {
+                    hint = format("integers default to `i32`; write `{sg0}{mag}u64` or annotate the variable type");
+                }
+            }
+            let ts = ty_str(ck, ty);
+            let sign = isneg ? "-" : "";
+            here(ck, e.span, format("integer literal `{sign}{mag}` is out of range for `{ts}`"),
+                 format("valid range is {lo_text(ty)}..={hi_text(ty)}"), hint);
+        }
+    }
+    return ty;
+}
+
+fn ex_float(e: *ast.Node, exp: i64, ck: *Checker) -> i64 {
+    if has_suffix(e) { return suffix_type(e.str_of("suffix")); }
+    if exp >= 0 && types.is_float(exp) { return exp; }
+    return types.F64;
+}
+
+// ---- names ------------------------------------------------------------------------------------------------------------------
+
+fn fn_value(ck: *Checker, e: *ast.Node, sid: i64) -> i64 {
+    let name = String.from(ck.syms.at(sid).name);
+    if ck.syms.at(sid).tparams.len > 0 {
+        here(ck, e.span, format("generic function `{name}` cannot be used as a value"), "",
+             "call it directly, or write a small non-generic wrapper function");
+        return types.POISON;
+    }
+    if ck.syms.at(sid).variadic {
+        here(ck, e.span, format("variadic function `{name}` cannot be used as a value"), "", "");
+        return types.POISON;
+    }
+    let mut bad = ck.syms.at(sid).ret == types.POISON;
+    for i in 0..ck.syms.at(sid).params.len { if *ck.syms.at(sid).params.at(i) == types.POISON { bad = true; } }
+    if bad { return types.POISON; }
+    e.set("sym", ast.v_tag(11, sid));
+    e.set("mode", ast.v_str("sym"));
+    let mut ps = copy_ids(&ck.syms.at(sid).params);
+    let rt = ck.syms.at(sid).ret;
+    return types.fnty(&ck.types, &ps, rt);
+}
+
+fn copy_ids(l: *List<i64>) -> List<i64> {
+    let mut o: List<i64> = List.new();
+    for i in 0..l.len { o.push(*l.at(i)); }
+    return o;
+}
+
+fn ex_ident(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+    let name = String.from(e.str_of("name"));
+    let mi = ck.cur_mod;
+    if name == "null" && lookup_local(ck, "null") < 0 {
+        set_flag(e, "is_null", true);
+        if exp >= 0 && (tk(ck, exp) == types.K_PTR || tk(ck, exp) == types.K_FN || tk(ck, exp) == types.K_OPT) { return exp; }
+        if exp == types.POISON { return types.POISON; }
+        here(ck, e.span, "cannot infer the type of `null`", "",
+             "write `null as *T`, or give the variable a pointer or optional type, e.g. `let p: *i32 = null;` or `let n: i32? = null;`");
+        return types.POISON;
+    }
+    let loc = lookup_local(ck, name);
+    if loc >= 0 {
+        ck.locals.at(loc).used = true;
+        e.set("local", ast.v_tag(12, loc));
+        if ck.locals.at(loc).region_handle {
+            here(ck, e.span, format("the region `{name}` can only be used as the last argument of `alloc_in`"), "",
+                 format("write `alloc_in(T, n, {name})`"));
+            return types.POISON;
+        }
+        let mv = moved_at(&ck.moved, loc);
+        if mv >= 0 && !(e.span.line == ck.reinit_line && e.span.col == ck.reinit_col) {
+            let ml = ck.moved.at(mv).line;
+            here_n(ck, e.span, format("use of moved value `{name}`"), "value used after it was moved",
+                   format("move it only once, pass a pointer (`&{name}`) instead, or re-assign it before using it again"),
+                   format("`{name}` was moved at line {ml}, and its type has a destructor, so it cannot be copied"));
+        }
+        return ck.locals.at(loc).ty;
+    }
+    let sym = lookup_sym(ck, mi, name);
+    if sym >= 0 {
+        let kd = String.from(ck.syms.at(sym).kind);
+        if kd == "const" || kd == "error" {
+            e.set("sym", ast.v_tag(11, sym));
+            return ck.syms.at(sym).ty;
+        }
+        if kd == "fn" { return fn_value(ck, e, sym); }
+        let what = kd == "fn" ? "function" : kd;
+        let h = kd == "struct" ? format("construct it with `{name} {{ field: value }}`") : String.empty();
+        here(ck, e.span, format("expected a value, found {what} `{name}`"), "", h);
+        return types.POISON;
+    }
+    let im = import_of(ck, mi, name);
+    if im >= 0 {
+        ck.cmods.at(mi).imports.at(im).used = true;
+        here(ck, e.span, format("expected a value, found module `{name}`"), "", format("access its members with `{name}.name`"));
+        return types.POISON;
+    }
+    let mut cands: List<String> = List.new();
+    for si in 0..ck.scopes.len { for q in 0..ck.scopes.at(si).names.len { cands.push(String.from(*ck.scopes.at(si).names.at(q))); } }
+    syms_of_kind_names(ck, mi, "const", "error", &cands);
+    let sg = diag.suggest_list(name, &cands);
+    here(ck, e.span, format("cannot find value `{name}` in this scope"), "not found",
+         sg.len > 0 ? format("a similar name exists: `{sg}`") : String.empty());
+    return types.POISON;
+}
+
+fn variant_index(ck: *Checker, sid: i64, name: str) -> i64 {
+    for i in 0..ck.syms.at(sid).variants.len { if *ck.syms.at(sid).variants.at(i) == name { return i; } }
+    return -1;
+}
+
+fn ex_field(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+    let ent = entity(ck, e);
+    let name = String.from(e.str_of("name"));
+    let nsp = e.get("name_span").span;
+    if ent.kind != 0 {
+        if ent.kind == 3 { return types.POISON; }
+        if ent.kind == 2 {
+            let sid = ent.idx;
+            let kd = String.from(ck.syms.at(sid).kind);
+            if kd == "const" || kd == "error" {
+                e.set("mode", ast.v_str("sym"));
+                e.set("sym", ast.v_tag(11, sid));
+                return ck.syms.at(sid).ty;
+            }
+            if kd == "fn" { return fn_value(ck, e, sid); }
+            let sn = String.from(ck.syms.at(sid).name);
+            here(ck, e.span, format("expected a value, found {kd} `{sn}`"), "", "");
+            return types.POISON;
+        }
+        here(ck, e.span, "expected a value, found module", "", "");
+        return types.POISON;
+    }
+    let ent2 = entity(ck, e.node_of("obj"));
+    if ent2.kind != 0 {
+        if ent2.kind == 3 { return types.POISON; }
+        if ent2.kind == 2 && ck.syms.at(ent2.idx).kind == "enum" {
+            let sid = ent2.idx;
+            let vi = variant_index(ck, sid, name);
+            let sn = String.from(ck.syms.at(sid).name);
+            if vi < 0 {
+                let sg = diag.suggest_list(name, &ck.syms.at(sid).variants);
+                here(ck, nsp, format("enum `{sn}` has no variant `{name}`"), "", sg.len > 0 ? format("did you mean `{sg}`?") : String.empty());
+                return types.POISON;
+            }
+            e.set("mode", ast.v_str("variant"));
+            e.set("sym", ast.v_tag(11, sid));
+            e.set("vidx", ast.v_int(vi));
+            return ck.syms.at(sid).ty;
+        }
+        if ent2.kind == 2 {
+            let sn = String.from(ck.syms.at(ent2.idx).name);
+            let sk = String.from(ck.syms.at(ent2.idx).kind);
+            here(ck, e.span, format("`{sn}` is a {sk}, which has no members to access with `.`"), "", "");
+            return types.POISON;
+        }
+        here(ck, e.node_of("obj").span, "expected a value, found module", "", "");
+        return types.POISON;
+    }
+    let mut ot = check(ck, e.node_of("obj"), -1, false);
+    if ot == types.POISON { return types.POISON; }
+    if tk(ck, ot) == types.K_PTR && tk(ck, ck.types.tys.at(ot).inner) == types.K_PTR {
+        return unimpl(ck, e, "field access through `**T`");
+    }
+    let mut base = ot;
+    e.set("mode", ast.v_str("field"));
+    if tk(ck, ot) == types.K_PTR {
+        let pi = ck.types.tys.at(ot).inner;
+        let pk = tk(ck, pi);
+        if pk == types.K_STRUCT || pk == types.K_ARR || pk == types.K_SLICE || pi == types.STR || pi == types.STRING {
+            base = pi;
+            e.set("mode", ast.v_str("ptrfield"));
+        }
+    }
+    let bk = tk(ck, base);
+    if bk == types.K_ARR || bk == types.K_SLICE || base == types.STR || base == types.STRING {
+        if name == "ptr" && (bk == types.K_SLICE || base == types.STR || base == types.STRING) {
+            e.set("mode", ast.v_str("slice_ptr"));
+            return types.ptr(&ck.types, bk == types.K_SLICE ? ck.types.tys.at(base).inner : types.U8, false);
+        }
+        if name == "len" {
+            e.set("mode", ast.v_str(bk == types.K_ARR ? "len_arr" : "len_slice"));
+            return types.I64;
+        }
+        if name == "cap" && base == types.STRING {
+            e.set("mode", ast.v_str("cap"));
+            return types.I64;
+        }
+        let bs = ty_str(ck, base);
+        here(ck, nsp, format("type `{bs}` has no field `{name}`"), "",
+             base == types.STRING ? "the available fields are `len`, `ptr` and `cap`" : "the available fields are `len` and `ptr`");
+        return types.POISON;
+    }
+    if bk == types.K_STRUCT {
+        let sid = ck.types.tys.at(base).sym;
+        let fi = find_field(ck, sid, name);
+        let sn = String.from(ck.syms.at(sid).name);
+        if fi < 0 {
+            let mut fns: List<String> = List.new();
+            for i in 0..ck.syms.at(sid).fields.len { fns.push(String.from(ck.syms.at(sid).fields.at(i).name)); }
+            let sg = diag.suggest_list(name, &fns);
+            let mut all = String.empty();
+            for i in 0..fns.len { if i > 0 { all.append(", "); } all.append(*fns.at(i)); }
+            here(ck, nsp, format("struct `{sn}` has no field `{name}`"), "", sg.len > 0 ? format("did you mean `{sg}`?") : format("fields: {all}"));
+            return types.POISON;
+        }
+        return ck.syms.at(sid).fields.at(fi).ty;
+    }
+    let os = ty_str(ck, ot);
+    here(ck, nsp, format("type `{os}` has no field `{name}`"), "not a struct", "");
+    return types.POISON;
+}
+
+// ---- places ----------------------------------------------------------------------------------------------------------------
+
+fn is_place(e: *ast.Node) -> bool {
+    let k: str = e.kind;
+    if k == "Ident" { return e.has("local") && e.get("local").tag == 12; }
+    if k == "Field" { return e.has("mode") && (e.str_of("mode") == "field" || e.str_of("mode") == "ptrfield"); }
+    if k == "Index" { return true; }
+    if k == "Unary" && e.str_of("op") == "*" { return true; }
+    return false;
+}
+
+// is `e` the `self` of the method being checked, declared with plain `self` (not `mut self`)?
+fn readonly_self(ck: *Checker, e: *ast.Node) -> bool {
+    if e.kind != "Ident" { return false; }
+    if !(e.has("local") && e.get("local").tag == 12) { return false; }
+    let loc = e.get("local").i;
+    return ck.locals.at(loc).is_param && ck.locals.at(loc).name == "self" && ck.has_fn && ck.fn_sym >= 0
+        && ck.syms.at(ck.fn_sym).has_self && !ck.syms.at(ck.fn_sym).self_mut;
+}
+
+fn ptr_ro_of(ck: *Checker, t: i64) -> bool { return tk(ck, t) == types.K_PTR && ck.types.tys.at(t).ro; }
+
+// true when `e` is not a mutable place; `label` and `help` then explain why
+fn place_mut(ck: *Checker, e: *ast.Node, label: *String, help: *String) -> bool {
+    let k: str = e.kind;
+    if k == "Ident" {
+        let loc = e.get("local").i;
+        let nm = String.from(ck.locals.at(loc).name);
+        if ck.locals.at(loc).is_mut {
+            if ck.locals.at(loc).captured { ck.locals.at(loc).written = true; }
+            return false;
+        }
+        let ts = ty_str(ck, ck.locals.at(loc).ty);
+        if ck.locals.at(loc).is_param {
+            *label = format("`{nm}` is a parameter, and parameters are immutable by default");
+            *help = format("declare it as `mut {nm}: {ts}` in the parameter list");
+            return true;
+        }
+        *label = format("`{nm}` is declared without `mut`");
+        *help = format("declare it with `let mut {nm}`");
+        return true;
+    }
+    if k == "Field" {
+        if e.str_of("mode") == "ptrfield" {
+            if ptr_ro_of(ck, ety(e.node_of("obj"))) {
+                *label = String.from("this pointer is `*const`, so nothing may be written through it");
+                *help = String.from("take a `*T` (without `const`) if the function must change the value");
+                return true;
+            }
+            if readonly_self(ck, e.node_of("obj")) {
+                *label = String.from("this method takes `self`, which only reads the object");
+                *help = String.from("declare the method with `mut self` so it may change its fields (the caller then needs `let mut`)");
+                return true;
+            }
+            return false;
+        }
+        return place_mut(ck, e.node_of("obj"), label, help);
+    }
+    if k == "Index" {
+        let ot = ety(e.node_of("obj"));
+        if tk(ck, ot) == types.K_ARR || ot == types.STRING { return place_mut(ck, e.node_of("obj"), label, help); }
+        if ot == types.STR {
+            *label = String.from("strings are immutable");
+            *help = String.from("use a `[]u8` slice created with `alloc(u8, n)`");
+            return true;
+        }
+        return false;
+    }
+    if k == "Unary" && e.str_of("op") == "*" {
+        if ptr_ro_of(ck, ety(e.node_of("expr"))) {
+            *label = String.from("this pointer is `*const`, so nothing may be written through it");
+            *help = String.from("take a `*T` (without `const`) if the function must change the value");
+            return true;
+        }
+        return false;
+    }
+    *label = String.from("not an assignable place");
+    *help = String.empty();
+    return true;
+}
+
+// does the place `e` lie behind a `*const` pointer?
+fn through_ro(ck: *Checker, e: *ast.Node) -> bool {
+    let k: str = e.kind;
+    if k == "Field" {
+        if e.str_of("mode") == "ptrfield" { return ptr_ro_of(ck, ety(e.node_of("obj"))) || readonly_self(ck, e.node_of("obj")); }
+        return through_ro(ck, e.node_of("obj"));
+    }
+    if k == "Index" {
+        return tk(ck, ety(e.node_of("obj"))) == types.K_ARR ? through_ro(ck, e.node_of("obj")) : false;
+    }
+    if k == "Unary" && e.str_of("op") == "*" { return ptr_ro_of(ck, ety(e.node_of("expr"))); }
+    return false;
+}
+
+// ---- operators ----------------------------------------------------------------------------------------------------------------
+
+fn ex_unary(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+    let op: str = e.str_of("op");
+    let inner = e.node_of("expr");
+    if op == "-" {
+        if inner.kind == "Int" && !has_suffix(inner) && !flag(inner, "parenthesized") {
+            let lt = (exp >= 0 && types.is_int(exp)) ? exp : types.I32;
+            if !types.signed(lt) {
+                set_ty(inner, lt);
+                let ls = ty_str(ck, lt);
+                here(ck, e.span, format("cannot negate an unsigned integer (`{ls}`)"), "", "unsigned values cannot be negative; use a signed type");
+                return types.POISON;
+            }
+            let t = ex_int(ck, inner, exp, true);
+            set_ty(inner, t);
+            return t;
+        }
+        let t = check(ck, inner, exp, false);
+        if t == types.POISON { return t; }
+        if !(types.is_float(t) || (types.is_int(t) && types.signed(t))) {
+            let ts = ty_str(ck, t);
+            here(ck, e.span, format("cannot apply unary `-` to type `{ts}`"), "",
+                 types.is_int(t) ? "negation needs a signed integer or float" : "");
+            return types.POISON;
+        }
+        return t;
+    }
+    if op == "!" {
+        let t = check(ck, inner, types.BOOL, false);
+        if t == types.POISON { return t; }
+        if t != types.BOOL {
+            let ts = ty_str(ck, t);
+            here(ck, e.span, format("cannot apply `!` to type `{ts}`"), "", "`!` works on `bool`; use `~` for bitwise not");
+            return types.POISON;
+        }
+        return types.BOOL;
+    }
+    if op == "~" {
+        let t = check(ck, inner, exp, false);
+        if t == types.POISON { return t; }
+        if !types.is_int(t) {
+            let ts = ty_str(ck, t);
+            here(ck, e.span, format("cannot apply `~` to type `{ts}`"), "", "");
+            return types.POISON;
+        }
+        return t;
+    }
+    if op == "*" {
+        let t = check(ck, inner, -1, false);
+        if t == types.POISON { return t; }
+        if tk(ck, t) != types.K_PTR {
+            let ts = ty_str(ck, t);
+            here(ck, e.span, format("cannot dereference non-pointer type `{ts}`"), "", "");
+            return types.POISON;
+        }
+        let pi = ck.types.tys.at(t).inner;
+        if pi == types.VOID {
+            here(ck, e.span, "cannot dereference a `*void`", "", "cast it to a typed pointer first: `p as *T`");
+            return types.POISON;
+        }
+        if !sized(ck, pi, ck.cur_mod, e.span) { return types.POISON; }
+        return pi;
+    }
+    // op == "&"
+    let exp_inner = (exp >= 0 && tk(ck, exp) == types.K_PTR) ? ck.types.tys.at(exp).inner : -1;
+    let t = check(ck, inner, exp_inner, false);
+    if t == types.POISON { return t; }
+    let ik: str = inner.kind;
+    if !is_place(inner) && flag(e, "auto_ref") && (ik == "Call" || ik == "StructLit" || ik == "ArrayLit" || ik == "Binary" || ik == "Try"
+        || ik == "Catch" || ik == "Ternary" || ik == "Cast" || ik == "Field" || ik == "Index") {
+        set_flag(e, "temp", true);
+        return types.ptr(&ck.types, t, false);
+    }
+    if !is_place(inner) {
+        here(ck, e.span, "cannot take the address of a temporary value", "", "store it in a `let mut` variable first");
+        return types.POISON;
+    }
+    if through_ro(ck, inner) { return types.ptr(&ck.types, t, true); }
+    if !flag(e, "auto_ref") {
+        let mut label = String.empty();
+        let mut help = String.empty();
+        if place_mut(ck, inner, &label, &help) {
+            here(ck, e.span, "cannot take the address of an immutable binding", label, help);
+            return types.POISON;
+        }
+    }
+    return types.ptr(&ck.types, t, false);
+}
+
+fn ex_binary(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+    let op: str = e.str_of("op");
+    let l = e.node_of("l");
+    let r = e.node_of("r");
+    let opsp = e.get("op_span").span;
+    if op == "&&" || op == "||" {
+        set_tyn(e, "opty", types.BOOL);
+        let lt = check(ck, l, types.BOOL, false);
+        let rt = check(ck, r, types.BOOL, false);
+        for side in 0..2 {
+            let t = side == 0 ? lt : rt;
+            let x = side == 0 ? l : r;
+            if t != types.POISON && t != types.BOOL {
+                let ts = ty_str(ck, t);
+                here(ck, x.span, format("`{op}` needs `bool` operands, found `{ts}`"), "",
+                     types.is_numeric(t) ? "compare explicitly, e.g. `x != 0`" : "");
+                return types.BOOL;
+            }
+        }
+        return types.BOOL;
+    }
+    if op == "??" { return unimpl(ck, e, "the `??` operator"); }
+    let arith_like = is_arith(op) || is_bitwise(op);
+    if is_shift(op) {
+        let lt = check(ck, l, (exp >= 0 && types.is_int(exp)) ? exp : -1, false);
+        let rt = check(ck, r, -1, false);
+        set_tyn(e, "opty", lt);
+        if lt == types.POISON || rt == types.POISON { return types.POISON; }
+        if !types.is_int(lt) || !types.is_int(rt) {
+            let ls = ty_str(ck, lt);
+            let rs = ty_str(ck, rt);
+            here(ck, opsp, format("cannot apply `{op}` to `{ls}` and `{rs}`"), "", "shifts need integer operands");
+            return types.POISON;
+        }
+        return lt;
+    }
+    let hint = (arith_like && exp >= 0 && types.is_numeric(exp)) ? exp : -1;
+    let mut lt = types.POISON;
+    let mut rt = types.POISON;
+    if untyped(ck, l) && !untyped(ck, r) {
+        rt = check(ck, r, -1, false);
+        let rk = tk(ck, rt);
+        lt = check(ck, l, (types.is_numeric(rt) || rk == types.K_PTR || rk == types.K_FN || rk == types.K_OPT) ? rt : -1, false);
+    } else {
+        lt = check(ck, l, hint, false);
+        let lk = tk(ck, lt);
+        rt = check(ck, r, (types.is_numeric(lt) || lk == types.K_PTR || lk == types.K_FN || lk == types.K_OPT) ? lt : -1, false);
+    }
+    set_tyn(e, "opty", lt);
+    if lt == types.POISON || rt == types.POISON { return is_cmp(op) ? types.BOOL : types.POISON; }
+    if (op == "==" || op == "!=") && tk(ck, lt) == types.K_OPT && tk(ck, rt) == types.K_OPT && (is_null(ck, l) || is_null(ck, r)) {
+        if is_null(ck, l) && is_null(ck, r) { return types.BOOL; }
+        set_flag(e, "opt_null", true);
+        e.set("opt_side", ast.v_str(is_null(ck, l) ? "r" : "l"));
+        set_nil(l, "conv");
+        set_nil(r, "conv");
+        return types.BOOL;
+    }
+    if (lt == types.STR || lt == types.STRING) && (rt == types.STR || rt == types.STRING) && (op == "+" || op == "==" || op == "!=") {
+        if op == "+" {
+            if ck.nostd {
+                need_std(ck, ck.cur_mod, opsp, "joining strings with `+`");
+                return types.POISON;
+            }
+            let res = (lt == types.STRING || rt == types.STRING) ? types.STRING : types.STR;
+            e.set("strk", ast.v_str(res == types.STRING ? "String" : "str"));
+            set_tyn(e, "opty", res);
+            return res;
+        }
+        set_tyn(e, "opty", types.STR);
+        return types.BOOL;
+    }
+    if is_cmp(op) && types.is_int(lt) && types.is_int(rt) {
+        let zero_r = int_is_zero(r) && !types.signed(lt);
+        let zero_l = int_is_zero(l) && !types.signed(rt);
+        if (zero_r && (op == "<" || op == ">=")) || (zero_l && (op == ">" || op == "<=")) {
+            let always = (op == "<" || op == ">") ? "false" : "true";
+            warn_here(ck, opsp, format("this comparison is always {always}"), "unsigned values are never negative",
+                      "remove it, or use a signed type if negative values are possible");
+        }
+    }
+    if !types.eq(&ck.types, lt, rt) && types.is_numeric(lt) && types.is_numeric(rt) {
+        let ct = binary_conv(ck, e, lt, rt);
+        if ct < 0 { return is_cmp(op) ? types.BOOL : types.POISON; }
+        lt = ct;
+        rt = ct;
+        set_tyn(e, "opty", ct);
+    } else {
+        set_nil(l, "conv");
+        set_nil(r, "conv");
+    }
+    if !types.eq(&ck.types, lt, rt) {
+        let ls = ty_str(ck, lt);
+        let rs = ty_str(ck, rt);
+        let mut help = format("`{op}` needs both operands to have the same type");
+        if types.is_numeric(lt) && types.is_numeric(rt) { help = format("convert one side explicitly, e.g. `x as {ls}`"); }
+        else if (lt == types.STR || lt == types.STRING) && op == "+" { help = String.from("convert the other operand with `to_str(x)`"); }
+        here(ck, r.span, "mismatched types in binary operation", format("expected `{ls}`, found `{rs}`"), help);
+        return is_cmp(op) ? types.BOOL : types.POISON;
+    }
+    let t = lt;
+    let ts = ty_str(ck, t);
+    if is_arith(op) {
+        let ok = (types.is_numeric(t) && !(op == "%" && types.is_float(t))) || (op == "+" && t == types.STR);
+        if !ok {
+            here(ck, opsp, format("cannot apply `{op}` to type `{ts}`"), "",
+                 (op == "%" && types.is_float(t)) ? "`%` is only defined on integers" : "");
+            return types.POISON;
+        }
+        if (op == "/" || op == "%") && types.is_int(t) && int_is_zero(r) {
+            here(ck, r.span, "division by zero", "the divisor is the literal 0", "");
+        }
+        return t;
+    }
+    if is_bitwise(op) {
+        if !types.is_int(t) {
+            here(ck, opsp, format("cannot apply `{op}` to type `{ts}`"), "", "this operator needs integer operands");
+            return types.POISON;
+        }
+        return t;
+    }
+    let tkind = tk(ck, t);
+    if op == "==" || op == "!=" {
+        if types.is_numeric(t) || t == types.BOOL || t == types.STR || t == types.ERR || tkind == types.K_ENUM || tkind == types.K_PTR || tkind == types.K_FN {
+            return types.BOOL;
+        }
+        here(ck, opsp, format("cannot compare values of type `{ts}` with `{op}`"), "",
+             (tkind == types.K_STRUCT || tkind == types.K_ARR || tkind == types.K_SLICE) ? "compare fields individually" : "");
+        return types.BOOL;
+    }
+    if types.is_numeric(t) { return types.BOOL; }
+    here(ck, opsp, format("cannot order values of type `{ts}` with `{op}`"), "", "");
+    return types.BOOL;
+}
+
+fn ex_cast(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+    let target = resolve_type(ck, e.node_of("tyn"), ck.cur_mod, false);
+    let inner = e.node_of("expr");
+    let mut hint = -1 as i64;
+    let tkd = tk(ck, target);
+    if (tkd == types.K_PTR || tkd == types.K_FN) && inner.kind == "Ident" && inner.str_of("name") == "null" {
+        hint = target;
+    } else if tkd == types.K_PTR && untyped(ck, inner) && !lit_is_float(inner) {
+        hint = types.U64;
+    } else if untyped(ck, inner) && types.is_numeric(target) {
+        let inner_is_float = lit_is_float(inner);
+        if types.is_int(target) && !inner_is_float { hint = target; }
+        else if types.is_float(target) && inner_is_float { hint = target; }
+    }
+    let t = check(ck, inner, hint, false);
+    if target == types.POISON || t == types.POISON { return target; }
+    let tkk = tk(ck, t);
+    let mut ok = false;
+    if types.eq(&ck.types, t, target) { ok = true; }
+    else if types.is_numeric(t) && types.is_numeric(target) { ok = true; }
+    else if t == types.BOOL && types.is_int(target) { ok = true; }
+    else if tkk == types.K_ENUM && types.is_int(target) { ok = true; }
+    else if tkk == types.K_PTR && (types.is_int(target) || tkd == types.K_PTR) { ok = true; }
+    else if types.is_int(t) && tkd == types.K_PTR { ok = true; }
+    else if tkk == types.K_FN && tkd == types.K_PTR && ck.types.tys.at(target).inner == types.VOID { ok = true; }
+    else if tkd == types.K_FN && tkk == types.K_PTR && ck.types.tys.at(t).inner == types.VOID { ok = true; }
+    if !ok {
+        let mut h = String.empty();
+        if types.is_int(t) && target == types.BOOL { h = String.from("compare explicitly: `x != 0`"); }
+        else if types.is_int(t) && tkd == types.K_ENUM { h = String.from("enums cannot be created from integers; use `match`"); }
+        else if tkk == types.K_FN || tkd == types.K_FN { h = String.from("function pointers convert only to and from `*void`"); }
+        let ts = ty_str(ck, t);
+        let gs = ty_str(ck, target);
+        here(ck, e.span, format("cannot cast `{ts}` to `{gs}`"), "", h);
+    }
+    return target;
+}
+
+fn ex_incdec(ck: *Checker, e: *ast.Node) -> i64 {
+    let inner = e.node_of("expr");
+    let t = check(ck, inner, -1, false);
+    if t == types.POISON { return types.POISON; }
+    let op = String.from(e.str_of("op"));
+    if !types.is_numeric(t) {
+        let ts = ty_str(ck, t);
+        here(ck, e.span, format("cannot apply `{op}` to type `{ts}`"), "", "`++` and `--` work on integers and floats");
+        return types.POISON;
+    }
+    if !is_place(inner) {
+        here(ck, e.span, format("`{op}` needs a variable, field or element to modify"), "not an assignable place", "");
+        return types.POISON;
+    }
+    let mut label = String.empty();
+    let mut help = String.empty();
+    if place_mut(ck, inner, &label, &help) {
+        here(ck, e.span, format("cannot apply `{op}` to an immutable place"), label, help);
+    }
+    return t;
+}
+
+// ---- calls ---------------------------------------------------------------------------------------------------------------------
+
+fn is_builtin_name(s: str) -> bool {
+    let names = ["print", "println", "format", "panic", "assert", "alloc", "free", "exit", "to_str", "string_new", "string_from",
+                 "string_clear", "cstr", "from_cstr", "slice_of", "size_of", "drop", "drop_at", "write_at", "read_at", "gc_collect",
+                 "gc_bytes", "gc_collections", "alloc_in", "gc_collect_gen", "gc_gen_bytes", "gc_gen_collections"];
+    for i in 0..27 { if names[i] == s { return true; } }
+    return false;
+}
+
+fn callee_is_value(ck: *Checker, c: *ast.Node, ent: Ent) -> bool {
+    if c.kind != "Ident" && c.kind != "Field" { return true; }
+    if ent.kind != 0 { return false; }
+    let mut root = c;
+    while root.kind == "Field" { root = root.node_of("obj"); }
+    if root.kind != "Ident" { return true; }
+    return lookup_local(ck, root.str_of("name")) >= 0;
+}
+
+fn default_ok(d: *ast.Node) -> bool {
+    if d.kind == "Int" || d.kind == "Float" || d.kind == "Bool" || d.kind == "Str" { return true; }
+    if d.kind == "Ident" && d.str_of("name") == "null" { return true; }
+    return d.kind == "Unary" && d.str_of("op") == "-" && (d.node_of("expr").kind == "Int" || d.node_of("expr").kind == "Float");
+}
+
+fn param_has_default(p: *ast.Node) -> bool { return p.has("default") && p.get("default").tag != 0; }
+
+// matches the written arguments to the parameters: positional first, then `name = value`, then defaults
+fn normalize_args(ck: *Checker, e: *ast.Node, sid: i64) -> bool {
+    let nid = ck.syms.at(sid).node;
+    if !ck.nodes.at(nid).has("params") { return true; }
+    let pv = ck.nodes.at(nid).get("params");
+    let np = pv.items.len;
+    let nargs = e.get("args").items.len;
+    let mut has_named = false;
+    let mut n_pos = 0 as i64;
+    for i in 0..nargs {
+        if e.get("args").items.at(i).node.at(0).kind == "NamedArg" { has_named = true; } else { n_pos += 1; }
+    }
+    let mut any_default = false;
+    for i in 0..np { if param_has_default(pv.items.at(i).node.at(0)) { any_default = true; } }
+    if !has_named && (n_pos >= np || !any_default) { return true; }
+    let off = flag(e, "method_recv") ? 1 : 0;
+    let fname = format("function `{ck.syms.at(sid).name}`");
+    let sname = String.from(ck.syms.at(sid).name);
+    let mut pnames: List<String> = List.new();
+    for i in 0..np { pnames.push(String.from(pv.items.at(i).node.at(0).str_of("name"))); }
+    // slots: index into the written args (or -1), plus defaults cloned later
+    let mut slots: List<i64> = List.new();
+    for i in 0..np { slots.push(-1); }
+    let mut extra: List<i64> = List.new();
+    let mut ok = true;
+    let mut seen_named = false;
+    let mut pos_seen = 0 as i64;
+    for ai in 0..nargs {
+        let a = e.get("args").items.at(ai).node.at(0);
+        if a.kind == "NamedArg" {
+            seen_named = true;
+            let an = String.from(a.str_of("name"));
+            let mut idx = -1 as i64;
+            for q in 0..np { if *pnames.at(q) == an && idx < 0 { idx = q; } }
+            let bad = idx < 0 || idx < off || flag(pv.items.at(idx).node.at(0), "self_param");
+            if bad {
+                let mut rest: List<String> = List.new();
+                for q in off..np { rest.push(String.from(*pnames.at(q))); }
+                let sg = diag.suggest_list(an, &rest);
+                let mut joined = String.empty();
+                for q in 0..rest.len { if q > 0 { joined.append(", "); } joined.append(*rest.at(q)); }
+                let help = sg.len > 0 ? format("did you mean `{sg}`?") : (rest.len > 0 ? format("parameters: {joined}") : String.empty());
+                here(ck, a.get("name_span").span, format("{fname} has no parameter named `{an}`"), "no such parameter", help);
+                check(ck, a.node_of("expr"), -1, false);
+                ok = false;
+                continue;
+            }
+            if *slots.at(idx) >= 0 {
+                here(ck, a.get("name_span").span, format("the argument `{an}` is given twice"), "already supplied", "");
+                check(ck, a.node_of("expr"), -1, false);
+                ok = false;
+                continue;
+            }
+            *slots.at(idx) = ai;
+        } else {
+            if seen_named {
+                here(ck, a.span, "a positional argument cannot follow a named argument", "", "put the `name = value` arguments last");
+                check(ck, a, -1, false);
+                ok = false;
+                continue;
+            }
+            let pos = pos_seen;
+            pos_seen += 1;
+            if pos < np { *slots.at(pos) = ai; } else { extra.push(ai); }
+        }
+    }
+    if !ok {
+        for i in 0..np {
+            if *slots.at(i) >= 0 {
+                let a = e.get("args").items.at(*slots.at(i)).node.at(0);
+                let x = a.kind == "NamedArg" ? a.node_of("expr") : a;
+                if !x.has("ty") { check(ck, x, -1, false); }
+            }
+        }
+        for i in 0..extra.len {
+            let a = e.get("args").items.at(*extra.at(i)).node.at(0);
+            if !a.has("ty") { check(ck, a, -1, false); }
+        }
+        return false;
+    }
+    let mut missing: List<String> = List.new();
+    let mut defaults: List<ast.Node> = List.new();
+    let mut default_for: List<i64> = List.new();
+    for i in 0..np {
+        if *slots.at(i) >= 0 { continue; }
+        let p = pv.items.at(i).node.at(0);
+        if !param_has_default(p) { missing.push(String.from(*pnames.at(i))); continue; }
+        let d = p.node_of("default");
+        if !default_ok(d) {
+            if !flag(d, "_reported") {
+                set_flag(d, "_reported", true);
+                here(ck, d.span, "a default value must be a literal", "not a literal", "use a number, string, `true` / `false` or `null`");
+            }
+            return false;
+        }
+        defaults.push(ast.clone_node(d));
+        default_for.push(i);
+    }
+    if missing.len > 0 {
+        let plural = missing.len > 1 ? "s" : "";
+        let mut ms = String.empty();
+        for i in 0..missing.len { if i > 0 { ms.append(", "); } ms.append(format("`{*missing.at(i)}`")); }
+        let mut sig = format("signature: fn {sname}(");
+        for i in off..np {
+            if i > off { sig.append(", "); }
+            sig.append(*pnames.at(i));
+            if param_has_default(pv.items.at(i).node.at(0)) { sig.append("=.."); }
+        }
+        sig.push(')');
+        here_n(ck, e.span, format("{fname} is missing the argument{plural} {ms}"), format("missing argument{plural}"), "", sig);
+        for i in 0..np {
+            if *slots.at(i) >= 0 {
+                let a = e.get("args").items.at(*slots.at(i)).node.at(0);
+                check(ck, a.kind == "NamedArg" ? a.node_of("expr") : a, -1, false);
+            }
+        }
+        for i in 0..extra.len { check(ck, e.get("args").items.at(*extra.at(i)).node.at(0), -1, false); }
+        return false;
+    }
+    // rebuild `args` as a plain positional list
+    let mut out: List<ast.Val> = List.new();
+    let mut di = 0 as i64;
+    for i in 0..np {
+        if *slots.at(i) >= 0 {
+            let a = e.get("args").items.at(*slots.at(i)).node.at(0);
+            if a.kind == "NamedArg" { out.push(ast.v_node(ast.clone_node(a.node_of("expr")))); }
+            else { out.push(ast.clone_val(e.get("args").items.at(*slots.at(i)))); }
+        } else {
+            out.push(ast.v_node(ast.clone_node(defaults.at(di))));
+            di += 1;
+        }
+    }
+    for i in 0..extra.len { out.push(ast.clone_val(e.get("args").items.at(*extra.at(i)))); }
+    e.set("args", ast.v_list(out));
+    return true;
+}
+
+fn vararg(ck: *Checker, a: *ast.Node) {
+    let t = check(ck, a, -1, false);
+    set_nil(a, "conv");
+    let k = tk(ck, t);
+    if t == types.POISON || types.is_numeric(t) || t == types.BOOL || k == types.K_PTR || k == types.K_ENUM || k == types.K_FN { return; }
+    let ts = ty_str(ck, t);
+    here(ck, a.span, format("cannot pass a value of type `{ts}` to a C variadic parameter"), "",
+         "pass `cstr(s)` for a C string, or an integer, float, bool or pointer");
+}
+
+fn check_args(ck: *Checker, e: *ast.Node, params: *List<i64>, name: str, sig: str, variadic: bool) {
+    let n = params.len;
+    let na = e.get("args").items.len;
+    let bad = na < n || (na > n && !variadic);
+    if bad {
+        let off = flag(e, "method_recv") ? 1 : 0;
+        let want = n - off;
+        let got = na - off;
+        let plural = want != 1 ? "s" : "";
+        let atl = variadic ? "at least " : "";
+        let was = got == 1 ? "was" : "were";
+        here_n(ck, e.span, format("{name} takes {atl}{want} argument{plural} but {got} {was} supplied"), "wrong number of arguments", "",
+               sig.len > 0 ? format("signature: {sig}") : String.empty());
+    }
+    for i in 0..na {
+        let a = e.get("args").items.at(i).node.at(0);
+        if i < n { expect(ck, a, *params.at(i), false); }
+        else if variadic && !bad { vararg(ck, a); }
+        else { check(ck, a, -1, false); }
+    }
+}
+
+fn check_all_args(ck: *Checker, e: *ast.Node) {
+    for i in 0..e.get("args").items.len { check(ck, e.get("args").items.at(i).node.at(0), -1, false); }
+}
+
+fn indirect_call(ck: *Checker, e: *ast.Node) -> i64 {
+    let c = e.node_of("callee");
+    let t = check(ck, c, -1, false);
+    if t == types.POISON {
+        check_all_args(ck, e);
+        return types.POISON;
+    }
+    if tk(ck, t) != types.K_FN && tk(ck, t) != types.K_CLO {
+        let ts = ty_str(ck, t);
+        here(ck, c.span, format("cannot call a value of type `{ts}`"), "not a function",
+             "only functions, function pointers (`fn(A) -> R`) and closures (`|A| -> R`) can be called");
+        check_all_args(ck, e);
+        return types.POISON;
+    }
+    if tk(ck, t) == types.K_CLO { e.set("indirect", ast.v_str("clo")); } else { e.set("indirect", ast.v_bool(true)); }
+    let mut ps = copy_ids(&ck.types.tys.at(t).params);
+    let ts = ty_str(ck, t);
+    check_args(ck, e, &ps, "this function pointer", ts, false);
+    return ck.types.tys.at(t).inner;
+}
+
+fn ex_call(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+    let c = e.node_of("callee");
+    let mi = ck.cur_mod;
+    if c.kind == "Ident" && is_builtin_name(c.str_of("name")) && lookup_local(ck, c.str_of("name")) < 0 {
+        return unimpl(ck, e, "builtin calls");
+    }
+    let mut ent = Ent { kind: 0, idx: -1 };
+    if c.kind == "Ident" || c.kind == "Field" { ent = entity(ck, c); }
+    if ent.kind == 3 {
+        check_all_args(ck, e);
+        return types.POISON;
+    }
+    if c.kind == "Field" && (ent.kind == 0 || (ent.kind == 2 && ck.syms.at(ent.idx).kind != "fn")) {
+        return unimpl(ck, e, "method calls");
+    }
+    if ent.kind != 2 || ck.syms.at(ent.idx).kind != "fn" {
+        if callee_is_value(ck, c, ent) { return indirect_call(ck, e); }
+        if c.kind == "Ident" && lookup_local(ck, c.str_of("name")) < 0 && lookup_sym(ck, mi, c.str_of("name")) < 0
+            && import_of(ck, mi, c.str_of("name")) < 0 {
+            let cn = String.from(c.str_of("name"));
+            let mut cands: List<String> = List.new();
+            let cm = ck.cmods.at(mi);
+            for q in 0..cm.order.len {
+                let s = ck.syms.at(*cm.order.at(q));
+                if s.kind == "fn" { cands.push(String.from(s.name)); }
+            }
+            let mut bn: List<String> = List.new();
+            let all = ["print", "println", "format", "panic", "assert", "alloc", "free", "exit", "to_str", "string_new", "string_from",
+                       "string_clear", "cstr", "from_cstr", "slice_of", "size_of", "drop", "drop_at", "write_at", "read_at", "gc_collect",
+                       "gc_bytes", "gc_collections", "alloc_in", "gc_collect_gen", "gc_gen_bytes", "gc_gen_collections"];
+            for i in 0..27 { bn.push(String.from(all[i])); }
+            let sbn = sorted_names(&bn);
+            for i in 0..sbn.len { cands.push(String.from(*sbn.at(i))); }
+            let sg = diag.suggest_list(cn, &cands);
+            here(ck, c.span, format("cannot find function `{cn}` in this scope"), "not found",
+                 sg.len > 0 ? format("a similar function exists: `{sg}`") : String.empty());
+        } else if c.kind == "Field" && c.node_of("obj").kind == "Ident" && ent.kind == 0 && lookup_local(ck, c.node_of("obj").str_of("name")) < 0
+            && lookup_sym(ck, mi, c.node_of("obj").str_of("name")) < 0 && import_of(ck, mi, c.node_of("obj").str_of("name")) < 0 {
+            let on = String.from(c.node_of("obj").str_of("name"));
+            here(ck, c.node_of("obj").span, format("cannot find module or value `{on}` in this scope"), "",
+                 format("add `import {on};` if it is a module"));
+        } else if ent.kind == 2 && ck.syms.at(ent.idx).kind == "struct" {
+            let sn = String.from(ck.syms.at(ent.idx).name);
+            here(ck, c.span, format("`{sn}` is a struct, not a function"), "", format("construct it with `{sn} {{ field: value }}`"));
+        } else {
+            here(ck, c.span, "this expression is not callable", "", "only functions and function pointers can be called");
+        }
+        check_all_args(ck, e);
+        return types.POISON;
+    }
+    let mut sid = ent.idx;
+    if !normalize_args(ck, e, sid) { return types.POISON; }
+    if ck.syms.at(sid).tparams.len > 0 { return unimpl(ck, e, "generic function calls"); }
+    if e.has("targs") && e.get("targs").items.len > 0 {
+        let sn = String.from(ck.syms.at(sid).name);
+        here(ck, e.span, format("function `{sn}` is not generic and takes no type arguments"), "", "");
+    }
+    e.set("sym", ast.v_tag(11, sid));
+    let sn = String.from(ck.syms.at(sid).name);
+    let mut sig = format("fn {sn}(");
+    let nid = ck.syms.at(sid).node;
+    for i in 0..ck.syms.at(sid).params.len {
+        if i > 0 { sig.append(", "); }
+        let pn = String.from(ck.nodes.at(nid).get("params").items.at(i).node.at(0).str_of("name"));
+        let pt = ty_str(ck, *ck.syms.at(sid).params.at(i));
+        sig.append(format("{pn}: {pt}"));
+    }
+    if ck.syms.at(sid).variadic { sig.append(", ..."); }
+    sig.push(')');
+    if ck.syms.at(sid).ret != types.VOID { sig.append(format(" -> {ty_str(ck, ck.syms.at(sid).ret)}")); }
+    let mut ps = copy_ids(&ck.syms.at(sid).params);
+    check_args(ck, e, &ps, format("function `{sn}`"), sig, ck.syms.at(sid).variadic);
+    return ck.syms.at(sid).ret;
+}
+
+// ---- statements ----------------------------------------------------------------------------------------------------------------
+
+fn check_block(ck: *Checker, b: *ast.Node, scope: bool) {
+    if scope { push_scope(ck); }
+    let mut warned = false;
+    let mut dead = false;
+    let n = b.get("stmts").items.len;
+    for i in 0..n {
+        let s = b.get("stmts").items.at(i).node.at(0);
+        if dead && !warned {
+            warn_here(ck, s.span, "unreachable statement", "this code is never executed", "");
+            warned = true;
+        }
+        check_stmt(ck, s);
+        if !dead && terminates(ck, s) { dead = true; }
+    }
+    if scope { pop_scope(ck); }
+}
+
+fn check_stmt(ck: *Checker, s: *ast.Node) {
+    let k: str = s.kind;
+    if k == "Block" { check_block(ck, s, true); }
+    else if k == "Let" { st_let(ck, s); }
+    else if k == "If" { st_if(ck, s); }
+    else if k == "While" { in_loop(ck, s, true); }
+    else if k == "Loop" { in_loop(ck, s, false); }
+    else if k == "Return" { st_return(ck, s); }
+    else if k == "Break" { st_break(ck, s, true); }
+    else if k == "Continue" { st_break(ck, s, false); }
+    else if k == "ExprStmt" { st_exprstmt(ck, s); }
+    else if k == "Assign" { st_assign(ck, s); }
+    else { here(ck, s.span, format("UNIMPLEMENTED in the Crumbs checker: statement {k}"), "", ""); }
+}
+
+fn st_let(ck: *Checker, s: *ast.Node) {
+    let has_ann = !s.is_none("tyn");
+    let ann = has_ann ? resolve_type(ck, s.node_of("tyn"), ck.cur_mod, false) : -1;
+    let init = s.node_of("init");
+    let mut t = check(ck, init, ann, false);
+    set_flag(s, "afree", false);
+    if has_ann && ann == types.STR && t == types.STRING {
+        set_flag(init, "coerce", true);
+        t = types.STR;
+    }
+    set_nil(init, "conv");
+    let mut ty = types.POISON;
+    if has_ann {
+        if tk(ck, ann) == types.K_OPT && !types.same(&ck.types, t, ann) { coerce(ck, init, t, ann); }
+        else if types.is_numeric(ann) && types.is_numeric(t) && t != ann { apply_conv(ck, init, t, ann); }
+        else if ro_violation(ck, init, t, ann) { }
+        else if ptr_ok(ck, ann, t) { }
+        else if !types.same(&ck.types, t, ann) { mismatch(ck, init, ann, t, "mismatched types"); }
+        else { consume(ck, init); }
+        ty = ann;
+    } else {
+        ty = t;
+        consume(ck, init);
+    }
+    if ty == types.VOID {
+        here(ck, init.span, "cannot bind a `void` value to a variable", "this expression produces no value", "");
+        ty = types.POISON;
+    }
+    if ty != types.POISON && !sized(ck, ty, ck.cur_mod, init.span) { ty = types.POISON; }
+    let name = String.from(s.str_of("name"));
+    if name == "_" {
+        set_nil(s, "local");
+        set_flag(s, "drop_temp", ty != types.POISON && has_glue(ck, ty));
+        return;
+    }
+    let loc = declare_local(ck, name, ty, flag(s, "mut"), s.get("name_span").span, false);
+    s.set("local", ast.v_tag(12, loc));
+}
+
+fn cond(ck: *Checker, c: *ast.Node) {
+    let t = check(ck, c, types.BOOL, false);
+    if !types.same(&ck.types, t, types.BOOL) { mismatch(ck, c, types.BOOL, t, "condition must be a `bool`"); }
+}
+
+fn st_if(ck: *Checker, s: *ast.Node) {
+    cond(ck, s.node_of("cond"));
+    let mut m0 = copy_moved(&ck.moved);
+    check_block(ck, s.node_of("then"), true);
+    let mut states: List<List<MovedEnt>> = List.new();
+    if !terminates(ck, s.node_of("then")) { states.push(copy_moved(&ck.moved)); }
+    ck.moved = copy_moved(&m0);
+    if !s.is_none("els") {
+        let els = s.node_of("els");
+        if els.kind == "If" { st_if(ck, els); } else { check_block(ck, els, true); }
+        if !terminates(ck, els) { states.push(copy_moved(&ck.moved)); }
+    } else {
+        states.push(copy_moved(&ck.moved));
+    }
+    ck.moved = merge_moved(&m0, &states);
+}
+
+fn loop_body(ck: *Checker, s: *ast.Node, is_while: bool) {
+    if is_while { cond(ck, s.node_of("cond")); }
+    check_block(ck, s.node_of("body"), true);
+}
+
+// checks a loop body (twice if it moves an outer variable) and computes the moved-set after the loop
+fn in_loop(ck: *Checker, s: *ast.Node, is_while: bool) {
+    let mut m0 = copy_moved(&ck.moved);
+    let start_id = ck.locals.len;
+    ck.loop_stack.push(LoopFrame { breaks: List.new(), conts: List.new() });
+    ck.fn_loops += 1;
+    loop_body(ck, s, is_while);
+    let body = s.node_of("body");
+    let mut carry: List<List<MovedEnt>> = List.new();
+    if !terminates(ck, body) { carry.push(copy_moved(&ck.moved)); }
+    let top = ck.loop_stack.len - 1;
+    for i in 0..ck.loop_stack.at(top).conts.len { carry.push(copy_moved(ck.loop_stack.at(top).conts.at(i))); }
+    let mut outer: List<MovedEnt> = List.new();
+    for si in 0..carry.len {
+        for i in 0..carry.at(si).len {
+            let l = carry.at(si).at(i).local;
+            if moved_at(&m0, l) < 0 && l < start_id { set_moved(&outer, l, carry.at(si).at(i).line); }
+        }
+    }
+    if outer.len > 0 {
+        *ck.loop_stack.at(top) = LoopFrame { breaks: List.new(), conts: List.new() };
+        let mut nm = copy_moved(&m0);
+        for i in 0..outer.len { set_moved(&nm, outer.at(i).local, outer.at(i).line); }
+        ck.moved = nm;
+        loop_body(ck, s, is_while);
+        carry = List.new();
+        if !terminates(ck, body) { carry.push(copy_moved(&ck.moved)); }
+        for i in 0..ck.loop_stack.at(top).conts.len { carry.push(copy_moved(ck.loop_stack.at(top).conts.at(i))); }
+    }
+    ck.fn_loops -= 1;
+    let frame = ck.loop_stack.pop() catch { panic("loop stack underflow"); };
+    let mut exits: List<List<MovedEnt>> = List.new();
+    for i in 0..frame.breaks.len { exits.push(copy_moved(frame.breaks.at(i))); }
+    if is_while { exits.push(carry.len > 0 ? merge_moved(&m0, &carry) : copy_moved(&m0)); }
+    let merged = exits.len > 0 ? merge_moved(&m0, &exits) : copy_moved(&m0);
+    let mut keep: List<MovedEnt> = List.new();
+    for i in 0..merged.len { if merged.at(i).local < start_id { keep.push(MovedEnt { local: merged.at(i).local, line: merged.at(i).line }); } }
+    ck.moved = keep;
+}
+
+fn st_break(ck: *Checker, s: *ast.Node, is_break: bool) {
+    if ck.fn_loops == 0 {
+        here(ck, s.span, is_break ? "`break` outside of a loop" : "`continue` outside of a loop", "", "");
+    } else if ck.loop_stack.len > 0 {
+        let top = ck.loop_stack.len - 1;
+        if is_break { ck.loop_stack.at(top).breaks.push(copy_moved(&ck.moved)); }
+        else { ck.loop_stack.at(top).conts.push(copy_moved(&ck.moved)); }
+    }
+}
+
+fn st_return(ck: *Checker, s: *ast.Node) {
+    let ret = ck.fn_ret;
+    let tt = tk(ck, ret) == types.K_EU ? ck.types.tys.at(ret).inner : ret;
+    if s.is_none("expr") {
+        if tt != types.VOID && tt != types.POISON {
+            let ts = ty_str(ck, tt);
+            here(ck, s.span, format("`return` needs a value of type `{ts}`"), "", format("write `return <{ts} value>;`"));
+        }
+        return;
+    }
+    let x = s.node_of("expr");
+    if tt == types.VOID {
+        check(ck, x, -1, false);
+        here(ck, x.span, "unexpected return value: the function returns nothing", "",
+             "remove the value, or give the function a return type with `-> T`");
+        return;
+    }
+    expect(ck, x, tt, false);
+    if tt == types.STR && x.kind == "Ident" && flag(x, "coerce") && x.has("local") && x.get("local").tag == 12
+        && ck.locals.at(x.get("local").i).glue {
+        let nm = String.from(x.str_of("name"));
+        here(ck, x.span, format("cannot return a view of the local `String` `{nm}`: it is destroyed when the function returns"),
+             "this `str` would dangle", "return the `String` itself (change the return type to `String`)");
+    }
+}
+
+fn st_exprstmt(ck: *Checker, s: *ast.Node) {
+    let e = s.node_of("expr");
+    let t = check(ck, e, -1, e.kind == "Call");
+    if e.kind == "Call" && tk(ck, t) == types.K_EU {
+        let ts = ty_str(ck, t);
+        here(ck, e.span, format("unused error from call returning `{ts}`"), "this call can fail",
+             "prefix with `try`, or handle it: `f() catch |e| { ... };`");
+        return;
+    }
+    if e.kind != "Call" && e.kind != "Try" && e.kind != "Catch" && e.kind != "IncDec" {
+        here(ck, e.span, "expression statement has no effect", "", "assign it to a variable or remove it");
+    } else if t != types.POISON && t != types.VOID && has_glue(ck, t) {
+        set_flag(s, "drop_temp", true);
+        set_flag(e, "owned", true);
+    }
+}
+
+fn st_assign(ck: *Checker, s: *ast.Node) {
+    let t = s.node_of("target");
+    let op = String.from(s.str_of("op"));
+    let mut was_used = false;
+    let mut have_used = false;
+    if t.kind == "Ident" {
+        let loc = lookup_local(ck, t.str_of("name"));
+        if loc >= 0 { was_used = ck.locals.at(loc).used; have_used = true; }
+        if op == "=" { ck.reinit_line = t.span.line; ck.reinit_col = t.span.col; }
+    }
+    let tt = check(ck, t, -1, false);
+    ck.reinit_line = 0;
+    ck.reinit_col = 0;
+    if have_used && op == "=" && t.has("local") && t.get("local").tag == 12 { ck.locals.at(t.get("local").i).used = was_used; }
+    set_tyn(s, "opty", tt);
+    let v = s.node_of("value");
+    if tt == types.POISON {
+        check(ck, v, -1, false);
+        return;
+    }
+    if !is_place(t) {
+        here(ck, t.span, "invalid left-hand side of assignment", "cannot assign to this expression", "");
+        check(ck, v, -1, false);
+        return;
+    }
+    let mut label = String.empty();
+    let mut help = String.empty();
+    if place_mut(ck, t, &label, &help) { here(ck, t.span, "cannot assign to an immutable place", label, help); }
+    if op == "=" {
+        expect(ck, v, tt, false);
+        if t.kind == "Ident" && t.has("local") && t.get("local").tag == 12 {
+            let at = moved_at(&ck.moved, t.get("local").i);
+            if at >= 0 {
+                let mut keep: List<MovedEnt> = List.new();
+                for i in 0..ck.moved.len { if i != at { keep.push(MovedEnt { local: ck.moved.at(i).local, line: ck.moved.at(i).line }); } }
+                ck.moved = keep;
+            }
+        }
+        return;
+    }
+    let bop = String.from(op[0..op.len - 1]);
+    s.set("bop", ast.v_str(bop));
+    let opsp = s.get("op_span").span;
+    let mut vt = check(ck, v, is_shift(bop) ? -1 : tt, false);
+    if vt == types.POISON { return; }
+    let tts = ty_str(ck, tt);
+    if is_shift(bop) {
+        if !(types.is_int(tt) && types.is_int(vt)) {
+            let vs = ty_str(ck, vt);
+            here(ck, opsp, format("cannot apply `{op}` to `{tts}` and `{vs}`"), "", "");
+        }
+        return;
+    }
+    if bop == "+" && (tt == types.STR || tt == types.STRING) && (vt == types.STR || vt == types.STRING || (tt == types.STRING && vt == types.U8)) { return; }
+    set_nil(v, "conv");
+    if types.is_numeric(tt) && types.is_numeric(vt) && vt != tt {
+        if !apply_conv(ck, v, vt, tt) { return; }
+        vt = tt;
+    }
+    if !types.same(&ck.types, vt, tt) {
+        mismatch(ck, v, tt, vt, "mismatched types");
+        return;
+    }
+    let mut ok = types.is_int(tt);
+    if is_arith(bop) { ok = (types.is_numeric(tt) && !(bop == "%" && types.is_float(tt))) || (bop == "+" && tt == types.STR); }
+    if !ok { here(ck, opsp, format("cannot apply `{op}` to type `{tts}`"), "", ""); }
+    if (bop == "/" || bop == "%") && types.is_int(tt) && int_is_zero(v) { here(ck, v.span, "division by zero", "", ""); }
+}
+
+// ---- function bodies and the driver ------------------------------------------------------------------------------------------
+
+fn check_fn_body(ck: *Checker, sid: i64) {
+    let nid = ck.syms.at(sid).node;
+    if ck.nodes.at(nid).is_none("body") { return; }
+    let mi = ck.syms.at(sid).mod_idx;
+    let saved_mod = ck.cur_mod;
+    let saved_ctx = String.from(ck.d.context);
+    let saved_env = tenv_replace(ck, copy_tenv(&ck.syms.at(sid).tenv));
+    ck.cur_mod = mi;
+    let fname = String.from(ck.nodes.at(nid).str_of("name"));
+    if ck.nodes.at(nid).has("default_of") && ck.nodes.at(nid).get("default_of").tag != 0 {
+        let tr = String.from(ck.nodes.at(nid).str_of("default_of"));
+        ck.d.context = format("while checking the default method `{fname}` of trait `{tr}` for this `impl`");
+    }
+    if ck.syms.at(sid).base >= 0 {
+        let mut binds = String.empty();
+        for i in 0..ck.syms.at(sid).tenv.len {
+            if i > 0 { binds.append(", "); }
+            let tn = String.from(ck.syms.at(sid).tenv.at(i).name);
+            let ts = ty_str(ck, ck.syms.at(sid).tenv.at(i).ty);
+            binds.append(format("{tn} = {ts}"));
+        }
+        let bn = String.from(ck.syms.at(ck.syms.at(sid).base).name);
+        ck.d.context = format("while checking `{bn}` instantiated with {binds}");
+    }
+    let saved_fn = ck.has_fn;
+    let saved_sym = ck.fn_sym;
+    let saved_ret = ck.fn_ret;
+    ck.has_fn = true;
+    ck.fn_sym = sid;
+    ck.fn_ret = ck.syms.at(sid).ret;
+    ck.fn_names = List.new();
+    ck.fn_loops = 0;
+    ck.fn_rdepth = 0;
+    ck.loop_stack = List.new();
+    ck.scopes = List.new();
+    push_scope(ck);
+    ck.moved = List.new();
+    let np = ck.nodes.at(nid).get("params").items.len;
+    for i in 0..np {
+        if i >= ck.syms.at(sid).params.len { break; }
+        let p = ck.nodes.at(nid).get("params").items.at(i).node.at(0);
+        declare_local(ck, p.str_of("name"), *ck.syms.at(sid).params.at(i), flag(p, "mut"), p.get("name_span").span, true);
+    }
+    let body = ck.nodes.at(nid).node_of("body");
+    check_block(ck, body, true);
+    pop_scope(ck);
+    let rt = ck.syms.at(sid).ret;
+    if tk(ck, rt) != types.K_EU && rt != types.VOID && rt != types.POISON && !terminates(ck, body) {
+        let ts = ty_str(ck, rt);
+        here(ck, ck.nodes.at(nid).span, format("function `{ck.syms.at(sid).name}` does not return a value on every path"),
+             format("expected `{ts}` to be returned"), "add a `return` at the end, or make every branch return");
+    }
+    ck.cur_mod = saved_mod;
+    tenv_replace(ck, saved_env);
+    ck.d.context = saved_ctx;
+    ck.has_fn = saved_fn;
+    ck.fn_sym = saved_sym;
+    ck.fn_ret = saved_ret;
+}
+
+fn copy_tenv(l: *List<NameTy>) -> List<NameTy> {
+    let mut o: List<NameTy> = List.new();
+    for i in 0..l.len { o.push(NameTy { name: String.from(l.at(i).name), ty: l.at(i).ty }); }
+    return o;
+}
+
+pub fn check_bodies(ck: *Checker, mi: i64) {
+    let mut todo: List<i64> = List.new();
+    for q in 0..ck.fns.len {
+        let sid = *ck.fns.at(q);
+        if ck.syms.at(sid).mod_idx == mi && ck.syms.at(sid).base < 0 { todo.push(sid); }
+    }
+    for q in 0..todo.len { check_fn_body(ck, *todo.at(q)); }
+}
+
+pub fn check_consts(ck: *Checker, mi: i64) {
+    ck.cur_mod = mi;
+    let mut todo: List<i64> = List.new();
+    for q in 0..ck.consts.len { if ck.syms.at(*ck.consts.at(q)).mod_idx == mi { todo.push(*ck.consts.at(q)); } }
+    for q in 0..todo.len {
+        let sid = *todo.at(q);
+        let nid = ck.syms.at(sid).node;
+        if ck.syms.at(sid).is_extern { continue; }
+        ck.has_fn = true;
+        ck.fn_sym = -1;
+        ck.fn_ret = types.VOID;
+        ck.fn_names = List.new();
+        ck.fn_loops = 0;
+        ck.fn_rdepth = 0;
+        ck.loop_stack = List.new();
+        ck.scopes = List.new();
+        push_scope(ck);
+        ck.moved = List.new();
+        let n0 = ck.d.error_count();
+        let cty = ck.syms.at(sid).ty;
+        let init = ck.nodes.at(nid).node_of("init");
+        let t = check(ck, init, cty != types.POISON ? cty : -1, false);
+        if cty == types.POISON || ck.d.error_count() > n0 {
+            ck.syms.at(sid).evaluated = true;
+            ck.syms.at(sid).cv = cv_int(0);
+            continue;
+        }
+        if !types.same(&ck.types, t, cty) {
+            mismatch(ck, init, cty, t, "mismatched types");
+            ck.syms.at(sid).evaluated = true;
+            ck.syms.at(sid).cv = cv_int(0);
+            continue;
+        }
+        let v = const_value(ck, sid);
+        if ck.nc {
+            ck.nc = false;
+            here(ck, ck.nc_span, ck.nc_msg, "", "constants may only use literals, other constants and operators");
+            ck.syms.at(sid).evaluated = true;
+            ck.syms.at(sid).cv = cv_int(0);
+            continue;
+        }
+        if types.is_int(cty) {
+            let sn = String.from(ck.syms.at(sid).name);
+            let ts = ty_str(ck, cty);
+            if v.kind != 0 {
+                here(ck, init.span, format("constant `{sn}` is out of range for `{ts}`"), format("evaluates to {v.i}"), "");
+                ck.syms.at(sid).cv = cv_int(0);
+            } else {
+                let neg = v.i < 0;
+                let mag = neg ? format("{0 - v.i}") : format("{v.i}");
+                if !in_range(neg, mag, cty) {
+                    here(ck, init.span, format("constant `{sn}` is out of range for `{ts}`"), format("evaluates to {v.i}"), "");
+                    ck.syms.at(sid).cv = cv_int(0);
+                }
+            }
+        }
+    }
+}
+
+fn check_main(ck: *Checker) {
+    let mi = ck.entry_mod;
+    let nm = String.from(ck.entry_name);
+    if ck.ld.order.len == 0 || nm.len == 0 { return; }
+    let s = lookup_sym(ck, mi, nm);
+    if s < 0 || ck.syms.at(s).kind != "fn" {
+        err(ck, mi, ast.span(1, 1, 1), format("module `{ck.ld.mods.at(mi).name}` has no `{nm}` function"), "",
+            format("add `fn {nm}() {{ ... }}`, choose another entry point with `--entry=NAME`, or use `--entry=` to build without one"), "");
+        return;
+    }
+    ck.main_sym = s;
+    let nsp = ck.nodes.at(ck.syms.at(s).node).span;
+    if ck.syms.at(s).tparams.len > 0 { err(ck, mi, nsp, format("`{nm}` cannot be generic"), "", "", ""); }
+    if ck.syms.at(s).params.len > 0 { err(ck, mi, nsp, format("`{nm}` cannot take parameters"), "", "", ""); }
+    let rt = ck.syms.at(s).ret;
+    let ri = tk(ck, rt) == types.K_EU ? ck.types.tys.at(rt).inner : -1;
+    let ok = rt == types.POISON || rt == types.VOID || rt == types.I32 || (tk(ck, rt) == types.K_EU && (ri == types.VOID || ri == types.I32));
+    if !ok {
+        let ts = ty_str(ck, rt);
+        err(ck, mi, nsp, format("`{nm}` must return `void`, `i32`, `void!` or `i32!`, not `{ts}`"), "", "", "");
+    }
+}
+
+// the rest of `Checker._run`: constants, function bodies, instantiated bodies, cycles, unused imports, the entry point
+pub fn run_bodies(ck: *Checker) {
+    for oi in 0..ck.ld.order.len { check_consts(ck, *ck.ld.order.at(oi)); }
+    for oi in 0..ck.ld.order.len { check_bodies(ck, *ck.ld.order.at(oi)); }
+    while ck.pending.len > 0 {
+        let sid = *ck.pending.at(0);
+        let mut rest: List<i64> = List.new();
+        for i in 1..ck.pending.len { rest.push(*ck.pending.at(i)); }
+        ck.pending = rest;
+        check_fn_body(ck, sid);
+    }
+    check_struct_cycles(ck);
+    for oi in 0..ck.ld.order.len {
+        let mi = *ck.ld.order.at(oi);
+        for i in 0..ck.cmods.at(mi).imports.len {
+            if !ck.cmods.at(mi).imports.at(i).used {
+                let alias = String.from(ck.cmods.at(mi).imports.at(i).alias);
+                let sp = ast.span(ck.cmods.at(mi).imports.at(i).node_line, ck.cmods.at(mi).imports.at(i).node_col, ck.cmods.at(mi).imports.at(i).node_len);
+                warn(ck, mi, sp, format("unused import `{alias}`"), "", "remove it, or use `_`-free names from it", "");
+            }
+        }
+    }
+    check_main(ck);
 }
