@@ -56,7 +56,7 @@ def dump(v):
     if isinstance(v, Local):
         return f"L({v.name}@{v.span.line}:{v.span.col})"
     if isinstance(v, N):
-        attrs = ",".join(f"{k}={dump(x)}" for k, x in sorted(v.__dict__.items()) if k not in SKIP)
+        attrs = ",".join(f"{k}={dump(x)}" for k, x in sorted(v.__dict__.items()) if k not in SKIP and not (k == "src" and type(x).__name__ == "Source"))
         return f"{v.kind}{sp(v.span)}{{{attrs}}}"
     if isinstance(v, (list, tuple)):
         return "[" + ",".join(dump(x) for x in v) + "]"

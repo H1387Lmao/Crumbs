@@ -1,0 +1,21 @@
+fn id<T>(x: T) -> T { return x; }
+fn zero<T>() -> T { let z: T; return z; }
+fn two<T>(a: T, b: T) -> T { return a; }
+fn plain(x: i32) -> i32 { return x; }
+fn main() {
+    let a = id();
+    let b = id(1, 2);
+    let c = zero();
+    let d = id<i32, i32>(1);
+    let e = plain<i32>(1);
+    let f = two(1, true);
+    let g = id<nothing>(1);
+    let h = id(nothing);
+}
+struct Box<T> { v: T, n: i32 }
+fn g2() {
+    let a = Box { v: 1, n: 2 };
+    let b: Box<i64> = Box { v: 1, n: 2 };
+    let c = Box { n: 2 };
+    let d = Box { v: 1, n: 2, z: 3 };
+}

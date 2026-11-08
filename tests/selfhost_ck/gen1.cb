@@ -1,0 +1,21 @@
+struct Pair<A, B> { a: A, b: B }
+fn id<T>(x: T) -> T { return x; }
+fn first<A, B>(p: *Pair<A, B>) -> A { return p.a; }
+fn mk<A, B>(a: A, b: B) -> Pair<A, B> { return Pair { a: a, b: b }; }
+fn sl<T>(xs: []T) -> T { return xs[0]; }
+fn zero<T>() -> T { let z: T; return z; }
+fn two<T>(a: T, b: T) -> T { return a; }
+fn can<T>(x: T) -> T! { return x; }
+fn main() {
+    let a = id(5);
+    let b = id(2.5);
+    let c = id<i64>(7);
+    let p = mk(1, true);
+    let f = first(&p);
+    let arr = [1, 2, 3];
+    let s = sl(arr[0..2]);
+    let z = zero<i32>();
+    let q = two(1, 2i64);
+    let r: i64 = two(1, 2);
+    let w = can(3) catch 0;
+}

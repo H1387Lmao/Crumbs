@@ -3487,12 +3487,14 @@ fn ex_call_inner(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
         return types.POISON;
     }
     let mut was_method = false;
+    let mut wrapped = false;
     if c.kind == "Field" && (ent.kind == 0 || (ent.kind == 2 && ck.syms.at(ent.idx).kind != "fn")) {
         if !e.has("orig_args") { e.set("orig_args", ast.clone_val(e.get("args"))); }
         e.set("args", ast.clone_val(e.get("orig_args")));
         set_flag(e, "method_recv", false);
         ck.recv_wrap = false;
         let hit = find_method(ck, e);
+        wrapped = ck.recv_wrap;
         if hit == -2 { return types.POISON; }
         if hit == -3 { return opt_method(ck, e); }
         if hit >= 0 {
@@ -3537,8 +3539,10 @@ fn ex_call_inner(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     }
     let mut sid = ent.idx;
     if !normalize_args(ck, e, sid) { return types.POISON; }
-    if ck.syms.at(sid).tparams.len > 0 { return unimpl(ck, e, "generic function calls"); }
-    if e.has("targs") && e.get("targs").items.len > 0 {
+    if ck.syms.at(sid).tparams.len > 0 {
+        sid = instantiate_call(ck, e, sid, exp);
+        if sid < 0 { return types.POISON; }
+    } else if e.has("targs") && e.get("targs").items.len > 0 {
         let sn = String.from(ck.syms.at(sid).name);
         here(ck, e.span, format("function `{sn}` is not generic and takes no type arguments"), "", "");
     }
@@ -3557,16 +3561,213 @@ fn ex_call_inner(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     if ck.syms.at(sid).ret != types.VOID { sig.append(format(" -> {ty_str(ck, ck.syms.at(sid).ret)}")); }
     let mut ps = copy_ids(&ck.syms.at(sid).params);
     check_args(ck, e, &ps, format("function `{sn}`"), sig, ck.syms.at(sid).variadic);
-    if was_method && flag(e, "method_recv") { sync_receiver(ck, e); }
+    if was_method && flag(e, "method_recv") { sync_receiver(ck, e, wrapped); }
     return ck.syms.at(sid).ret;
 }
 
+// ---- generic calls -----------------------------------------------------------------------------------------------------------
+
+fn b_has(b: *List<NameTy>, n: str) -> bool {
+    for i in 0..b.len { if b.at(i).name == n { return true; } }
+    return false;
+}
+
+fn b_get(b: *List<NameTy>, n: str) -> i64 {
+    for i in 0..b.len { if b.at(i).name == n { return b.at(i).ty; } }
+    return -1;
+}
+
+fn is_tparam(ck: *Checker, sid: i64, name: str) -> bool {
+    for i in 0..ck.syms.at(sid).tparams.len { if *ck.syms.at(sid).tparams.at(i) == name { return true; } }
+    return false;
+}
+
+// binds type parameters of `sid` by matching the type AST `tn` against the concrete type `ty`
+fn unify(ck: *Checker, tn: *ast.Node, ty: i64, sid: i64, b: *List<NameTy>) {
+    if ty < 0 || ty == types.POISON { return; }
+    let k: str = tn.kind;
+    let tkd = tk(ck, ty);
+    if k == "TName" {
+        let np = tn.get("path").items.len;
+        let na = tn.get("args").items.len;
+        if np == 1 && is_tparam(ck, sid, tn.get("path").items.at(0).s) && na == 0 {
+            let pn = String.from(tn.get("path").items.at(0).s);
+            if !b_has(b, pn) { b.push(NameTy { name: pn, ty: ty }); }
+        } else if na > 0 && tkd == types.K_STRUCT {
+            let ss = ck.types.tys.at(ty).sym;
+            let base = ck.syms.at(ss).base;
+            if base >= 0 && ck.syms.at(base).name == tn.get("path").items.at(np - 1).s {
+                let mut n = na;
+                if ck.syms.at(ss).targs.len < n { n = ck.syms.at(ss).targs.len; }
+                for i in 0..n { unify(ck, tn.get("args").items.at(i).node.at(0), *ck.syms.at(ss).targs.at(i), sid, b); }
+            }
+        }
+    } else if (k == "TPtr" && tkd == types.K_PTR) || (k == "TSlice" && tkd == types.K_SLICE) || (k == "TArray" && tkd == types.K_ARR)
+        || (k == "TErrUnion" && tkd == types.K_EU) {
+        unify(ck, tn.node_of("inner"), ck.types.tys.at(ty).inner, sid, b);
+    } else if (k == "TFn" && tkd == types.K_FN) || (k == "TClo" && tkd == types.K_CLO) {
+        if tn.get("params").items.len == ck.types.tys.at(ty).params.len {
+            for i in 0..tn.get("params").items.len {
+                unify(ck, tn.get("params").items.at(i).node.at(0), *ck.types.tys.at(ty).params.at(i), sid, b);
+            }
+            if !tn.is_none("ret") { unify(ck, tn.node_of("ret"), ck.types.tys.at(ty).inner, sid, b); }
+        }
+    }
+}
+
+fn tn_known(ck: *Checker, x: *ast.Node, sid: i64, b: *List<NameTy>) -> bool {
+    if x.kind == "TName" {
+        if x.get("path").items.len == 1 && is_tparam(ck, sid, x.get("path").items.at(0).s) && !b_has(b, x.get("path").items.at(0).s)
+            && x.get("args").items.len == 0 { return false; }
+        for i in 0..x.get("args").items.len { if !tn_known(ck, x.get("args").items.at(i).node.at(0), sid, b) { return false; } }
+        return true;
+    }
+    if x.has("inner") && !x.is_none("inner") { return tn_known(ck, x.node_of("inner"), sid, b); }
+    return true;
+}
+
+// the closure type a closure argument is checked against: the parameter types known so far (the rest unknown)
+fn clo_hint(ck: *Checker, tn: *ast.Node, sid: i64, b: *List<NameTy>) -> i64 {
+    let smi = ck.syms.at(sid).mod_idx;
+    let saved_mod = ck.cur_mod;
+    let mut env: List<NameTy> = List.new();
+    for i in 0..b.len { env.push(NameTy { name: String.from(b.at(i).name), ty: b.at(i).ty }); }
+    for i in 0..ck.tenv.len { if !b_has(b, ck.tenv.at(i).name) { env.push(NameTy { name: String.from(ck.tenv.at(i).name), ty: ck.tenv.at(i).ty }); } }
+    let saved_env = tenv_replace(ck, env);
+    ck.cur_mod = smi;
+    let mut ps: List<i64> = List.new();
+    for i in 0..tn.get("params").items.len {
+        let x = tn.get("params").items.at(i).node.at(0);
+        ps.push(tn_known(ck, x, sid, b) ? resolve_type(ck, x, smi, false) : types.POISON);
+    }
+    let mut ret = types.VOID;
+    if !tn.is_none("ret") {
+        let r = tn.node_of("ret");
+        ret = tn_known(ck, r, sid, b) ? resolve_type(ck, r, smi, true) : types.POISON;
+    }
+    ck.cur_mod = saved_mod;
+    tenv_replace(ck, saved_env);
+    return types.clo(&ck.types, &ps, ret);
+}
+
+fn is_bare_param(ck: *Checker, tn: *ast.Node, sid: i64, b: *List<NameTy>) -> bool {
+    return tn.kind == "TName" && tn.get("path").items.len == 1 && is_tparam(ck, sid, tn.get("path").items.at(0).s)
+        && b_has(b, tn.get("path").items.at(0).s);
+}
+
+fn report_uninferred(ck: *Checker, sp: ast.Span, sid: i64, b: *List<NameTy>, is_fn: bool) {
+    let mut names = String.empty();
+    let mut all = String.empty();
+    let mut n = 0;
+    for i in 0..ck.syms.at(sid).tparams.len {
+        let tp = String.from(*ck.syms.at(sid).tparams.at(i));
+        if i > 0 { all.append(", "); }
+        all.append(tp);
+        if !b_has(b, tp) {
+            if n > 0 { names.append(", "); }
+            names.append(format("`{tp}`"));
+            n += 1;
+        }
+    }
+    let sn = String.from(ck.syms.at(sid).name);
+    let s = n > 1 ? "s" : "";
+    here(ck, sp, format("cannot infer type parameter{s} {names} of `{sn}`"), "type annotations needed",
+         is_fn ? format("specify explicitly, e.g. `{sn}<{all}>(...)`") : String.from("annotate the variable or give the fields concrete values"));
+}
+
+// checks an argument only to learn its type: the moves it makes are undone, since the real check comes later
+fn probe(ck: *Checker, a: *ast.Node) -> i64 {
+    let saved = copy_moved(&ck.moved);
+    let t = check(ck, a, -1, false);
+    ck.moved = saved;
+    return t;
+}
+
+// returns the instance symbol, or -1
+fn instantiate_call(ck: *Checker, e: *ast.Node, sid: i64, exp: i64) -> i64 {
+    let nid = ck.syms.at(sid).node;
+    let ntp = ck.syms.at(sid).tparams.len;
+    let nparams = ck.nodes.at(nid).get("params").items.len;
+    let nargs = e.get("args").items.len;
+    let sn = String.from(ck.syms.at(sid).name);
+    if nargs != nparams {
+        let off = flag(e, "method_recv") ? 1 : 0;
+        let want = nparams - off;
+        let got = nargs - off;
+        let pl = want != 1 ? "s" : "";
+        let wv = got == 1 ? "was" : "were";
+        here(ck, e.span, format("function `{sn}` takes {want} argument{pl} but {got} {wv} supplied"),
+             "wrong number of arguments", "");
+        check_all_args(ck, e);
+        return -1;
+    }
+    let mut b: List<NameTy> = List.new();
+    let nt = e.has("targs") ? e.get("targs").items.len : 0;
+    if nt > 0 {
+        if nt != ntp {
+            let pl = ntp != 1 ? "s" : "";
+            let wv = nt == 1 ? "was" : "were";
+            here(ck, e.span, format("`{sn}` takes {ntp} type argument{pl} but {nt} {wv} supplied"), "", "");
+            return -1;
+        }
+        for i in 0..ntp {
+            let ty = resolve_type(ck, e.get("targs").items.at(i).node.at(0), ck.cur_mod, false);
+            if ty == types.POISON { return -1; }
+            b.push(NameTy { name: String.from(*ck.syms.at(sid).tparams.at(i)), ty: ty });
+        }
+    } else {
+        for i in 0..nargs {
+            let a = e.get("args").items.at(i).node.at(0);
+            let ptn = ck.nodes.at(nid).get("params").items.at(i).node.at(0).node_of("tyn");
+            if !untyped(ck, a) && a.kind != "Closure" { unify(ck, ptn, probe(ck, a), sid, &b); }
+        }
+        for i in 0..nargs {
+            let a = e.get("args").items.at(i).node.at(0);
+            let ptn = ck.nodes.at(nid).get("params").items.at(i).node.at(0).node_of("tyn");
+            if untyped(ck, a) && a.kind != "Closure" && !is_bare_param(ck, ptn, sid, &b) { unify(ck, ptn, probe(ck, a), sid, &b); }
+        }
+        for i in 0..nargs {
+            let a = e.get("args").items.at(i).node.at(0);
+            let ptn = ck.nodes.at(nid).get("params").items.at(i).node.at(0).node_of("tyn");
+            if a.kind == "Closure" && ptn.kind == "TClo" {
+                let h = clo_hint(ck, ptn, sid, &b);
+                unify(ck, ptn, check(ck, a, h, false), sid, &b);
+            } else if a.kind == "Closure" { check(ck, a, -1, false); }
+        }
+        if exp >= 0 && exp != types.POISON && !ck.nodes.at(nid).is_none("ret") {
+            let mut r = ck.nodes.at(nid).node_of("ret");
+            let mut ex = exp;
+            let mut go = true;
+            if r.kind == "TErrUnion" {
+                r = r.node_of("inner");
+                if tk(ck, exp) == types.K_EU { ex = ck.types.tys.at(exp).inner; } else { go = false; }
+            }
+            if go { unify(ck, r, ex, sid, &b); }
+        }
+    }
+    let mut missing = false;
+    for i in 0..ntp { if !b_has(&b, *ck.syms.at(sid).tparams.at(i)) { missing = true; } }
+    if missing {
+        let mut poisoned = false;
+        for i in 0..nargs {
+            let a = e.get("args").items.at(i).node.at(0);
+            if a.has("ty") && a.get("ty").i == types.POISON { poisoned = true; }
+        }
+        if !poisoned { report_uninferred(ck, e.span, sid, &b, true); }
+        check_all_args(ck, e);
+        return -1;
+    }
+    let mut targs: List<i64> = List.new();
+    for i in 0..ntp { targs.push(b_get(&b, *ck.syms.at(sid).tparams.at(i))); }
+    return inst_fn(ck, sid, &targs, ck.cur_mod, e.span);
+}
+
 // the receiver node is shared between `callee.obj` and the first argument in the Python tree: copy the checked one back
-fn sync_receiver(ck: *Checker, e: *ast.Node) {
+fn sync_receiver(ck: *Checker, e: *ast.Node, wrapped: bool) {
     let first = e.get("args").items.at(0).node.at(0);
     let orig = e.node_of("callee").node_of("obj");
     let mut recv = ast.clone_node(first);
-    if ck.recv_wrap { recv = ast.clone_node(first.node_of("expr")); }
+    if wrapped { recv = ast.clone_node(first.node_of("expr")); }
     let c = e.node_of("callee");
     c.set("obj", ast.v_node(recv));
     let mut oa: List<ast.Val> = List.new();
@@ -4583,7 +4784,45 @@ fn ex_structlit(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
         check_lit_fields(ck, e);
         return types.POISON;
     }
-    if ck.syms.at(sid).tparams.len > 0 { return unimpl(ck, e, "generic struct literals"); }
+    if ck.syms.at(sid).tparams.len > 0 {
+        let nid = ck.syms.at(sid).node;
+        let ntp = ck.syms.at(sid).tparams.len;
+        let mut b: List<NameTy> = List.new();
+        if exp >= 0 && tk(ck, exp) == types.K_STRUCT && ck.syms.at(ck.types.tys.at(exp).sym).base == sid {
+            let es = ck.types.tys.at(exp).sym;
+            for i in 0..ntp {
+                if i < ck.syms.at(es).targs.len { b.push(NameTy { name: String.from(*ck.syms.at(sid).tparams.at(i)), ty: *ck.syms.at(es).targs.at(i) }); }
+            }
+        } else {
+            let nfl = e.get("fields").items.len;
+            for pass in 0..2 {
+                for i in 0..nfl {
+                    let fe = e.get("fields").items.at(i);
+                    let v = fe.items.at(2).node.at(0);
+                    let mut fnode = -1 as i64;
+                    for q in 0..ck.nodes.at(nid).get("fields").items.len {
+                        if ck.nodes.at(nid).get("fields").items.at(q).node.at(0).str_of("name") == fe.items.at(0).s { fnode = q; }
+                    }
+                    if fnode < 0 { continue; }
+                    let ftn = ck.nodes.at(nid).get("fields").items.at(fnode).node.at(0).node_of("tyn");
+                    if pass == 0 && !untyped(ck, v) { unify(ck, ftn, check(ck, v, -1, false), sid, &b); }
+                    if pass == 1 && untyped(ck, v) && !is_bare_param(ck, ftn, sid, &b) { unify(ck, ftn, check(ck, v, -1, false), sid, &b); }
+                }
+            }
+        }
+        let mut missing = false;
+        for i in 0..ntp { if !b_has(&b, *ck.syms.at(sid).tparams.at(i)) { missing = true; } }
+        if missing {
+            report_uninferred(ck, e.span, sid, &b, false);
+            check_lit_fields(ck, e);
+            return types.POISON;
+        }
+        let mut targs: List<i64> = List.new();
+        for i in 0..ntp { targs.push(b_get(&b, *ck.syms.at(sid).tparams.at(i))); }
+        let ty = inst_struct(ck, sid, &targs, ck.cur_mod, e.span, true);
+        if ty == types.POISON { return types.POISON; }
+        sid = ck.types.tys.at(ty).sym;
+    }
     e.set("sym", ast.v_tag(11, sid));
     let sn = String.from(ck.syms.at(sid).name);
     let mut seen: List<String> = List.new();
