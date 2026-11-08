@@ -147,6 +147,7 @@ pub struct Checker {
     impl_recs: List<ImplRec>,
     gc_mode: String,
     recv_wrap: bool,
+    try_stack: List<List<List<MovedEnt>>>,   // per enclosing `try { }`: the moved-sets at each point that can fail
 }
 
 pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
@@ -159,7 +160,7 @@ pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
         nc: false, nc_mi: 0, nc_span: ast.span(0, 0, 1), nc_msg: String.empty(),
         locals: List.new(), scopes: List.new(), moved: List.new(), has_fn: false, fn_sym: -1, fn_ret: types.VOID, fn_names: List.new(),
         fn_loops: 0, fn_rdepth: 0, loop_stack: List.new(), reinit_line: 0, reinit_col: 0, glue: List.new(), glue_busy: List.new(),
-        strict: false, entry_name: String.from("main"), opt_consumed: List.new(), impl_recs: List.new(), gc_mode: String.from("auto"), recv_wrap: false, main_sym: -1, entry_mod: ld.order.len > 0 ? *ld.order.at(ld.order.len - 1) : 0,
+        strict: false, entry_name: String.from("main"), opt_consumed: List.new(), impl_recs: List.new(), gc_mode: String.from("auto"), recv_wrap: false, try_stack: List.new(), main_sym: -1, entry_mod: ld.order.len > 0 ? *ld.order.at(ld.order.len - 1) : 0,
     };
     // move every module's items into the node arena; syms and later phases refer to them by index
     for mi in 0..ld.mods.len {
@@ -2600,6 +2601,10 @@ pub fn check(ck: *Checker, e: *ast.Node, exp: i64, eu: bool) -> i64 {
     else if k == "ArrayRepeat" { t = ex_arrayrepeat(ck, e, hint); }
     else if k == "Ternary" { t = ex_ternary(ck, e, hint); }
     else if k == "FStr" { t = ex_fstr(ck, e); }
+    else if k == "Try" { t = ex_try(ck, e); }
+    else if k == "Catch" { t = ex_catch(ck, e); }
+    else if k == "OptChain" { t = ex_optchain(ck, e); }
+    else if k == "OptPayload" { t = e.get("ty").i; }
     else if k == "NamedArg" {
         here(ck, e.span, "named arguments only work when calling a function that is declared with `fn`", "not allowed here",
              "pass the value positionally");
@@ -2608,6 +2613,7 @@ pub fn check(ck: *Checker, e: *ast.Node, exp: i64, eu: bool) -> i64 {
     }
     else { t = unimpl(ck, e, e.kind); }
     set_ty(e, t);
+    if tk(ck, t) == types.K_EU && !eu && ck.try_stack.len > 0 && e.kind == "Call" { return auto_try(ck, e, t); }
     if tk(ck, t) == types.K_EU && !eu {
         let ts = ty_str(ck, t);
         here(ck, e.span, format("unhandled error union `{ts}`"), "this call can fail",
@@ -3062,7 +3068,7 @@ fn ex_binary(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
         }
         return types.BOOL;
     }
-    if op == "??" { return unimpl(ck, e, "the `??` operator"); }
+    if op == "??" { return ex_coalesce(ck, e, exp); }
     let arith_like = is_arith(op) || is_bitwise(op);
     if is_shift(op) {
         let lt = check(ck, l, (exp >= 0 && types.is_int(exp)) ? exp : -1, false);
@@ -3599,6 +3605,10 @@ fn check_stmt(ck: *Checker, s: *ast.Node) {
     else if k == "Continue" { st_break(ck, s, false); }
     else if k == "ExprStmt" { st_exprstmt(ck, s); }
     else if k == "Assign" { st_assign(ck, s); }
+    else if k == "For" { st_for(ck, s); }
+    else if k == "Match" { st_match(ck, s); }
+    else if k == "Throw" { st_throw(ck, s); }
+    else if k == "TryBlock" { st_tryblock(ck, s); }
     else { here(ck, s.span, format("UNIMPLEMENTED in the Crumbs checker: statement {k}"), "", ""); }
 }
 
@@ -3664,18 +3674,32 @@ fn st_if(ck: *Checker, s: *ast.Node) {
     ck.moved = merge_moved(&m0, &states);
 }
 
-fn loop_body(ck: *Checker, s: *ast.Node, is_while: bool) {
-    if is_while { cond(ck, s.node_of("cond")); }
+fn loop_body(ck: *Checker, s: *ast.Node, mode: i64, vt: i64) {
+    if mode == 1 { cond(ck, s.node_of("cond")); }
+    if mode == 2 {
+        push_scope(ck);
+        let var = String.from(s.str_of("var"));
+        if var != "_" {
+            let loc = declare_local(ck, var, vt, false, s.get("var_span").span, false);
+            ck.locals.at(loc).used = true;
+            s.set("local", ast.v_tag(12, loc));
+        } else { set_nil(s, "local"); }
+        check_block(ck, s.node_of("body"), true);
+        pop_scope(ck);
+        return;
+    }
     check_block(ck, s.node_of("body"), true);
 }
 
 // checks a loop body (twice if it moves an outer variable) and computes the moved-set after the loop
-fn in_loop(ck: *Checker, s: *ast.Node, is_while: bool) {
+fn in_loop(ck: *Checker, s: *ast.Node, is_while: bool) { in_loop_m(ck, s, is_while ? 1 : 0, is_while, -1); }
+
+fn in_loop_m(ck: *Checker, s: *ast.Node, mode: i64, is_while: bool, vt: i64) {
     let mut m0 = copy_moved(&ck.moved);
     let start_id = ck.locals.len;
     ck.loop_stack.push(LoopFrame { breaks: List.new(), conts: List.new() });
     ck.fn_loops += 1;
-    loop_body(ck, s, is_while);
+    loop_body(ck, s, mode, vt);
     let body = s.node_of("body");
     let mut carry: List<List<MovedEnt>> = List.new();
     if !terminates(ck, body) { carry.push(copy_moved(&ck.moved)); }
@@ -3693,7 +3717,7 @@ fn in_loop(ck: *Checker, s: *ast.Node, is_while: bool) {
         let mut nm = copy_moved(&m0);
         for i in 0..outer.len { set_moved(&nm, outer.at(i).local, outer.at(i).line); }
         ck.moved = nm;
-        loop_body(ck, s, is_while);
+        loop_body(ck, s, mode, vt);
         carry = List.new();
         if !terminates(ck, body) { carry.push(copy_moved(&ck.moved)); }
         for i in 0..ck.loop_stack.at(top).conts.len { carry.push(copy_moved(ck.loop_stack.at(top).conts.at(i))); }
@@ -3707,6 +3731,457 @@ fn in_loop(ck: *Checker, s: *ast.Node, is_while: bool) {
     let mut keep: List<MovedEnt> = List.new();
     for i in 0..merged.len { if merged.at(i).local < start_id { keep.push(MovedEnt { local: merged.at(i).local, line: merged.at(i).line }); } }
     ck.moved = keep;
+}
+
+// how `for x in e` iterates a value of type `ot`: 1 = `next` (it is an iterator), 2 = it has `iter()`, 0 = neither
+fn iter_protocol(ck: *Checker, ot: i64) -> i64 {
+    if ot == types.POISON || tk(ck, ot) != types.K_STRUCT { return 0; }
+    let key = type_key(ck, ot);
+    let nx = meth_find(ck, key, "next");
+    if nx >= 0 && ck.syms.at(nx).has_self { return 1; }
+    let it = meth_find(ck, key, "iter");
+    if it >= 0 && ck.syms.at(it).has_self { return 2; }
+    return 0;
+}
+
+fn mk_ident(sp: ast.Span, name: str) -> ast.Node {
+    let mut n = ast.new_node("Ident", sp);
+    n.set("name", ast.v_str(name));
+    return n;
+}
+
+fn mk_mcall(sp: ast.Span, obj: ast.Node, name: str) -> ast.Node {
+    let mut f = ast.new_node("Field", sp);
+    f.set("obj", ast.v_node(obj));
+    f.set("name", ast.v_str(name));
+    f.set("name_span", ast.v_span(sp));
+    let mut c = new_call_node(sp, f);
+    c.set("targs", ast.v_none());
+    return c;
+}
+
+fn mk_let(sp: ast.Span, name: str, is_mut: bool, init: ast.Node, nsp: ast.Span) -> ast.Node {
+    let mut n = ast.new_node("Let", sp);
+    n.set("name", ast.v_str(name));
+    n.set("mut", ast.v_bool(is_mut));
+    n.set("tyn", ast.v_none());
+    n.set("init", ast.v_node(init));
+    n.set("name_span", ast.v_span(nsp));
+    return n;
+}
+
+fn mk_block(sp: ast.Span, stmts: List<ast.Node>) -> ast.Node {
+    let mut b = ast.new_node("Block", sp);
+    b.set("stmts", ast.v_list(ast.vals_of(stmts)));
+    b.set("end_span", ast.v_span(sp));
+    return b;
+}
+
+fn desugar_for(ck: *Checker, s: *ast.Node, proto: i64) {
+    let sp = s.span;
+    let it = ast.clone_node(s.node_of("iter"));
+    let src = proto == 1 ? it : mk_mcall(sp, it, "iter");
+    let mut var = String.from(s.str_of("var"));
+    if var == "_" { var = String.from("cb_x"); }
+    let mut brk: List<ast.Node> = List.new();
+    brk.push(ast.new_node("Break", sp));
+    let mut iff = ast.new_node("If", sp);
+    iff.set("cond", ast.v_node(mk_mcall(sp, mk_ident(sp, "cb_o"), "is_none")));
+    iff.set("then", ast.v_node(mk_block(sp, brk)));
+    iff.set("els", ast.v_none());
+    let mut bs: List<ast.Node> = List.new();
+    bs.push(mk_let(sp, "cb_o", false, mk_mcall(sp, mk_ident(sp, "cb_it"), "next"), sp));
+    bs.push(iff);
+    bs.push(mk_let(sp, var, false, mk_mcall(sp, mk_ident(sp, "cb_o"), "unwrap"), s.get("var_span").span));
+    bs.push(ast.clone_node(s.node_of("body")));
+    let body = mk_block(sp, bs);
+    let mut lp = ast.new_node("Loop", sp);
+    lp.set("body", ast.v_node(body));
+    let mut os: List<ast.Node> = List.new();
+    os.push(mk_let(sp, "cb_it", true, src, sp));
+    os.push(lp);
+    let mut outer = mk_block(sp, os);
+    check_block(ck, &outer, true);
+    // the user's body is shared between the loop and the desugared form
+    let checked = ast.clone_node(outer.get("stmts").items.at(1).node.at(0).node_of("body").get("stmts").items.at(3).node.at(0));
+    s.set("body", ast.v_node(checked));
+    let init0 = outer.get("stmts").items.at(0).node.at(0).node_of("init");
+    if proto == 1 { s.set("iter", ast.v_node(ast.clone_node(init0))); }
+    else { s.set("iter", ast.v_node(ast.clone_node(init0.node_of("callee").node_of("obj")))); }
+    s.set("desugared", ast.v_node(outer));
+}
+
+fn st_for(ck: *Checker, s: *ast.Node) {
+    let it = s.node_of("iter");
+    let mut vt = types.POISON;
+    if it.kind == "Range" {
+        let lo = it.node_of("lo");
+        let hi = it.node_of("hi");
+        let mut lt = types.POISON;
+        let mut ht = types.POISON;
+        if untyped(ck, lo) && !untyped(ck, hi) {
+            ht = check(ck, hi, -1, false);
+            lt = check(ck, lo, ht, false);
+        } else {
+            lt = check(ck, lo, -1, false);
+            ht = check(ck, hi, lt, false);
+        }
+        if lt != types.POISON && ht != types.POISON {
+            if !types.is_int(lt) {
+                here(ck, lo.span, format("range bounds must be integers, found `{ty_str(ck, lt)}`"), "", "");
+                lt = types.POISON;
+            } else if lt != ht {
+                set_nil(lo, "conv");
+                set_nil(hi, "conv");
+                if types.is_int(ht) {
+                    let ct = common_type(lt, ht);
+                    if ct < 0 || !(apply_conv(ck, lo, lt, ct) && apply_conv(ck, hi, ht, ct)) {
+                        if ct < 0 {
+                            here(ck, it.span, format("cannot mix `{ty_str(ck, lt)}` and `{ty_str(ck, ht)}` as range bounds"), "", "cast one bound explicitly");
+                        }
+                        lt = types.POISON;
+                    } else { lt = ct; }
+                } else {
+                    mismatch(ck, hi, lt, ht, "range bounds must have the same type");
+                }
+            }
+        }
+        vt = lt;
+        s.set("range_ty", ast.v_tag(10, lt));
+        s.set("mode", ast.v_str("range"));
+    } else {
+        let ot = check(ck, it, -1, false);
+        let proto = iter_protocol(ck, ot);
+        if proto != 0 { desugar_for(ck, s, proto); return; }
+        if ot == types.POISON { vt = types.POISON; }
+        else if tk(ck, ot) == types.K_ARR || tk(ck, ot) == types.K_SLICE {
+            vt = ck.types.tys.at(ot).inner;
+            if has_glue(ck, vt) {
+                here(ck, it.span, format("cannot iterate over `{ty_str(ck, ot)}` by value: `{ty_str(ck, vt)}` has a destructor"), "",
+                     "iterate over indices (`for i in 0..xs.len`) and borrow with `&xs[i]`");
+                vt = types.POISON;
+            }
+        } else if ot == types.STR || ot == types.STRING { vt = types.U8; }
+        else {
+            here(ck, it.span, format("cannot iterate over a value of type `{ty_str(ck, ot)}`"), "",
+                 "iterate over arrays, slices, strings or a range like `0..n`");
+            vt = types.POISON;
+        }
+        s.set("mode", ast.v_str("seq"));
+    }
+    in_loop_m(ck, s, 2, true, vt);
+}
+
+// ---- error handling, optionals, match ----------------------------------------------------------------------------------------
+
+// inside `try { }` a failing call needs no `try`: its error goes to the block's handler
+fn auto_try(ck: *Checker, e: *ast.Node, t: i64) -> i64 {
+    set_flag(e, "auto_try", true);
+    set_tyn(e, "eu_ty", t);
+    let top = ck.try_stack.len - 1;
+    ck.try_stack.at(top).push(copy_moved(&ck.moved));
+    let inner = ck.types.tys.at(t).inner;
+    set_ty(e, inner);
+    return inner;
+}
+
+fn fn_ret_str(ck: *Checker) -> String { return ty_str(ck, ck.fn_ret); }
+
+fn ex_try(ck: *Checker, e: *ast.Node) -> i64 {
+    let t = check(ck, e.node_of("expr"), -1, true);
+    if t == types.POISON { return types.POISON; }
+    if tk(ck, t) != types.K_EU {
+        let ts = ty_str(ck, t);
+        here(ck, e.span, format("`try` needs an expression that can fail, found `{ts}`"), "this cannot produce an error",
+             "`try` applies to calls to functions returning `T!`");
+        return t;
+    }
+    if ck.try_stack.len > 0 {
+        let top = ck.try_stack.len - 1;
+        ck.try_stack.at(top).push(copy_moved(&ck.moved));
+    } else if tk(ck, ck.fn_ret) != types.K_EU {
+        let rs = fn_ret_str(ck);
+        here(ck, e.span, "`try` can only be used in a function that returns an error union", format("enclosing function returns `{rs}`"),
+             format("change the return type to `{rs}!`, or handle the error with `catch`"));
+    }
+    return ck.types.tys.at(t).inner;
+}
+
+fn bind_err(ck: *Checker, e: *ast.Node) {
+    if !e.is_none("binder") {
+        let loc = declare_local(ck, e.str_of("binder"), types.ERR, false, e.get("binder_span").span, false);
+        ck.locals.at(loc).used = true;
+        e.set("binder_local", ast.v_tag(12, loc));
+    } else { set_nil(e, "binder_local"); }
+}
+
+fn check_handler_loosely(ck: *Checker, e: *ast.Node) {
+    let h = e.node_of("handler");
+    if h.kind == "Block" {
+        push_scope(ck);
+        bind_err(ck, e);
+        check_block(ck, h, true);
+        pop_scope(ck);
+    } else { check(ck, h, -1, false); }
+}
+
+fn ex_catch(ck: *Checker, e: *ast.Node) -> i64 {
+    let t = check(ck, e.node_of("expr"), -1, true);
+    let h = e.node_of("handler");
+    if t == types.POISON {
+        check_handler_loosely(ck, e);
+        return types.POISON;
+    }
+    if tk(ck, t) != types.K_EU {
+        let ts = ty_str(ck, t);
+        here(ck, e.span, format("`catch` needs an expression that can fail, found `{ts}`"), "this cannot produce an error", "");
+        check_handler_loosely(ck, e);
+        return t;
+    }
+    let tt = ck.types.tys.at(t).inner;
+    if h.kind == "Block" {
+        push_scope(ck);
+        bind_err(ck, e);
+        let saved = copy_moved(&ck.moved);
+        check_block(ck, h, true);
+        if terminates(ck, h) { ck.moved = saved; }
+        pop_scope(ck);
+        if tt != types.VOID && !terminates(ck, h) {
+            let ts = ty_str(ck, tt);
+            here(ck, h.span, format("`catch` block must not fall through: the call yields `{ts}`"), "block can complete normally",
+                 "end the block with `return`, `throw`, `break`, `continue` or `panic(...)`, or use `catch <default value>`");
+        }
+    } else {
+        set_nil(e, "binder_local");
+        push_scope(ck);
+        bind_err(ck, e);
+        if tt == types.VOID {
+            here(ck, h.span, "a default value makes no sense here: the call yields no value", "",
+                 "use `catch { ... }` or `catch |e| { ... }`");
+            check(ck, h, -1, false);
+        } else { expect(ck, h, tt, false); }
+        pop_scope(ck);
+    }
+    return tt;
+}
+
+fn st_throw(ck: *Checker, s: *ast.Node) {
+    if ck.try_stack.len > 0 {
+        let top = ck.try_stack.len - 1;
+        ck.try_stack.at(top).push(copy_moved(&ck.moved));
+    } else if tk(ck, ck.fn_ret) != types.K_EU && ck.fn_ret != types.POISON {
+        let rs = fn_ret_str(ck);
+        here(ck, s.span, "`throw` can only be used in a function that returns an error union", format("enclosing function returns `{rs}`"),
+             format("change the return type to `{rs}!`"));
+    }
+    let ex = s.node_of("expr");
+    let t = check(ck, ex, types.ERR, false);
+    if !types.same(&ck.types, t, types.ERR) {
+        let ts = ty_str(ck, t);
+        here(ck, ex.span, format("`throw` needs an error value, found `{ts}`"), "", "declare errors with `error Name;` and throw them by name");
+    }
+}
+
+fn st_tryblock(ck: *Checker, s: *ast.Node) {
+    let fr0: List<List<MovedEnt>> = List.new();
+    ck.try_stack.push(fr0);
+    let mut m0 = copy_moved(&ck.moved);
+    check_block(ck, s.node_of("body"), true);
+    let mut frame = ck.try_stack.pop() catch { panic("try stack underflow"); };
+    let body_term = terminates(ck, s.node_of("body"));
+    let m_body = copy_moved(&ck.moved);
+    if frame.len == 0 {
+        warn_here(ck, s.span, "this `try` block contains nothing that can fail", "",
+                  "calls to functions returning `T!` and `throw` send control to the `catch` handler");
+    }
+    ck.moved = frame.len > 0 ? merge_moved(&m0, &frame) : copy_moved(&m0);
+    push_scope(ck);
+    bind_err(ck, s);
+    check_block(ck, s.node_of("handler"), true);
+    pop_scope(ck);
+    let h_term = terminates(ck, s.node_of("handler"));
+    let m_handler = copy_moved(&ck.moved);
+    let mut states: List<List<MovedEnt>> = List.new();
+    if !body_term { states.push(m_body); }
+    if !h_term { states.push(m_handler); }
+    ck.moved = merge_moved(&m0, &states);
+}
+
+fn ex_coalesce(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+    let l = e.node_of("l");
+    let r = e.node_of("r");
+    let lt = check(ck, l, -1, false);
+    if lt == types.POISON {
+        check(ck, r, -1, false);
+        return types.POISON;
+    }
+    let mut tt = types.POISON;
+    if tk(ck, lt) == types.K_OPT { tt = ck.types.tys.at(lt).inner; e.set("cmode", ast.v_str("opt")); }
+    else if tk(ck, lt) == types.K_PTR { tt = lt; e.set("cmode", ast.v_str("ptr")); }
+    else {
+        let ts = ty_str(ck, lt);
+        here(ck, l.span, format("the left side of `??` must be optional or a pointer, found `{ts}`"), "this can never be empty",
+             "declare it as `T?`, e.g. `let name: str? = null;`");
+        check(ck, r, -1, false);
+        return types.POISON;
+    }
+    set_nil(l, "conv");
+    let rt = check(ck, r, tt, false);
+    if e.str_of("cmode") == "opt" && tk(ck, rt) == types.K_OPT && types.same(&ck.types, ck.types.tys.at(rt).inner, tt) {
+        set_nil(r, "conv");
+        set_flag(e, "chain", true);
+        return rt;
+    }
+    set_flag(e, "chain", false);
+    if coerce(ck, r, rt, tt) == types.POISON { return types.POISON; }
+    consume(ck, l);
+    return tt;
+}
+
+fn ex_optchain(ck: *Checker, e: *ast.Node) -> i64 {
+    let obj = e.node_of("obj");
+    let ot = check(ck, obj, -1, false);
+    let has_args = !e.is_none("args");
+    if ot == types.POISON {
+        if has_args { for i in 0..e.get("args").items.len { check(ck, e.get("args").items.at(i).node.at(0), -1, false); } }
+        return types.POISON;
+    }
+    let mut pt = types.POISON;
+    if tk(ck, ot) == types.K_OPT { pt = ck.types.tys.at(ot).inner; e.set("cmode", ast.v_str("opt")); }
+    else if tk(ck, ot) == types.K_PTR && ck.types.tys.at(ot).inner != types.VOID { pt = ot; e.set("cmode", ast.v_str("ptr")); }
+    else {
+        let ts = ty_str(ck, ot);
+        here(ck, obj.span, format("`?.` needs an optional value or a pointer, found `{ts}`"), "this is never empty", "use `.` for values that are always present");
+        if has_args { for i in 0..e.get("args").items.len { check(ck, e.get("args").items.at(i).node.at(0), -1, false); } }
+        return types.POISON;
+    }
+    push_scope(ck);
+    let loc = declare_local(ck, "$opt", pt, true, e.span, false);
+    ck.locals.at(loc).used = true;
+    e.set("payload_local", ast.v_tag(12, loc));
+    let base = mk_ident(e.span, "$opt");
+    let mut node = ast.new_node("Field", e.span);
+    node.set("obj", ast.v_node(base));
+    node.set("name", ast.v_str(e.str_of("name")));
+    node.set("name_span", ast.v_span(e.get("name_span").span));
+    if has_args {
+        let mut c = new_call_node(e.span, node);
+        let mut al: List<ast.Val> = List.new();
+        for i in 0..e.get("args").items.len { al.push(ast.clone_val(e.get("args").items.at(i))); }
+        c.set("args", ast.v_list(al));
+        c.set("targs", ast.v_none());
+        node = c;
+    }
+    let it = check(ck, &node, -1, false);
+    // the argument nodes are shared with the original: pull the checked ones back
+    if has_args && e.get("args").items.len > 0 {
+        let no = e.get("args").items.len;
+        let nn = node.get("args").items.len;
+        let mut al: List<ast.Val> = List.new();
+        for i in 0..no { al.push(ast.clone_val(node.get("args").items.at(nn - no + i))); }
+        e.set("args", ast.v_list(al));
+    }
+    e.set("inner", ast.v_node(node));
+    pop_scope(ck);
+    if it == types.POISON { return types.POISON; }
+    if it == types.VOID {
+        here(ck, e.span, "`?.` needs a result: this call returns nothing", "", "use `if x != null { x.f(); }` instead");
+        return types.POISON;
+    }
+    let flat = tk(ck, it) == types.K_OPT;
+    set_flag(e, "flat", flat);
+    return flat ? it : types.opt(&ck.types, it);
+}
+
+fn has_i64(l: *List<i64>, k: i64) -> bool {
+    for i in 0..l.len { if *l.at(i) == k { return true; } }
+    return false;
+}
+
+fn st_match(ck: *Checker, s: *ast.Node) {
+    let scrut = s.node_of("scrut");
+    let mut st = check(ck, scrut, -1, false);
+    let ok_t = st == types.POISON || types.is_int(st) || st == types.BOOL || tk(ck, st) == types.K_ENUM;
+    if !ok_t {
+        let ts = ty_str(ck, st);
+        here(ck, scrut.span, format("cannot match on a value of type `{ts}`"), "", "match works on integers, `bool` and enums; use `if` otherwise");
+        st = types.POISON;
+    }
+    let mut seen: List<i64> = List.new();
+    let mut has_wild = false;
+    let mut m0 = copy_moved(&ck.moved);
+    let mut arm_states: List<List<MovedEnt>> = List.new();
+    let mut any_arm = false;
+    for ai in 0..s.get("arms").items.len {
+        let arm = s.get("arms").items.at(ai).node.at(0);
+        any_arm = true;
+        ck.moved = copy_moved(&m0);
+        if flag(arm, "wild") { has_wild = true; }
+        for pi in 0..arm.get("pats").items.len {
+            let p = arm.get("pats").items.at(pi).node.at(0);
+            let pt = check(ck, p, st != types.POISON ? st : -1, false);
+            if st == types.POISON || pt == types.POISON { continue; }
+            if !types.same(&ck.types, pt, st) {
+                mismatch(ck, p, st, pt, "pattern type does not match the matched value");
+                continue;
+            }
+            let mut have_key = false;
+            let mut key = 0 as i64;
+            let mut is_bool = false;
+            if p.kind == "Field" && p.has("mode") && p.get("mode").tag == 3 && p.str_of("mode") == "variant" {
+                key = p.get("vidx").i;
+                have_key = true;
+            } else if p.kind == "Int" || p.kind == "Bool" || (p.kind == "Unary" && p.node_of("expr").kind == "Int") {
+                let v = const_eval(ck, p, ck.cur_mod);
+                if ck.nc { ck.nc = false; }
+                else { key = v.i; have_key = true; is_bool = v.kind == 2; }
+            } else if p.kind == "Ident" || p.kind == "Field" {
+                let v = const_eval(ck, p, ck.cur_mod);
+                if ck.nc {
+                    ck.nc = false;
+                    here(ck, p.span, "match patterns must be constants", "", "");
+                    continue;
+                }
+                key = v.i; have_key = true; is_bool = v.kind == 2;
+            } else {
+                here(ck, p.span, "match patterns must be literals, constants or enum variants", "", "");
+                continue;
+            }
+            if have_key { p.set("cval", is_bool ? ast.v_bool(key != 0) : ast.v_int(key)); } else { set_nil(p, "cval"); }
+            if have_key {
+                if has_i64(&seen, key) { warn_here(ck, p.span, "unreachable pattern: this value is already matched above", "", ""); }
+                else { seen.push(key); }
+            }
+        }
+        check_block(ck, arm.node_of("body"), true);
+        if !terminates(ck, arm.node_of("body")) { arm_states.push(copy_moved(&ck.moved)); }
+    }
+    ck.moved = any_arm ? merge_moved(&m0, &arm_states) : copy_moved(&m0);
+    let mut exhaustive = has_wild;
+    if !has_wild && st != types.POISON {
+        if tk(ck, st) == types.K_ENUM {
+            let sy = ck.types.tys.at(st).sym;
+            let mut missing = String.empty();
+            let mut nm = 0;
+            for i in 0..ck.syms.at(sy).variants.len {
+                if !has_i64(&seen, i) {
+                    if nm > 0 { missing.append(", "); }
+                    missing.append(format("{ck.syms.at(sy).name}.{*ck.syms.at(sy).variants.at(i)}"));
+                    nm += 1;
+                }
+            }
+            if nm > 0 {
+                here(ck, s.span, "non-exhaustive match", format("missing: {missing}"), "add the missing variants, or a catch-all arm `_ => { ... }`");
+            } else { exhaustive = true; }
+        } else if st == types.BOOL {
+            if has_i64(&seen, 1) && has_i64(&seen, 0) { exhaustive = true; }
+            else { here(ck, s.span, "non-exhaustive match", "`true` and `false` must both be covered", "add the missing case or a `_` arm"); }
+        } else {
+            here(ck, s.span, "non-exhaustive match on an integer", "not all values are covered", "add a catch-all arm `_ => { ... }`");
+        }
+    }
+    set_flag(s, "exhaustive", exhaustive);
+    set_tyn(s, "scrut_ty", st);
 }
 
 fn st_break(ck: *Checker, s: *ast.Node, is_break: bool) {
@@ -3747,7 +4222,8 @@ fn st_return(ck: *Checker, s: *ast.Node) {
 
 fn st_exprstmt(ck: *Checker, s: *ast.Node) {
     let e = s.node_of("expr");
-    let t = check(ck, e, -1, e.kind == "Call");
+    let mut t = check(ck, e, -1, e.kind == "Call");
+    if e.kind == "Call" && tk(ck, t) == types.K_EU && ck.try_stack.len > 0 { t = auto_try(ck, e, t); }
     if e.kind == "Call" && tk(ck, t) == types.K_EU {
         let ts = ty_str(ck, t);
         here(ck, e.span, format("unused error from call returning `{ts}`"), "this call can fail",
@@ -3867,6 +4343,7 @@ fn check_fn_body(ck: *Checker, sid: i64) {
     ck.fn_loops = 0;
     ck.fn_rdepth = 0;
     ck.loop_stack = List.new();
+    ck.try_stack = List.new();
     ck.scopes = List.new();
     push_scope(ck);
     ck.moved = List.new();
@@ -3923,6 +4400,7 @@ pub fn check_consts(ck: *Checker, mi: i64) {
         ck.fn_loops = 0;
         ck.fn_rdepth = 0;
         ck.loop_stack = List.new();
+        ck.try_stack = List.new();
         ck.scopes = List.new();
         push_scope(ck);
         ck.moved = List.new();

@@ -1,0 +1,73 @@
+error Bad;
+error Worse;
+enum Color { Red, Green, Blue }
+const K: i32 = 7;
+struct P { x: i64, y: i64 }
+impl P {
+    pub fn sum(self) -> i64 { return self.x + self.y; }
+    pub fn bump(mut self, d: i64) { self.x += d; }
+}
+fn may(n: i32) -> i32! {
+    if n < 0 { throw Bad; }
+    return n * 2;
+}
+fn nothing(n: i32) -> void! {
+    if n > 5 { throw Worse; }
+}
+fn use1(n: i32) -> i32! {
+    let a = try may(n);
+    let b = may(n) catch 0;
+    let c = may(n) catch |e| { return 5; };
+    try nothing(n);
+    nothing(n) catch { };
+    return a + b + c;
+}
+fn blocky(n: i32) -> i32 {
+    let mut r = 0;
+    try {
+        r += may(n);
+        nothing(n);
+        r += 1;
+    } catch |e| {
+        r = -1;
+    }
+    try {
+        throw Bad;
+    } catch { r = 2; }
+    return r;
+}
+fn pick(c: Color) -> i32 {
+    match c {
+        Color.Red => { return 1; }
+        Color.Green | Color.Blue => { return 2; }
+    }
+}
+fn num(n: i32, b: bool) -> i32 {
+    let mut r = 0;
+    match n {
+        0 => { r = 1; }
+        1 | 2 => { r = 2; }
+        K => { r = 3; }
+        -1 => { r = 4; }
+        _ => { r = 5; }
+    }
+    match b { true => { r += 1; } false => { r += 2; } }
+    return r;
+}
+fn opts(p: P?, q: *P) -> i64 {
+    let a = p?.x;
+    let b = p?.sum();
+    let c = q?.y;
+    q?.bump(3);
+    let d = p ?? P { x: 1, y: 2 };
+    let e: i64? = null;
+    let f = e ?? 5;
+    let g = e ?? e;
+    return f + d.x;
+}
+fn main() {
+    let i = use1(3) catch 0;
+    let j = blocky(2);
+    let k = pick(Color.Red) + num(3, true);
+    let o = opts(null, null);
+}

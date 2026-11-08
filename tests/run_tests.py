@@ -199,7 +199,7 @@ def main():
         test_selfhost("checker-sigs", "symdump.cb", "symdump.py", pats + ["tests/selfhost_sig/*.cb"], skip_async=True,
                       extra=("--phase=sigs", "--std=" + os.path.join(HERE, "..", "src", "std")))
         test_selfhost("checker-body", "ckdump.cb", "ckdump.py",
-                      ["tests/selfhost_ck/basic1.cb", "tests/selfhost_ck/errors1.cb", "tests/selfhost_ck/agg*.cb"], skip_async=True,
+                      ["tests/selfhost_ck/basic1.cb", "tests/selfhost_ck/errors1.cb", "tests/selfhost_ck/agg*.cb", "tests/selfhost_ck/for*.cb", "tests/selfhost_ck/flow*.cb"], skip_async=True,
                       extra=("--nostd", "--std=" + os.path.join(HERE, "..", "src", "std")))
         test_selfhost("checker-body-std", "ckdump.cb", "ckdump.py", ["tests/selfhost_ck/builtin*.cb"], skip_async=True,
                       extra=("--std=" + os.path.join(HERE, "..", "src", "std"),))
