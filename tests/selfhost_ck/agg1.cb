@@ -1,0 +1,39 @@
+enum Dir { N, S }
+struct P { x: i64, y: i64 }
+struct W { p: P, arr: [3]i32, f: fn(i64) -> i64 }
+impl P {
+    fn sum(self) -> i64 { return self.x + self.y; }
+    fn bump(mut self, d: i64) { self.x += d; }
+    fn make(x: i64) -> P { return P { x: x, y: 0 }; }
+    fn pick(self, c: bool) -> i64 { return c ? self.x : self.y; }
+}
+impl Dir {
+    fn flip(self) -> Dir { return self == Dir.N ? Dir.S : Dir.N; }
+}
+fn dbl(x: i64) -> i64 { return x * 2; }
+fn take(p: *P) -> i64 { return p.sum() + p.x; }
+fn main() {
+    let mut p = P { x: 1, y: 2 };
+    p.bump(3);
+    let s = p.sum();
+    let q = P.make(5);
+    let pp = &p;
+    let t = take(pp);
+    let u = pp.sum() + q.pick(true);
+    let mut a = [1, 2, 3];
+    a[0] = 7;
+    let b = a[1] + a[2];
+    let z = [0; 5];
+    let sl = a[0..2];
+    let sl2 = z[..];
+    let n = sl.len + sl2.len;
+    let w = W { p: p, arr: [1, 2, 3], f: dbl };
+    let r = (w.f)(3);
+    let d = Dir.N.flip();
+    let e = Dir.flip(d);
+    let c = s > 0 ? 1 : 2;
+    let str = "abc";
+    let ch = str[1];
+    let sub = str[1..2];
+    let k = str.len;
+}

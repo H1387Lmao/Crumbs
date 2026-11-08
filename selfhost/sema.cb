@@ -25,6 +25,7 @@ pub struct Local {
 pub struct MovedEnt { local: i64, line: i64 }
 pub struct Scope { names: List<String>, ids: List<i64> }
 pub struct LoopFrame { breaks: List<List<MovedEnt>>, conts: List<List<MovedEnt>> }
+pub struct ImplRec { item: i64, fn_nodes: List<i64>, fn_idx: List<i64> }
 pub struct GlueEnt { key: String, v: bool }
 
 pub struct Sym {
@@ -141,6 +142,9 @@ pub struct Checker {
     entry_name: String,
     main_sym: i64,
     entry_mod: i64,
+    opt_consumed: List<i64>,
+    impl_recs: List<ImplRec>,
+    recv_wrap: bool,
 }
 
 pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
@@ -153,7 +157,7 @@ pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
         nc: false, nc_mi: 0, nc_span: ast.span(0, 0, 1), nc_msg: String.empty(),
         locals: List.new(), scopes: List.new(), moved: List.new(), has_fn: false, fn_sym: -1, fn_ret: types.VOID, fn_names: List.new(),
         fn_loops: 0, fn_rdepth: 0, loop_stack: List.new(), reinit_line: 0, reinit_col: 0, glue: List.new(), glue_busy: List.new(),
-        strict: false, entry_name: String.from("main"), main_sym: -1, entry_mod: ld.order.len > 0 ? *ld.order.at(ld.order.len - 1) : 0,
+        strict: false, entry_name: String.from("main"), opt_consumed: List.new(), impl_recs: List.new(), recv_wrap: false, main_sym: -1, entry_mod: ld.order.len > 0 ? *ld.order.at(ld.order.len - 1) : 0,
     };
     // move every module's items into the node arena; syms and later phases refer to them by index
     for mi in 0..ld.mods.len {
@@ -922,6 +926,8 @@ fn declare_impl(ck: *Checker, mi: i64, id: i64) {
         if !ok { return; }
     }
     let mut impl_tbounds = ast.clone_val(ck.nodes.at(id).get("tbounds"));
+    let rec = ck.impl_recs.len;
+    ck.impl_recs.push(ImplRec { item: id, fn_nodes: List.new(), fn_idx: List.new() });
     for i in 0..fns.len {
         let fname = String.from(fns.at(i).str_of("name"));
         let fsp = fns.at(i).span;
@@ -946,6 +952,8 @@ fn declare_impl(ck: *Checker, mi: i64, id: i64) {
         let self_mut = has_self && (param_flag(child(params, 0), "self_mut") || param_flag(child(params, 0), "mut"));
         let nid = ck.nodes.len;
         ck.nodes.push(node);
+        ck.impl_recs.at(rec).fn_nodes.push(nid);
+        ck.impl_recs.at(rec).fn_idx.push(i);
         let mut s = new_sym(ck, "fn", full_name, mi, nid, f_pub || has_trait);
         s.tparams = tp;
         let prefix: str = ck.ld.mods.at(mi).cprefix;
@@ -2583,6 +2591,12 @@ pub fn check(ck: *Checker, e: *ast.Node, exp: i64, eu: bool) -> i64 {
     else if k == "Cast" { t = ex_cast(ck, e, hint); }
     else if k == "IncDec" { t = ex_incdec(ck, e); }
     else if k == "Call" { t = ex_call(ck, e, hint); }
+    else if k == "Index" { t = ex_index(ck, e); }
+    else if k == "SliceExpr" { t = ex_slice(ck, e); }
+    else if k == "StructLit" { t = ex_structlit(ck, e, hint); }
+    else if k == "ArrayLit" { t = ex_arraylit(ck, e, hint); }
+    else if k == "ArrayRepeat" { t = ex_arrayrepeat(ck, e, hint); }
+    else if k == "Ternary" { t = ex_ternary(ck, e, hint); }
     else if k == "NamedArg" {
         here(ck, e.span, "named arguments only work when calling a function that is declared with `fn`", "not allowed here",
              "pass the value positionally");
@@ -2664,6 +2678,11 @@ fn fn_value(ck: *Checker, e: *ast.Node, sid: i64) -> i64 {
     return types.fnty(&ck.types, &ps, rt);
 }
 
+fn has_id(l: *List<i64>, x: i64) -> bool {
+    for i in 0..l.len { if *l.at(i) == x { return true; } }
+    return false;
+}
+
 fn copy_ids(l: *List<i64>) -> List<i64> {
     let mut o: List<i64> = List.new();
     for i in 0..l.len { o.push(*l.at(i)); }
@@ -2691,7 +2710,7 @@ fn ex_ident(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
             return types.POISON;
         }
         let mv = moved_at(&ck.moved, loc);
-        if mv >= 0 && !(e.span.line == ck.reinit_line && e.span.col == ck.reinit_col) {
+        if mv >= 0 && !(e.span.line == ck.reinit_line && e.span.col == ck.reinit_col) && !has_id(&ck.opt_consumed, e.span.line * 1048576 + e.span.col) {
             let ml = ck.moved.at(mv).line;
             here_n(ck, e.span, format("use of moved value `{name}`"), "value used after it was moved",
                    format("move it only once, pass a pointer (`&{name}`) instead, or re-assign it before using it again"),
@@ -3436,6 +3455,17 @@ fn indirect_call(ck: *Checker, e: *ast.Node) -> i64 {
 }
 
 fn ex_call(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+    let r = ex_call_inner(ck, e, exp);
+    if e.has("orig_args") {
+        let off = flag(e, "method_recv") ? 1 : 0;
+        let mut oa: List<ast.Val> = List.new();
+        for i in off..e.get("args").items.len { oa.push(ast.clone_val(e.get("args").items.at(i))); }
+        e.set("orig_args", ast.v_list(oa));
+    }
+    return r;
+}
+
+fn ex_call_inner(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     let c = e.node_of("callee");
     let mi = ck.cur_mod;
     if c.kind == "Ident" && is_builtin_name(c.str_of("name")) && lookup_local(ck, c.str_of("name")) < 0 {
@@ -3447,8 +3477,19 @@ fn ex_call(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
         check_all_args(ck, e);
         return types.POISON;
     }
+    let mut was_method = false;
     if c.kind == "Field" && (ent.kind == 0 || (ent.kind == 2 && ck.syms.at(ent.idx).kind != "fn")) {
-        return unimpl(ck, e, "method calls");
+        if !e.has("orig_args") { e.set("orig_args", ast.clone_val(e.get("args"))); }
+        e.set("args", ast.clone_val(e.get("orig_args")));
+        set_flag(e, "method_recv", false);
+        ck.recv_wrap = false;
+        let hit = find_method(ck, e);
+        if hit == -2 { return types.POISON; }
+        if hit == -3 { return opt_method(ck, e); }
+        if hit >= 0 {
+            ent = Ent { kind: 2, idx: hit };
+            was_method = true;
+        }
     }
     if ent.kind != 2 || ck.syms.at(ent.idx).kind != "fn" {
         if callee_is_value(ck, c, ent) { return indirect_call(ck, e); }
@@ -3507,7 +3548,21 @@ fn ex_call(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     if ck.syms.at(sid).ret != types.VOID { sig.append(format(" -> {ty_str(ck, ck.syms.at(sid).ret)}")); }
     let mut ps = copy_ids(&ck.syms.at(sid).params);
     check_args(ck, e, &ps, format("function `{sn}`"), sig, ck.syms.at(sid).variadic);
+    if was_method && flag(e, "method_recv") { sync_receiver(ck, e); }
     return ck.syms.at(sid).ret;
+}
+
+// the receiver node is shared between `callee.obj` and the first argument in the Python tree: copy the checked one back
+fn sync_receiver(ck: *Checker, e: *ast.Node) {
+    let first = e.get("args").items.at(0).node.at(0);
+    let orig = e.node_of("callee").node_of("obj");
+    let mut recv = ast.clone_node(first);
+    if ck.recv_wrap { recv = ast.clone_node(first.node_of("expr")); }
+    let c = e.node_of("callee");
+    c.set("obj", ast.v_node(recv));
+    let mut oa: List<ast.Val> = List.new();
+    for i in 1..e.get("args").items.len { oa.push(ast.clone_val(e.get("args").items.at(i))); }
+    e.set("orig_args", ast.v_list(oa));
 }
 
 // ---- statements ----------------------------------------------------------------------------------------------------------------
@@ -3954,4 +4009,420 @@ pub fn run_bodies(ck: *Checker) {
         }
     }
     check_main(ck);
+}
+
+// ---- indexing, aggregates, ternary ------------------------------------------------------------------------------------------
+
+fn check_index_value(ck: *Checker, x: *ast.Node) -> i64 {
+    let t = check(ck, x, -1, false);
+    if t != types.POISON && !types.is_int(t) {
+        let ts = ty_str(ck, t);
+        here(ck, x.span, format("indices must be integers, found `{ts}`"), "", types.is_float(t) ? "convert with `as i64`" : "");
+        return -1;
+    }
+    return t;
+}
+
+fn ex_index(ck: *Checker, e: *ast.Node) -> i64 {
+    let ot = check(ck, e.node_of("obj"), -1, false);
+    let idx = e.node_of("idx");
+    check_index_value(ck, idx);
+    if ot == types.POISON { return types.POISON; }
+    let k = tk(ck, ot);
+    if k == types.K_ARR {
+        let n = ck.types.tys.at(ot).n;
+        if idx.kind == "Int" && idx.get("value").s.len == 0 && idx.get("value").i >= n {
+            here(ck, idx.span, "index out of bounds", format("the length is {n} but the index is {int_text(idx)}"), "");
+        }
+        return ck.types.tys.at(ot).inner;
+    }
+    if k == types.K_SLICE { return ck.types.tys.at(ot).inner; }
+    if ot == types.STR || ot == types.STRING { return types.U8; }
+    let ts = ty_str(ck, ot);
+    here(ck, e.span, format("cannot index into a value of type `{ts}`"), "", "");
+    return types.POISON;
+}
+
+fn ex_slice(ck: *Checker, e: *ast.Node) -> i64 {
+    let obj = e.node_of("obj");
+    let ot = check(ck, obj, -1, false);
+    if !e.is_none("lo") { check_index_value(ck, e.node_of("lo")); }
+    if !e.is_none("hi") { check_index_value(ck, e.node_of("hi")); }
+    if ot == types.POISON { return types.POISON; }
+    let k = tk(ck, ot);
+    if k == types.K_ARR {
+        if !is_place(obj) {
+            here(ck, obj.span, "cannot slice a temporary array", "", "store it in a variable first");
+            return types.POISON;
+        }
+        return types.slc(&ck.types, ck.types.tys.at(ot).inner);
+    }
+    if k == types.K_SLICE || ot == types.STR { return ot; }
+    if ot == types.STRING { return types.STR; }
+    let ts = ty_str(ck, ot);
+    here(ck, e.span, format("cannot slice a value of type `{ts}`"), "", "");
+    return types.POISON;
+}
+
+fn field_names_joined(ck: *Checker, sid: i64) -> String {
+    let mut all = String.empty();
+    for i in 0..ck.syms.at(sid).fields.len {
+        if i > 0 { all.append(", "); }
+        all.append(ck.syms.at(sid).fields.at(i).name);
+    }
+    return all;
+}
+
+fn field_names(ck: *Checker, sid: i64) -> List<String> {
+    let mut o: List<String> = List.new();
+    for i in 0..ck.syms.at(sid).fields.len { o.push(String.from(ck.syms.at(sid).fields.at(i).name)); }
+    return o;
+}
+
+fn check_lit_fields(ck: *Checker, e: *ast.Node) {
+    for i in 0..e.get("fields").items.len { check(ck, e.get("fields").items.at(i).items.at(2).node.at(0), -1, false); }
+}
+
+fn ex_structlit(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+    let path = e.node_of("path");
+    let ent = entity(ck, path);
+    if ent.kind != 2 || ck.syms.at(ent.idx).kind != "struct" {
+        if ent.kind != 3 {
+            let nm = String.from(path.str_of("name"));
+            here(ck, path.span, format("`{nm}` is not a struct"), "", "struct literals look like `Name { field: value }`");
+        }
+        check_lit_fields(ck, e);
+        return types.POISON;
+    }
+    let mut sid = ent.idx;
+    let sn0 = String.from(ck.syms.at(sid).name);
+    if ck.syms.at(sid).opaque {
+        here(ck, e.span, format("`{sn0}` is an opaque C type and cannot be constructed"), "", format("obtain a `*{sn0}` from a C function"));
+        check_lit_fields(ck, e);
+        return types.POISON;
+    }
+    if ck.syms.at(sid).tparams.len > 0 { return unimpl(ck, e, "generic struct literals"); }
+    e.set("sym", ast.v_tag(11, sid));
+    let sn = String.from(ck.syms.at(sid).name);
+    let mut seen: List<String> = List.new();
+    let nf = e.get("fields").items.len;
+    for i in 0..nf {
+        let f = e.get("fields").items.at(i);
+        let nm = String.from(f.items.at(0).s);
+        let nsp = f.items.at(1).span;
+        let v = f.items.at(2).node.at(0);
+        let fi = find_field(ck, sid, nm);
+        if fi < 0 {
+            let mut names = field_names(ck, sid);
+            let sg = diag.suggest_list(nm, &names);
+            here(ck, nsp, format("struct `{sn}` has no field `{nm}`"), "",
+                 sg.len > 0 ? format("did you mean `{sg}`?") : format("fields: {field_names_joined(ck, sid)}"));
+            check(ck, v, -1, false);
+            continue;
+        }
+        if has_name(&seen, nm) { here(ck, nsp, format("field `{nm}` is specified more than once"), "", ""); }
+        seen.push(String.from(nm));
+        expect(ck, v, ck.syms.at(sid).fields.at(fi).ty, false);
+    }
+    let mut missing: List<String> = List.new();
+    for i in 0..ck.syms.at(sid).fields.len {
+        let fnm = String.from(ck.syms.at(sid).fields.at(i).name);
+        if !has_name(&seen, fnm) { missing.push(fnm); }
+    }
+    if missing.len > 0 {
+        let mut ms = String.empty();
+        for i in 0..missing.len { if i > 0 { ms.append(", "); } ms.append(format("`{*missing.at(i)}`")); }
+        let pl = missing.len > 1 ? "s" : "";
+        here(ck, e.span, format("missing field{pl} in initializer of `{sn}`"), format("missing {ms}"), "");
+    }
+    return ck.syms.at(sid).ty;
+}
+
+fn ex_arraylit(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+    let elem_exp = (exp >= 0 && tk(ck, exp) == types.K_ARR) ? ck.types.tys.at(exp).inner : -1;
+    let n = e.get("elems").items.len;
+    if n == 0 {
+        if exp >= 0 && exp == types.POISON { return types.POISON; }
+        if elem_exp < 0 {
+            here(ck, e.span, "cannot infer the type of an empty array", "", "annotate the variable, e.g. `let a: [3]i32 = ...`");
+            return types.POISON;
+        }
+        return exp;
+    }
+    let first = check(ck, child(e.get("elems"), 0), elem_exp, false);
+    for i in 1..n {
+        let x = child(e.get("elems"), i);
+        let t = check(ck, x, first != types.POISON ? first : elem_exp, false);
+        if !types.same(&ck.types, t, first) { mismatch(ck, x, first, t, "array elements must all have the same type"); }
+    }
+    for i in 0..n { consume(ck, child(e.get("elems"), i)); }
+    if first == types.POISON { return types.POISON; }
+    return types.arr(&ck.types, first, n);
+}
+
+fn ex_arrayrepeat(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+    let elem_exp = (exp >= 0 && tk(ck, exp) == types.K_ARR) ? ck.types.tys.at(exp).inner : -1;
+    let t = check(ck, e.node_of("elem"), elem_exp, false);
+    let cnt = e.node_of("count");
+    let v = const_eval(ck, cnt, ck.cur_mod);
+    if ck.nc {
+        ck.nc = false;
+        here(ck, ck.nc_span, ck.nc_msg, "", "the repeat count must be a compile-time constant");
+        return types.POISON;
+    }
+    if v.kind != 0 || v.i <= 0 {
+        here(ck, cnt.span, "array length must be a positive integer constant", "", "");
+        return types.POISON;
+    }
+    e.set("n", ast.v_int(v.i));
+    if t != types.POISON && has_glue(ck, t) {
+        let ts = ty_str(ck, t);
+        here(ck, e.span, format("cannot repeat a value of type `{ts}`: it has a destructor and cannot be copied"), "",
+             "write the elements out one by one, e.g. `[make(), make()]`");
+        return types.POISON;
+    }
+    if t == types.POISON { return types.POISON; }
+    return types.arr(&ck.types, t, v.i);
+}
+
+fn ternary_arms(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+    let a = e.node_of("a");
+    let b = e.node_of("b");
+    if exp >= 0 && tk(ck, exp) == types.K_OPT {
+        expect(ck, a, exp, false);
+        expect(ck, b, exp, false);
+        return exp;
+    }
+    if untyped(ck, a) && !untyped(ck, b) {
+        let tb = check(ck, b, exp, false);
+        if tb == types.POISON {
+            check(ck, a, -1, false);
+            return types.POISON;
+        }
+        expect(ck, a, tb, false);
+        set_nil(b, "conv");
+        return tb;
+    }
+    let ta = check(ck, a, exp, false);
+    if ta == types.POISON {
+        check(ck, b, -1, false);
+        return types.POISON;
+    }
+    set_nil(a, "conv");
+    if expect(ck, b, ta, false) == types.POISON { return types.POISON; }
+    return ta;
+}
+
+fn ex_ternary(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+    expect(ck, e.node_of("cond"), types.BOOL, false);
+    let r = ternary_arms(ck, e, exp);
+    if r != types.POISON {
+        consume(ck, e.node_of("a"));
+        consume(ck, e.node_of("b"));
+    }
+    return r;
+}
+
+// ---- methods ------------------------------------------------------------------------------------------------------------------
+
+fn meth_find(ck: *Checker, key: str, name: str) -> i64 {
+    for i in 0..ck.methods.len {
+        if ck.methods.at(i).key == key {
+            for q in 0..ck.methods.at(i).entries.len { if ck.methods.at(i).entries.at(q).name == name { return ck.methods.at(i).entries.at(q).sym; } }
+        }
+    }
+    return -1;
+}
+
+fn meth_names(ck: *Checker, key: str, only_self: bool) -> List<String> {
+    let mut o: List<String> = List.new();
+    for i in 0..ck.methods.len {
+        if ck.methods.at(i).key == key {
+            for q in 0..ck.methods.at(i).entries.len {
+                let s = ck.methods.at(i).entries.at(q).sym;
+                if !only_self || ck.syms.at(s).has_self { o.push(String.from(ck.methods.at(i).entries.at(q).name)); }
+            }
+        }
+    }
+    return sorted_names(&o);
+}
+
+fn method_visible(ck: *Checker, meth: i64, c: *ast.Node) -> bool {
+    if ck.syms.at(meth).is_pub || ck.syms.at(meth).mod_idx == ck.cur_mod { return true; }
+    let mn = String.from(ck.syms.at(meth).method_name);
+    let md = String.from(ck.ld.mods.at(ck.syms.at(meth).mod_idx).name);
+    here(ck, c.get("name_span").span, format("method `{mn}` is private to module `{md}`"), "private item", "mark it `pub` in its `impl` block");
+    return false;
+}
+
+fn is_opt_method(n: str) -> bool { return n == "is_some" || n == "is_none" || n == "unwrap" || n == "unwrap_or"; }
+
+fn unary_node(sp: ast.Span, op: str, inner: *ast.Node) -> ast.Node {
+    let mut n = ast.new_node("Unary", sp);
+    n.set("op", ast.v_str(op));
+    n.set("expr", ast.v_node(ast.clone_node(inner)));
+    return n;
+}
+
+// adapts the receiver expression to the method's first parameter (auto-borrow / auto-deref); false after an error
+fn receiver_arg(ck: *Checker, obj: *ast.Node, ot: i64, cand: i64, meth: i64, base: i64, out: *ast.Node) -> bool {
+    let nid = ck.syms.at(meth).node;
+    let p0 = ck.nodes.at(nid).get("params").items.at(0).node.at(0);
+    let by_ptr = p0.node_of("tyn").kind == "TPtr";
+    let mn = String.from(ck.syms.at(meth).method_name);
+    let smut = ck.syms.at(meth).self_mut;
+    ck.recv_wrap = false;
+    if by_ptr {
+        if tk(ck, ot) == types.K_PTR {
+            set_flag(obj, "recv_ok", true);
+            if smut && ck.types.tys.at(ot).ro {
+                here(ck, obj.span, format("cannot call `{mn}`, which takes `mut self`, through a `*const` pointer"),
+                     "this pointer is read-only", "take a `*T` (without `const`) instead");
+            }
+            if smut && readonly_self(ck, obj) {
+                here(ck, obj.span, format("cannot call `{mn}`, which takes `mut self`, on the read-only `self`"),
+                     "this method was declared with plain `self`", "declare the calling method with `mut self` too");
+            }
+            *out = ast.clone_node(obj);
+            return true;
+        }
+        if cand != base {
+            *out = ast.clone_node(obj);
+            return true;
+        }
+        let mut node = unary_node(obj.span, "&", obj);
+        set_flag(&node, "auto_ref", !smut);
+        set_flag(&node, "recv_ok", !smut);
+        ck.recv_wrap = true;
+        *out = node;
+        return true;
+    }
+    if tk(ck, ot) == types.K_PTR {
+        ck.recv_wrap = true;
+        *out = unary_node(obj.span, "*", obj);
+        return true;
+    }
+    *out = ast.clone_node(obj);
+    return true;
+}
+
+// `Type.f(args)` / `value.f(args)`: -1 not a method call, -2 error reported, -3 optional method, else the method symbol
+fn find_method(ck: *Checker, e: *ast.Node) -> i64 {
+    let c = e.node_of("callee");
+    let obj = c.node_of("obj");
+    let name = String.from(c.str_of("name"));
+    let mut tent = Ent { kind: 0, idx: -1 };
+    if obj.kind == "Ident" || obj.kind == "Field" { tent = entity(ck, obj); }
+    if tent.kind == 3 { return -2; }
+    let mut key = String.empty();
+    let mut have_key = false;
+    if tent.kind != 0 {
+        if tent.kind == 2 && (ck.syms.at(tent.idx).kind == "struct" || ck.syms.at(tent.idx).kind == "enum") {
+            key = String.from(ck.syms.at(tent.idx).full);
+            have_key = true;
+        } else { return -1; }
+    } else if obj.kind == "Ident" && is_prim_name(obj.str_of("name")) && lookup_local(ck, obj.str_of("name")) < 0 && obj.str_of("name") != "void" {
+        key = String.from(obj.str_of("name"));
+        have_key = true;
+    }
+    if have_key {
+        let meth = meth_find(ck, key, name);
+        if meth < 0 {
+            let tn = String.from(obj.str_of("name"));
+            let mut avail = meth_names(ck, key, false);
+            let sg = avail.len > 0 ? diag.suggest_list(name, &avail) : String.empty();
+            here(ck, c.get("name_span").span, format("type `{tn}` has no function `{name}`"), "", sg.len > 0 ? format("did you mean `{sg}`?") : String.empty());
+            check_all_args(ck, e);
+            return -2;
+        }
+        if !method_visible(ck, meth, c) { return -2; }
+        return meth;
+    }
+    if obj.kind == "Ident" && lookup_local(ck, obj.str_of("name")) < 0 { return -1; }
+    let ot = check(ck, obj, -1, false);
+    if ot == types.POISON {
+        check_all_args(ck, e);
+        return -2;
+    }
+    if tk(ck, ot) == types.K_PTR && tk(ck, ck.types.tys.at(ot).inner) == types.K_PTR { unimpl(ck, e, "method call through `**T`"); return -2; }
+    if tk(ck, ot) == types.K_OPT && is_opt_method(name) { return -3; }
+    let base = (tk(ck, ot) == types.K_PTR && ck.types.tys.at(ot).inner != types.VOID) ? ck.types.tys.at(ot).inner : ot;
+    if tk(ck, base) == types.K_STRUCT && find_field(ck, ck.types.tys.at(base).sym, name) >= 0 { return -1; }
+    let mut chain: List<i64> = List.new();
+    chain.push(base);
+    if base == types.STRING { chain.push(types.STR); }
+    for ci in 0..chain.len {
+        let cand = *chain.at(ci);
+        let k = type_key(ck, cand);
+        let meth = k.len > 0 ? meth_find(ck, k, name) : -1;
+        if meth < 0 || !ck.syms.at(meth).has_self { continue; }
+        if !method_visible(ck, meth, c) { return -2; }
+        let mut arg = ast.new_node("Unary", obj.span);
+        if !receiver_arg(ck, obj, ot, cand, meth, base, &arg) {
+            check_all_args(ck, e);
+            return -2;
+        }
+        let mut items: List<ast.Val> = List.new();
+        items.push(ast.v_node(arg));
+        for i in 0..e.get("args").items.len { items.push(ast.clone_val(e.get("args").items.at(i))); }
+        e.set("args", ast.v_list(items));
+        set_flag(e, "method_recv", true);
+        return meth;
+    }
+    let bk = type_key(ck, base);
+    let mut avail: List<String> = List.new();
+    if bk.len > 0 {
+        for ci in 0..chain.len {
+            let names = meth_names(ck, type_key(ck, *chain.at(ci)), true);
+            for q in 0..names.len { if !has_name(&avail, *names.at(q)) { avail.push(String.from(*names.at(q))); } }
+        }
+        avail = sorted_names(&avail);
+    }
+    let sg = avail.len > 0 ? diag.suggest_list(name, &avail) : String.empty();
+    let bkd = tk(ck, base);
+    if bkd == types.K_STRUCT || bkd == types.K_ENUM || bkd == types.K_PRIM || tk(ck, ot) == types.K_PTR {
+        let bs = ty_str(ck, base);
+        here(ck, c.get("name_span").span, format("type `{bs}` has no method `{name}`"), "", sg.len > 0 ? format("did you mean `{sg}`?") : String.empty());
+        check_all_args(ck, e);
+        return -2;
+    }
+    return -1;
+}
+
+fn opt_method(ck: *Checker, e: *ast.Node) -> i64 {
+    let c = e.node_of("callee");
+    let t = ck.types.tys.at(ety(c.node_of("obj"))).inner;
+    let n = String.from(c.str_of("name"));
+    let want = n == "unwrap_or" ? 1 : 0;
+    let got = e.get("args").items.len;
+    if got != want {
+        let pl = want != 1 ? "s" : "";
+        here(ck, e.span, format("`{n}` takes {want} argument{pl} but {got} were supplied"), "", "");
+        check_all_args(ck, e);
+        return types.POISON;
+    }
+    e.set("opt_method", ast.v_str(n));
+    if n == "is_some" || n == "is_none" { return types.BOOL; }
+    if (n == "unwrap" || n == "unwrap_or") && has_glue(ck, t) {
+        let ob = c.node_of("obj");
+        consume(ck, ob);
+        ck.opt_consumed.push(ob.span.line * 1048576 + ob.span.col);
+    }
+    if n == "unwrap_or" { expect(ck, child(e.get("args"), 0), t, false); }
+    return t;
+}
+
+// the method bodies are shared between the `impl` item and the method nodes in the Python tree: copy the checked bodies back
+pub fn finalize_impls(ck: *Checker) {
+    for r in 0..ck.impl_recs.len {
+        let item = ck.impl_recs.at(r).item;
+        let nf = ck.nodes.at(item).get("fns").items.len;
+        for q in 0..ck.impl_recs.at(r).fn_nodes.len {
+            let k = *ck.impl_recs.at(r).fn_idx.at(q);
+            if k >= nf { continue; }
+            let body = ast.clone_node(ck.nodes.at(*ck.impl_recs.at(r).fn_nodes.at(q)).node_of("body"));
+            let orig = ck.nodes.at(item).get("fns").items.at(k).node.at(0);
+            orig.set("body", ast.v_node(body));
+        }
+    }
 }

@@ -61,6 +61,7 @@ fn main() -> void! {
     sema.run_decl(&ck);
     sema.run_sigs(&ck);
     sema.run_bodies(&ck);
+    sema.finalize_impls(&ck);
     for oi in 0..ck.ld.order.len {
         let mi = *ck.ld.order.at(oi);
         println("module {ck.ld.mods.at(mi).name}");
