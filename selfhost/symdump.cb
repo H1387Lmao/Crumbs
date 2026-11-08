@@ -59,8 +59,10 @@ fn cnames(ck: *sema.Checker, which: i64) -> String {
 fn main() -> void! {
     let path = env.arg(1);
     let mut std_dir = String.from("src/std");
+    let mut sigs = false;
     for i in 2..env.arg_count() {
         let a: str = env.arg(i);
+        if a == "--phase=sigs" { sigs = true; }
         if a.starts_with("--std=") { std_dir = String.from(a[6..a.len]); }
     }
     let mut ld = loader.new_loader(std_dir, false);
@@ -75,6 +77,10 @@ fn main() -> void! {
     let n_loader = ld.d.items.len;
     let mut ck = sema.new_checker(&ld, false);
     sema.run_decl(&ck);
+    if sigs {
+        sema.run_sigs(&ck);
+        sema.check_struct_cycles(&ck);
+    }
     for oi in 0..ck.ld.order.len {
         let mi = *ck.ld.order.at(oi);
         println("module {ck.ld.mods.at(mi).name}");
@@ -100,6 +106,34 @@ fn main() -> void! {
     println("consts {cnames(&ck, 3)}");
     println("traits {cnames(&ck, 4)}");
     println("errors {cnames(&ck, 5)}");
+    if sigs {
+        for q in 0..ck.structs.len {
+            let sid = *ck.structs.at(q);
+            let mut o = format("fields {ck.syms.at(sid).cname}: ");
+            for i in 0..ck.syms.at(sid).fields.len {
+                if i > 0 { o.push(','); }
+                let ts = sema.ty_str(&ck, ck.syms.at(sid).fields.at(i).ty);
+                o.append(format("{ck.syms.at(sid).fields.at(i).name}:{ts}"));
+            }
+            println("{o}");
+        }
+        for q in 0..ck.fns.len {
+            let sid = *ck.fns.at(q);
+            let mut o = format("sig {ck.syms.at(sid).cname}: (");
+            for i in 0..ck.syms.at(sid).params.len {
+                if i > 0 { o.push(','); }
+                o.append(sema.ty_str(&ck, *ck.syms.at(sid).params.at(i)));
+            }
+            let rs = sema.ty_str(&ck, ck.syms.at(sid).ret);
+            o.append(format(")->{rs}"));
+            println("{o}");
+        }
+        for q in 0..ck.consts.len {
+            let sid = *ck.consts.at(q);
+            let ts = sema.ty_str(&ck, ck.syms.at(sid).ty);
+            println("const {ck.syms.at(sid).cname}: {ts}");
+        }
+    }
     for i in 0..n_loader {
         let e = ck.ld.d.items.at(i);
         println("{e.level} {e.file}:{e.line}:{e.col} {e.msg}");

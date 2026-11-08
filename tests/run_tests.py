@@ -196,6 +196,8 @@ def main():
                       extra=("--std=" + os.path.join(HERE, "..", "src", "std"),))
         test_selfhost("checker-decl", "symdump.cb", "symdump.py", pats, skip_async=True,
                       extra=("--std=" + os.path.join(HERE, "..", "src", "std"),))
+        test_selfhost("checker-sigs", "symdump.cb", "symdump.py", pats + ["tests/selfhost_sig/*.cb"], skip_async=True,
+                      extra=("--phase=sigs", "--std=" + os.path.join(HERE, "..", "src", "std")))
         test_selfhost("preprocessor", "ppdump.cb", "ppdump.py", pats + ["tests/selfhost_pp/*.cb"], extra=("-DMODE=2", "-DFEATURE"))
     if not only or "cookie" in " ".join(only):
         print("== cookie build tool")

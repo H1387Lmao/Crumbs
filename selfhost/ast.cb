@@ -82,7 +82,7 @@ impl Node {
     }
     pub fn get(self, name: str) -> *Val {
         for a in self.attrs { if a.name == name { return &a.v; } }
-        panic("node has no attribute");
+        panic("node has no attribute: {name} (kind {self.kind})");
     }
     pub fn str_of(self, name: str) -> str { return self.get(name).s; }
     pub fn node_of(self, name: str) -> *Node { return self.get(name).node.at(0); }

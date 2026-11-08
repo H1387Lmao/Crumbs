@@ -65,6 +65,8 @@ def main():
         if phase != "decl":
             for m in mods:
                 ck.resolve_sigs(m)
+            ck.check_ffi()
+            ck.check_struct_cycles()
     except CompileError as e:
         print(f"fatal: {e}")
     for m in mods:
@@ -81,6 +83,13 @@ def main():
     print("consts " + lst(s.cname for s in ck.consts))
     print("traits " + lst(s.cname for s in ck.traits))
     print("errors " + lst(s.cname for s in ck.errors))
+    if phase != "decl":
+        for s in ck.structs:
+            print(f"fields {s.cname}: " + ",".join(f"{n}:{t}" for n, t, _ in s.fields))
+        for s in ck.fns:
+            print(f"sig {s.cname}: ({','.join(str(p) for p in s.params)})->{s.ret}")
+        for s in ck.consts:
+            print(f"const {s.cname}: {s.ty}")
     for i, e in enumerate(d.items):
         if i < n_loader:     # lexer / parser / preprocessor diagnostics: message and position only
             print(f"{e.level} {e.span.src.path}:{e.span.line}:{e.span.col} {e.msg}")

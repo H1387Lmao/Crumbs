@@ -1,0 +1,186 @@
+// Types for the checker written in Crumbs: a port of src/crumbsc/types.py. Types live in an arena and are
+// referred to by index. Two types are the same when their `key` strings agree; `*const T` keeps its own handle
+// (so it can print differently) but has the same key as `*T`.
+import std.map;
+
+pub const K_PRIM: i64 = 0;
+pub const K_PTR: i64 = 1;
+pub const K_ARR: i64 = 2;
+pub const K_SLICE: i64 = 3;
+pub const K_EU: i64 = 4;
+pub const K_OPT: i64 = 5;
+pub const K_FN: i64 = 6;
+pub const K_CLO: i64 = 7;
+pub const K_STRUCT: i64 = 8;
+pub const K_ENUM: i64 = 9;
+pub const K_ERR: i64 = 10;
+pub const K_POISON: i64 = 11;
+pub const K_NEVER: i64 = 12;
+
+// handles of the built-in types, in creation order
+pub const I8: i64 = 0;
+pub const I16: i64 = 1;
+pub const I32: i64 = 2;
+pub const I64: i64 = 3;
+pub const U8: i64 = 4;
+pub const U16: i64 = 5;
+pub const U32: i64 = 6;
+pub const U64: i64 = 7;
+pub const F32: i64 = 8;
+pub const F64: i64 = 9;
+pub const BOOL: i64 = 10;
+pub const STR: i64 = 11;
+pub const STRING: i64 = 12;
+pub const VOID: i64 = 13;
+pub const REGION: i64 = 14;
+pub const ERR: i64 = 15;
+pub const POISON: i64 = 16;
+pub const NEVER: i64 = 17;
+
+pub struct Ty {
+    kind: i64,
+    name: String,        // primitives
+    inner: i64,          // pointee / element / return type; -1 if none
+    n: i64,              // array length
+    sym: i64,            // struct / enum symbol
+    params: List<i64>,   // parameter types of a `fn` / closure type
+    ro: bool,
+    key: String,
+    kid: i64,            // interned key: equal keys have equal kid
+}
+
+pub struct Arena {
+    tys: List<Ty>,
+    index: map.HashMap<i64>,      // construction signature -> handle
+    kids: map.HashMap<i64>,       // key -> kid
+    nkids: i64,
+}
+
+fn mk(a: *Arena, t: Ty, sig: String) -> i64 {
+    let p = a.index.get(sig);
+    if p != null { return *p; }
+    let id = a.tys.len;
+    let mut t2 = t;
+    let kp = a.kids.get(t2.key);
+    if kp == null {
+        let k = a.nkids;
+        a.nkids += 1;
+        a.kids.set(t2.key, k);
+        t2.kid = k;
+    } else {
+        t2.kid = *kp;
+    }
+    a.tys.push(t2);
+    a.index.set(sig, id);
+    return id;
+}
+
+fn blank(kind: i64, key: String) -> Ty {
+    return Ty { kind: kind, name: String.empty(), inner: -1, n: 0, sym: -1, params: List.new(), ro: false, key: key, kid: 0 };
+}
+
+pub fn new_arena() -> Arena {
+    let mut a = Arena { tys: List.new(), index: map.HashMap.new(), kids: map.HashMap.new(), nkids: 0 };
+    let names = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "str", "String", "void", "Region"];
+    for i in 0..15 {
+        let mut t = blank(K_PRIM, String.from(names[i]));
+        t.name = String.from(names[i]);
+        mk(&a, t, format("prim:{names[i]}"));
+    }
+    mk(&a, blank(K_ERR, String.from("err")), String.from("err"));
+    mk(&a, blank(K_POISON, String.from("poison")), String.from("poison"));
+    mk(&a, blank(K_NEVER, String.from("never")), String.from("never"));
+    return a;
+}
+
+pub fn prim_named(name: str) -> i64 {
+    let names = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "str", "String", "void"];
+    for i in 0..14 { if names[i] == name { return i; } }
+    return -1;
+}
+
+fn key_of(a: *Arena, t: i64) -> String { return String.from(a.tys.at(t).key); }
+
+pub fn ptr(a: *Arena, t: i64, ro: bool) -> i64 {
+    let k = format("*{key_of(a, t)}");
+    let mut ty = blank(K_PTR, k);
+    ty.inner = t;
+    ty.ro = ro;
+    return mk(a, ty, format("ptr:{t}:{ro}"));
+}
+
+pub fn arr(a: *Arena, t: i64, n: i64) -> i64 {
+    let mut ty = blank(K_ARR, format("[{n}]{key_of(a, t)}"));
+    ty.inner = t;
+    ty.n = n;
+    return mk(a, ty, format("arr:{t}:{n}"));
+}
+
+pub fn slc(a: *Arena, t: i64) -> i64 {
+    let mut ty = blank(K_SLICE, format("[]{key_of(a, t)}"));
+    ty.inner = t;
+    return mk(a, ty, format("slice:{t}"));
+}
+
+pub fn eu(a: *Arena, t: i64) -> i64 {
+    let mut ty = blank(K_EU, format("{key_of(a, t)}!"));
+    ty.inner = t;
+    return mk(a, ty, format("eu:{t}"));
+}
+
+pub fn opt(a: *Arena, t: i64) -> i64 {
+    let mut ty = blank(K_OPT, format("{key_of(a, t)}?"));
+    ty.inner = t;
+    return mk(a, ty, format("opt:{t}"));
+}
+
+fn fn_like(a: *Arena, kind: i64, tag: str, params: *List<i64>, ret: i64) -> i64 {
+    let mut ks = String.empty();
+    let mut sg = String.empty();
+    for i in 0..params.len {
+        if i > 0 { ks.push(','); }
+        ks.append(key_of(a, *params.at(i)));
+        sg.append(format("{*params.at(i)},"));
+    }
+    let mut ty = blank(kind, format("{tag}({ks})->{key_of(a, ret)}"));
+    ty.inner = ret;
+    for i in 0..params.len { ty.params.push(*params.at(i)); }
+    return mk(a, ty, format("{tag}:{sg}:{ret}"));
+}
+
+pub fn fnty(a: *Arena, params: *List<i64>, ret: i64) -> i64 { return fn_like(a, K_FN, "fn", params, ret); }
+pub fn clo(a: *Arena, params: *List<i64>, ret: i64) -> i64 { return fn_like(a, K_CLO, "clo", params, ret); }
+
+// a struct or enum type for symbol `sym` whose unique name is `full`
+pub fn sym_ty(a: *Arena, kind: i64, sym: i64, full: str) -> i64 {
+    let tag = kind == K_STRUCT ? "struct" : "enum";
+    let mut ty = blank(kind, format("{tag}:{full}"));
+    ty.sym = sym;
+    return mk(a, ty, format("sym:{kind}:{sym}"));
+}
+
+// ---- predicates ------------------------------------------------------------------------------------------
+
+pub fn kind(a: *Arena, t: i64) -> i64 { return a.tys.at(t).kind; }
+pub fn poison(t: i64) -> bool { return t == POISON; }
+
+pub fn is_int(t: i64) -> bool { return t >= I8 && t <= U64; }
+pub fn is_float(t: i64) -> bool { return t == F32 || t == F64; }
+pub fn is_numeric(t: i64) -> bool { return is_int(t) || is_float(t); }
+pub fn signed(t: i64) -> bool { return t <= I64; }
+pub fn bits(t: i64) -> i64 {
+    let k = t % 4;
+    if k == 0 { return 8; }
+    if k == 1 { return 16; }
+    if k == 2 { return 32; }
+    return 64;
+}
+
+// equal types (poison matches everything)
+pub fn same(a: *Arena, x: i64, y: i64) -> bool {
+    if x == POISON || y == POISON { return true; }
+    return a.tys.at(x).kid == a.tys.at(y).kid;
+}
+
+// the key-equality of two types, without the poison rule
+pub fn eq(a: *Arena, x: i64, y: i64) -> bool { return a.tys.at(x).kid == a.tys.at(y).kid; }

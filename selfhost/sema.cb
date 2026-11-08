@@ -6,11 +6,16 @@ import diag;
 import lexer;
 import loader;
 import parser;
+import types;
 
 // ---- data model -------------------------------------------------------------------------------------
 
 pub struct TMeth { name: String, node: i64 }
 pub struct BoundList { tp: String, traits: List<i64> }
+
+pub struct CVal { kind: i64, i: i64, s: String }     // kind: 0 int, 1 float (value not tracked), 2 bool, 3 bytes
+pub struct SField { name: String, ty: i64, span: ast.Span }
+pub struct NameTy { name: String, ty: i64 }
 
 pub struct Sym {
     kind: String,                 // fn struct enum const error trait
@@ -40,6 +45,17 @@ pub struct Sym {
     drop_sym: i64,                // -1: none
     has_bounds: bool,
     bounds: List<BoundList>,
+    ty: i64,                      // struct / enum: its type; const: its declared type
+    params: List<i64>,
+    ret: i64,
+    fields: List<SField>,
+    base: i64,                    // generic template this instance came from (-1: none)
+    targs: List<i64>,
+    tenv: List<NameTy>,
+    cv: CVal,
+    evaluating: bool,
+    evaluated: bool,
+    drop_inst: i64,
 }
 
 pub struct CImp { alias: String, mod_idx: i64, node_line: i64, node_col: i64, used: bool }
@@ -87,6 +103,16 @@ pub struct Checker {
     prelude_types: List<NameSym>,
     prelude_traits: List<NameSym>,
     bound_seen: List<String>,
+    types: types.Arena,
+    tenv: List<NameTy>,
+    cur_mod: i64,
+    inst_cache: map.HashMap<i64>,
+    n_inst: i64,
+    pending: List<i64>,
+    nc: bool,                     // a `NotConst` is in flight
+    nc_mi: i64,
+    nc_span: ast.Span,
+    nc_msg: String,
 }
 
 pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
@@ -95,6 +121,8 @@ pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
         errors: List.new(), fns: List.new(), structs: List.new(), enums: List.new(), consts: List.new(),
         traits: List.new(), methods: List.new(), trait_impls: List.new(), prelude_types: List.new(),
         prelude_traits: List.new(), bound_seen: List.new(),
+        types: types.new_arena(), tenv: List.new(), cur_mod: 0, inst_cache: map.HashMap.new(), n_inst: 0, pending: List.new(),
+        nc: false, nc_mi: 0, nc_span: ast.span(0, 0, 1), nc_msg: String.empty(),
     };
     // move every module's items into the node arena; syms and later phases refer to them by index
     for mi in 0..ld.mods.len {
@@ -125,6 +153,8 @@ fn new_sym(ck: *Checker, kind: str, name: str, mi: i64, node: i64, is_pub: bool)
         opaque: false, extern_struct: false, is_method: false, has_self: false, self_mut: false,
         method_name: String.empty(), is_drop: false, code: 0, variants: List.new(), trait_methods: List.new(),
         supers: List.new(), drop_sym: -1, has_bounds: false, bounds: List.new(),
+        ty: -1, params: List.new(), ret: types.VOID, fields: List.new(), base: -1, targs: List.new(), tenv: List.new(),
+        cv: CVal { kind: 0, i: 0, s: String.empty() }, evaluating: false, evaluated: false, drop_inst: -1,
     };
 }
 
@@ -266,6 +296,10 @@ fn declare_item(ck: *Checker, mi: i64, id: i64) {
         s.opaque = ck.nodes.at(id).get("opaque").i != 0;
         let generic = s.tparams.len > 0;
         let sid = define(ck, mi, s, sp);
+        if sid >= 0 {
+            let full: str = ck.syms.at(sid).full;
+            ck.syms.at(sid).ty = types.sym_ty(&ck.types, types.K_STRUCT, sid, full);
+        }
         if sid >= 0 && !generic { ck.structs.push(sid); }
     } else if kind == "Enum" {
         let name = String.from(ck.nodes.at(id).str_of("name"));
@@ -281,7 +315,11 @@ fn declare_item(ck: *Checker, mi: i64, id: i64) {
             seen.push(vn);
         }
         let sid = define(ck, mi, s, sp);
-        if sid >= 0 { ck.enums.push(sid); }
+        if sid >= 0 {
+            let full: str = ck.syms.at(sid).full;
+            ck.syms.at(sid).ty = types.sym_ty(&ck.types, types.K_ENUM, sid, full);
+            ck.enums.push(sid);
+        }
     } else if kind == "Trait" {
         let name = String.from(ck.nodes.at(id).str_of("name"));
         let mut s = new_sym(ck, "trait", name, mi, id, is_pub);
@@ -1049,4 +1087,864 @@ pub fn run_decl(ck: *Checker) {
     }
     for oi in 0..n { resolve_bounds(ck, *ck.ld.order.at(oi)); }
     check_trait_impls(ck);
+}
+
+// ---- types: printing, instantiation, resolution -------------------------------------------------------------------------
+
+fn ptr_pre(ro: bool) -> str { return ro ? "*const " : "*"; }
+fn tk(ck: *Checker, t: i64) -> i64 { return ck.types.tys.at(t).kind; }
+
+// the text of a type, as `Ty.__str__` prints it
+pub fn ty_str(ck: *Checker, t: i64) -> String {
+    let k = tk(ck, t);
+    if k == types.K_PRIM { return String.from(ck.types.tys.at(t).name); }
+    let inner = ck.types.tys.at(t).inner;
+    if k == types.K_PTR { return format("{ptr_pre(ck.types.tys.at(t).ro)}{ty_str(ck, inner)}"); }
+    if k == types.K_ARR { let n = ck.types.tys.at(t).n; return format("[{n}]{ty_str(ck, inner)}"); }
+    if k == types.K_SLICE { return format("[]{ty_str(ck, inner)}"); }
+    if k == types.K_EU { return format("{ty_str(ck, inner)}!"); }
+    if k == types.K_OPT { return format("{ty_str(ck, inner)}?"); }
+    if k == types.K_FN || k == types.K_CLO {
+        let mut ps = String.empty();
+        for i in 0..ck.types.tys.at(t).params.len {
+            if i > 0 { ps.append(", "); }
+            ps.append(ty_str(ck, *ck.types.tys.at(t).params.at(i)));
+        }
+        let rs = inner == types.VOID ? String.empty() : format(" -> {ty_str(ck, inner)}");
+        if k == types.K_FN { return format("fn({ps}){rs}"); }
+        return format("|{ps}|{rs}");
+    }
+    if k == types.K_STRUCT || k == types.K_ENUM { return String.from(ck.syms.at(ck.types.tys.at(t).sym).name); }
+    if k == types.K_ERR { return String.from("err"); }
+    if k == types.K_POISON { return String.from("poison"); }
+    return String.from("never");
+}
+
+fn ty_key(ck: *Checker, t: i64) -> String { return String.from(ck.types.tys.at(t).key); }
+
+// the key under which methods of `t` are registered ("" if none)
+fn type_key(ck: *Checker, t: i64) -> String {
+    let k = tk(ck, t);
+    if k == types.K_PRIM { return String.from(ck.types.tys.at(t).name); }
+    if k == types.K_STRUCT || k == types.K_ENUM {
+        let mut s = ck.types.tys.at(t).sym;
+        if ck.syms.at(s).base >= 0 { s = ck.syms.at(s).base; }
+        return String.from(ck.syms.at(s).full);
+    }
+    return String.empty();
+}
+
+fn lower_first(s: str) -> String {
+    let mut o = String.empty();
+    for i in 0..s.len {
+        let c = s[i];
+        if i == 0 && c >= 'A' && c <= 'Z' { o.push(c + 32); } else { o.push(c); }
+    }
+    return o;
+}
+
+// the trait symbols named for type parameter `tp` in the header of impl `info`
+fn bound_traits(ck: *Checker, info: i64, tp: str) -> List<i64> {
+    let mut out: List<i64> = List.new();
+    let mut i = 0 as i64;
+    let mi = ck.trait_impls.at(info).mod_idx;
+    while i < ck.trait_impls.at(info).bounds.items.len {
+        if ck.trait_impls.at(info).bounds.items.at(i).s == tp {
+            let n = ck.trait_impls.at(info).bounds.items.at(i + 1).items.len;
+            for q in 0..n {
+                let tn = ck.trait_impls.at(info).bounds.items.at(i + 1).items.at(q).node.at(0);
+                let tr = resolve_trait(ck, tn, mi, true);
+                if tr >= 0 { out.push(tr); }
+            }
+        }
+        i += 2;
+    }
+    return out;
+}
+
+// does `ty` implement trait `tr`? when not, `why` holds a short reason
+fn implements(ck: *Checker, ty: i64, tr: i64, why: *String) -> bool {
+    let key = type_key(ck, ty);
+    let trfull = String.from(ck.syms.at(tr).full);
+    let info = key.len > 0 ? find_timpl(ck, trfull, key) : -1;
+    if info < 0 {
+        let ts = ty_str(ck, ty);
+        *why = format("the type `{ts}` does not implement `{ck.syms.at(tr).name}`");
+        return false;
+    }
+    if ck.trait_impls.at(info).bounds.items.len > 0 && tk(ck, ty) == types.K_STRUCT {
+        let sid = ck.types.tys.at(ty).sym;
+        if ck.syms.at(sid).base >= 0 {
+            let ntp = ck.trait_impls.at(info).tparams.len;
+            for k in 0..ntp {
+                if k >= ck.syms.at(sid).targs.len { break; }
+                let tp = String.from(*ck.trait_impls.at(info).tparams.at(k));
+                let ta = *ck.syms.at(sid).targs.at(k);
+                let needs = bound_traits(ck, info, tp);
+                for q in 0..needs.len {
+                    let need = *needs.at(q);
+                    let mut why2 = String.empty();
+                    if !implements(ck, ta, need, &why2) {
+                        let ts = ty_str(ck, ty);
+                        let lw = lower_first(why2);
+                        *why = format("`{ts}` implements `{ck.syms.at(tr).name}` only when `{tp}: {ck.syms.at(need).name}`, but {lw}");
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+// the type arguments chosen for `sid` must satisfy the `T: Trait` bounds on its type parameters
+fn check_bounds(ck: *Checker, sid: i64, targs: *List<i64>, smi: i64, span: ast.Span) -> bool {
+    if !ck.syms.at(sid).has_bounds { return true; }
+    let mut ok = true;
+    let ntp = ck.syms.at(sid).tparams.len;
+    for k in 0..ntp {
+        if k >= targs.len { break; }
+        let tp = String.from(*ck.syms.at(sid).tparams.at(k));
+        let ta = *targs.at(k);
+        let mut trs: List<i64> = List.new();
+        for b in 0..ck.syms.at(sid).bounds.len {
+            if ck.syms.at(sid).bounds.at(b).tp == tp {
+                for q in 0..ck.syms.at(sid).bounds.at(b).traits.len { trs.push(*ck.syms.at(sid).bounds.at(b).traits.at(q)); }
+            }
+        }
+        for q in 0..trs.len {
+            let tr = *trs.at(q);
+            let mut why = String.empty();
+            if implements(ck, ta, tr, &why) { continue; }
+            ok = false;
+            let kd: str = ck.syms.at(sid).kind;
+            let what = kd == "struct" ? "struct" : (kd == "fn" ? "function" : "item");
+            let tn = String.from(ck.syms.at(tr).name);
+            let sname = String.from(ck.syms.at(sid).name);
+            let tas = ty_str(ck, ta);
+            let req = format("required by the bound `{tp}: {tn}` on the {what} `{sname}`");
+            let notes = why.starts_with("the type") ? req : format("{why} ## {req}");
+            let help = type_key(ck, ta).len > 0 ? format("implement it: `impl {tn} for {tas} {{ ... }}`")
+                : format("only structs, enums and built-in types can implement a trait, so `{tas}` cannot satisfy `{tn}`");
+            err(ck, smi, span, format("the trait bound `{tas}: {tn}` is not satisfied"), format("`{tas}` does not implement `{tn}`"), help, notes);
+        }
+    }
+    return ok;
+}
+
+fn too_deep(ck: *Checker, key: str, smi: i64, span: ast.Span) -> bool {
+    if key.len > 160 || ck.n_inst > 4000 {
+        err(ck, smi, span, "generic instantiation recursion limit reached", "",
+            "a generic type or function keeps instantiating itself with ever larger types", "");
+        return true;
+    }
+    return false;
+}
+
+fn inst_key(ck: *Checker, full: str, targs: *List<i64>) -> String {
+    let mut k = String.from(full);
+    k.push('\x01');
+    for i in 0..targs.len { if i > 0 { k.push('\x02'); } k.append(ty_key(ck, *targs.at(i))); }
+    return k;
+}
+
+fn keys_joined(ck: *Checker, targs: *List<i64>) -> String {
+    let mut k = String.empty();
+    for i in 0..targs.len { k.append(ty_key(ck, *targs.at(i))); }
+    return k;
+}
+
+fn tenv_of(ck: *Checker, sid: i64, targs: *List<i64>) -> List<NameTy> {
+    let mut e: List<NameTy> = List.new();
+    for i in 0..ck.syms.at(sid).tparams.len {
+        if i >= targs.len { break; }
+        e.push(NameTy { name: String.from(*ck.syms.at(sid).tparams.at(i)), ty: *targs.at(i) });
+    }
+    return e;
+}
+
+fn tenv_get(ck: *Checker, name: str) -> i64 {
+    for i in 0..ck.tenv.len { if ck.tenv.at(i).name == name { return ck.tenv.at(i).ty; } }
+    return -1;
+}
+
+// installs `env` as the type-parameter environment and returns the previous one
+fn tenv_replace(ck: *Checker, env: List<NameTy>) -> List<NameTy> {
+    let mut old: List<NameTy> = List.new();
+    while ck.tenv.len > 0 { old.push(ck.tenv.pop() catch { panic("unreachable"); }); }
+    old.reverse();
+    for i in 0..env.len { ck.tenv.push(NameTy { name: String.from(env.at(i).name), ty: env.at(i).ty }); }
+    return old;
+}
+
+fn find_field(ck: *Checker, sid: i64, name: str) -> i64 {
+    for i in 0..ck.syms.at(sid).fields.len { if ck.syms.at(sid).fields.at(i).name == name { return i; } }
+    return -1;
+}
+
+// a copy of generic function `sid` for `targs`, with its signature resolved (-1 when it could not be made)
+pub fn inst_fn(ck: *Checker, sid: i64, targs: *List<i64>, smi: i64, span: ast.Span) -> i64 {
+    let full = String.from(ck.syms.at(sid).full);
+    let key = inst_key(ck, full, targs);
+    let got = ck.inst_cache.get(key);
+    if got != null { return *got; }
+    let kj = keys_joined(ck, targs);
+    if too_deep(ck, kj, smi, span) { return -1; }
+    if !check_bounds(ck, sid, targs, smi, span) { return -1; }
+    ck.n_inst += 1;
+    let nid = ck.nodes.len;
+    ck.nodes.push(ast.clone_node(ck.nodes.at(ck.syms.at(sid).node)));
+    let name = String.from(ck.syms.at(sid).name);
+    let mi = ck.syms.at(sid).mod_idx;
+    let mut inst = new_sym(ck, "fn", name, mi, nid, ck.syms.at(sid).is_pub);
+    let cn: str = ck.syms.at(sid).cname;
+    inst.cname = format("{cn}__g{ck.n_inst}");
+    inst.base = sid;
+    for i in 0..targs.len { inst.targs.push(*targs.at(i)); }
+    inst.tenv = tenv_of(ck, sid, targs);
+    let iid = ck.syms.len;
+    ck.syms.push(inst);
+    ck.inst_cache.set(key, iid);
+    let saved_mod = ck.cur_mod;
+    let saved_env = tenv_replace(ck, tenv_of(ck, sid, targs));
+    ck.cur_mod = mi;
+    let np = ck.nodes.at(nid).get("params").items.len;
+    for p in 0..np {
+        let t = resolve_type(ck, ck.nodes.at(nid).get("params").items.at(p).node.at(0).node_of("tyn"), mi, false);
+        ck.syms.at(iid).params.push(t);
+    }
+    let has_ret = !ck.nodes.at(nid).is_none("ret");
+    let rt = has_ret ? resolve_type(ck, ck.nodes.at(nid).node_of("ret"), mi, true) : types.VOID;
+    ck.syms.at(iid).ret = rt;
+    ck.cur_mod = saved_mod;
+    tenv_replace(ck, saved_env);
+    ck.fns.push(iid);
+    ck.pending.push(iid);
+    return iid;
+}
+
+// the struct type for generic struct `sid` applied to `targs`
+pub fn inst_struct(ck: *Checker, sid: i64, targs: *List<i64>, smi: i64, span: ast.Span, has_span: bool) -> i64 {
+    let full = String.from(ck.syms.at(sid).full);
+    let key = inst_key(ck, full, targs);
+    let got = ck.inst_cache.get(key);
+    if got != null { return ck.syms.at(*got).ty; }
+    let kj = keys_joined(ck, targs);
+    let nsp = ck.nodes.at(ck.syms.at(sid).node).span;
+    if has_span && too_deep(ck, kj, smi, span) { return types.POISON; }
+    if !check_bounds(ck, sid, targs, smi, has_span ? span : nsp) { return types.POISON; }
+    ck.n_inst += 1;
+    let name = String.from(ck.syms.at(sid).name);
+    let mi = ck.syms.at(sid).mod_idx;
+    let mut inst = new_sym(ck, "struct", name, mi, ck.syms.at(sid).node, ck.syms.at(sid).is_pub);
+    let mut shown = String.empty();
+    for i in 0..targs.len { if i > 0 { shown.append(", "); } shown.append(ty_str(ck, *targs.at(i))); }
+    let mut keys = String.empty();
+    for i in 0..targs.len { if i > 0 { keys.push(','); } keys.append(ty_key(ck, *targs.at(i))); }
+    let sfull: str = ck.syms.at(sid).full;
+    let scn: str = ck.syms.at(sid).cname;
+    inst.name = format("{name}<{shown}>");
+    inst.full = format("{sfull}<{keys}>");
+    inst.cname = format("{scn}__g{ck.n_inst}");
+    inst.base = sid;
+    for i in 0..targs.len { inst.targs.push(*targs.at(i)); }
+    let iid = ck.syms.len;
+    let ifull: str = inst.full;
+    ck.syms.push(inst);
+    let t = types.sym_ty(&ck.types, types.K_STRUCT, iid, ifull);
+    ck.syms.at(iid).ty = t;
+    ck.inst_cache.set(key, iid);
+    ck.structs.push(iid);
+    let saved_mod = ck.cur_mod;
+    let saved_env = tenv_replace(ck, tenv_of(ck, sid, targs));
+    ck.cur_mod = mi;
+    let nf = ck.nodes.at(ck.syms.at(sid).node).get("fields").items.len;
+    for f in 0..nf {
+        let fnode = ck.nodes.at(ck.syms.at(sid).node).get("fields").items.at(f).node.at(0);
+        let ft = resolve_type(ck, fnode.node_of("tyn"), mi, false);
+        let fname = String.from(fnode.str_of("name"));
+        if find_field(ck, iid, fname) >= 0 { continue; }
+        ck.syms.at(iid).fields.push(SField { name: fname, ty: ft, span: fnode.span });
+    }
+    ck.cur_mod = saved_mod;
+    tenv_replace(ck, saved_env);
+    if ck.syms.at(iid).fields.len == 0 {
+        err(ck, mi, nsp, format("struct `{name}` has no fields"), "", "", "");
+    }
+    if ck.syms.at(sid).drop_sym >= 0 {
+        let ds = ck.syms.at(sid).drop_sym;
+        let dsp = has_span ? span : nsp;
+        let di = inst_fn(ck, ds, targs, has_span ? smi : mi, dsp);
+        ck.syms.at(iid).drop_inst = di;
+    }
+    return t;
+}
+
+fn use_type_sym(ck: *Checker, sid: i64, args: *ast.Val, tn: *ast.Node, mi: i64) -> i64 {
+    let ntp = ck.syms.at(sid).tparams.len;
+    let name = String.from(ck.syms.at(sid).name);
+    if ntp > 0 {
+        if ck.syms.at(sid).kind != "struct" { return types.POISON; }
+        if args.items.len != ntp {
+            let mut tps = String.empty();
+            for i in 0..ntp { if i > 0 { tps.append(", "); } tps.append(*ck.syms.at(sid).tparams.at(i)); }
+            let pl = ntp != 1 ? "s" : "";
+            err(ck, mi, tn.span, format("struct `{name}` expects {ntp} type argument{pl}, found {args.items.len}"), "",
+                format("write `{name}<{tps}>` with concrete types"), "");
+            return types.POISON;
+        }
+        let mut ts: List<i64> = List.new();
+        for i in 0..args.items.len { ts.push(resolve_type(ck, args.items.at(i).node.at(0), mi, false)); }
+        for i in 0..ts.len { if *ts.at(i) == types.POISON { return types.POISON; } }
+        return inst_struct(ck, sid, &ts, mi, tn.span, true);
+    }
+    if args.items.len > 0 {
+        err(ck, mi, tn.span, format("`{name}` is not generic and takes no type arguments"), "", "", "");
+        return types.POISON;
+    }
+    return ck.syms.at(sid).ty;
+}
+
+// an opaque C type used by value is an error
+fn sized(ck: *Checker, t_in: i64, mi: i64, sp: ast.Span) -> bool {
+    let mut t = t_in;
+    while tk(ck, t) == types.K_ARR { t = ck.types.tys.at(t).inner; }
+    if tk(ck, t) == types.K_STRUCT {
+        let s = ck.types.tys.at(t).sym;
+        if ck.syms.at(s).opaque {
+            let n = String.from(ck.syms.at(s).name);
+            err(ck, mi, sp, format("`{n}` is an opaque C type, so it cannot be used by value"), "its size is unknown",
+                format("use a pointer: `*{n}`"), "");
+            return false;
+        }
+    }
+    return true;
+}
+
+fn need_std(ck: *Checker, mi: i64, sp: ast.Span, what: str) {
+    err(ck, mi, sp, format("{what} needs the standard runtime, which `--no-stdruntime` removes"), "not available in this build",
+        "drop --no-stdruntime, or call the C library yourself through `extern fn`", "");
+}
+
+pub fn resolve_type(ck: *Checker, tn: *ast.Node, mi: i64, allow_void: bool) -> i64 {
+    let k: str = tn.kind;
+    if k == "TName" {
+        let path = path_of(tn);
+        let mut noargs = ast.v_list(List.new());
+        let args = tn.has("args") ? tn.get("args") : &noargs;
+        if path.len == 1 {
+            let n = String.from(*path.at(0));
+            let te = tenv_get(ck, n);
+            if te >= 0 {
+                if args.items.len > 0 {
+                    err(ck, mi, tn.span, format("type parameter `{n}` does not take type arguments"), "", "", "");
+                    return types.POISON;
+                }
+                return te;
+            }
+            if is_prim_name(n) {
+                if args.items.len > 0 {
+                    err(ck, mi, tn.span, format("type `{n}` does not take type arguments"), "", "", "");
+                    return types.POISON;
+                }
+                if n == "void" && !allow_void {
+                    err(ck, mi, tn.span, "`void` is not allowed here", "", "`void` can only be a return type", "");
+                    return types.POISON;
+                }
+                if ck.nostd && n == "String" {
+                    need_std(ck, mi, tn.span, "`String`");
+                    return types.POISON;
+                }
+                return types.prim_named(n);
+            }
+            if n == "error" { return types.ERR; }
+            let mut sym = lookup_sym(ck, mi, n);
+            if sym < 0 && import_of(ck, mi, n) < 0 { sym = lookup_named(&ck.prelude_types, n); }
+            if sym >= 0 && (ck.syms.at(sym).kind == "struct" || ck.syms.at(sym).kind == "enum") {
+                return use_type_sym(ck, sym, args, tn, mi);
+            }
+            if sym >= 0 && ck.syms.at(sym).kind == "trait" {
+                err(ck, mi, tn.span, format("`{n}` is a trait, not a type"), "traits cannot be used as types",
+                    format("use it as a bound instead: `fn f<T: {n}>(x: T)`"), "");
+                return types.POISON;
+            }
+            if import_of(ck, mi, n) >= 0 {
+                err(ck, mi, tn.span, format("expected a type, found module `{n}`"), "", format("use `{n}.TypeName`"), "");
+                return types.POISON;
+            }
+            let mut cands: List<String> = List.new();
+            let cm = ck.cmods.at(mi);
+            for q in 0..cm.order.len {
+                let s = ck.syms.at(*cm.order.at(q));
+                if s.kind == "struct" || s.kind == "enum" { cands.push(String.from(s.name)); }
+            }
+            let pn = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "str", "String", "void"];
+            for q in 0..14 { cands.push(String.from(pn[q])); }
+            for q in 0..ck.tenv.len { cands.push(String.from(ck.tenv.at(q).name)); }
+            let sg = diag.suggest_list(n, &cands);
+            err(ck, mi, tn.span, format("cannot find type `{n}` in this scope"), "",
+                sg.len > 0 ? format("a type with a similar name exists: `{sg}`") : String.empty(), "");
+            return types.POISON;
+        }
+        if path.len == 2 {
+            let im = import_of(ck, mi, *path.at(0));
+            let p0 = String.from(*path.at(0));
+            let p1 = String.from(*path.at(1));
+            if im < 0 {
+                err(ck, mi, tn.span, format("cannot find module `{p0}`"), "", format("add `import {p0};` at the top of the file"), "");
+                return types.POISON;
+            }
+            ck.cmods.at(mi).imports.at(im).used = true;
+            let tm = ck.cmods.at(mi).imports.at(im).mod_idx;
+            let sym = lookup_sym(ck, tm, p1);
+            if sym < 0 || (ck.syms.at(sym).kind != "struct" && ck.syms.at(sym).kind != "enum") {
+                err(ck, mi, tn.span, format("module `{p0}` has no type `{p1}`"), "", "", "");
+                return types.POISON;
+            }
+            if !ck.syms.at(sym).is_pub && ck.syms.at(sym).mod_idx != mi {
+                err(ck, mi, tn.span, format("type `{p1}` is private to module `{p0}`"), "", "mark it `pub` in its module", "");
+                return types.POISON;
+            }
+            return use_type_sym(ck, sym, args, tn, mi);
+        }
+        err(ck, mi, tn.span, "type paths can have at most one module qualifier", "", "", "");
+        return types.POISON;
+    }
+    if k == "TPtr" {
+        let inner = resolve_type(ck, tn.node_of("inner"), mi, true);
+        if inner == types.POISON { return types.POISON; }
+        return types.ptr(&ck.types, inner, param_flag(tn, "ro"));
+    }
+    if k == "TFn" || k == "TClo" {
+        let mut ps: List<i64> = List.new();
+        let np = tn.get("params").items.len;
+        for i in 0..np { ps.push(resolve_type(ck, tn.get("params").items.at(i).node.at(0), mi, false)); }
+        let ret = tn.is_none("ret") ? types.VOID : resolve_type(ck, tn.node_of("ret"), mi, true);
+        let mut bad = ret == types.POISON;
+        for i in 0..ps.len { if *ps.at(i) == types.POISON { bad = true; } }
+        if bad { return types.POISON; }
+        if k == "TFn" { return types.fnty(&ck.types, &ps, ret); }
+        return types.clo(&ck.types, &ps, ret);
+    }
+    if k == "TSlice" {
+        let inner = resolve_type(ck, tn.node_of("inner"), mi, false);
+        if inner == types.POISON { return types.POISON; }
+        return types.slc(&ck.types, inner);
+    }
+    if k == "TArray" {
+        let inner = resolve_type(ck, tn.node_of("inner"), mi, false);
+        let size = tn.node_of("size");
+        let v = const_eval(ck, size, mi);
+        if ck.nc {
+            ck.nc = false;
+            err(ck, ck.nc_mi, ck.nc_span, ck.nc_msg, "", "", "");
+            return types.POISON;
+        }
+        if v.kind != 0 {
+            err(ck, mi, size.span, "array length must be an integer constant", "", "", "");
+            return types.POISON;
+        }
+        if v.i <= 0 {
+            err(ck, mi, size.span, "array length must be at least 1", "", "", "");
+            return types.POISON;
+        }
+        if v.i > 2147483648 {
+            err(ck, mi, size.span, "array length is too large", "", "", "");
+            return types.POISON;
+        }
+        if inner == types.POISON || !sized(ck, inner, mi, tn.span) { return types.POISON; }
+        return types.arr(&ck.types, inner, v.i);
+    }
+    if k == "TOpt" {
+        let inner = resolve_type(ck, tn.node_of("inner"), mi, false);
+        if inner == types.POISON { return types.POISON; }
+        let ik = tk(ck, inner);
+        if ik == types.K_EU || ik == types.K_OPT {
+            let s = ty_str(ck, inner);
+            err(ck, mi, tn.span, format("`{s}?` is not allowed: optional and error types cannot be stacked"), "",
+                "use one of them, or wrap one in a struct", "");
+            return types.POISON;
+        }
+        return types.opt(&ck.types, inner);
+    }
+    if k == "TErrUnion" {
+        let inner = resolve_type(ck, tn.node_of("inner"), mi, true);
+        if inner == types.POISON { return types.POISON; }
+        if tk(ck, inner) == types.K_EU {
+            err(ck, mi, tn.span, "error unions cannot be nested", "", "", "");
+            return types.POISON;
+        }
+        return types.eu(&ck.types, inner);
+    }
+    panic("unknown type node");
+}
+
+// ---- constants --------------------------------------------------------------------------------------------------------
+
+fn nc_raise(ck: *Checker, mi: i64, sp: ast.Span, msg: str) {
+    ck.nc = true;
+    ck.nc_mi = mi;
+    ck.nc_span = sp;
+    ck.nc_msg = String.from(msg);
+}
+
+fn cv_int(i: i64) -> CVal { return CVal { kind: 0, i: i, s: String.empty() }; }
+fn cv_bool(b: bool) -> CVal { return CVal { kind: 2, i: b ? 1 : 0, s: String.empty() }; }
+fn cv_float() -> CVal { return CVal { kind: 1, i: 0, s: String.empty() }; }
+
+fn cv_copy(v: *CVal) -> CVal { return CVal { kind: v.kind, i: v.i, s: String.from(v.s) }; }
+
+fn cv_truth(v: *CVal) -> bool {
+    if v.kind == 3 { return v.s.len > 0; }
+    if v.kind == 1 { return true; }
+    return v.i != 0;
+}
+
+pub fn const_value(ck: *Checker, sid: i64) -> CVal {
+    if ck.syms.at(sid).evaluated { return cv_copy(&ck.syms.at(sid).cv); }
+    let mi = ck.syms.at(sid).mod_idx;
+    let nsp = ck.nodes.at(ck.syms.at(sid).node).span;
+    let name = String.from(ck.syms.at(sid).name);
+    if ck.syms.at(sid).is_extern {
+        nc_raise(ck, mi, nsp, format("`{name}` is defined in C, so its value is not known at compile time"));
+        return cv_int(0);
+    }
+    if ck.syms.at(sid).evaluating {
+        nc_raise(ck, mi, nsp, format("constant `{name}` depends on itself"));
+        return cv_int(0);
+    }
+    ck.syms.at(sid).evaluating = true;
+    let mut v = const_eval(ck, ck.nodes.at(ck.syms.at(sid).node).node_of("init"), mi);
+    ck.syms.at(sid).evaluating = false;
+    if ck.nc { return cv_int(0); }
+    ck.syms.at(sid).evaluated = true;
+    ck.syms.at(sid).cv = cv_copy(&v);
+    return v;
+}
+
+fn wrap_int(v: i64, t: i64) -> i64 {
+    let b = types.bits(t);
+    if b == 64 { return v; }
+    let mask = (1 as i64 << b) - 1;
+    let mut r = v & mask;
+    if types.signed(t) && r >= (1 as i64 << (b - 1)) { r -= 1 as i64 << b; }
+    return r;
+}
+
+pub fn const_eval(ck: *Checker, e: *ast.Node, mi: i64) -> CVal {
+    let k: str = e.kind;
+    if k == "Int" {
+        let v = e.get("value");
+        if v.s.len > 0 { return cv_int(9223372036854775807); }
+        return cv_int(v.i);
+    }
+    if k == "Float" { return cv_float(); }
+    if k == "Bool" { return cv_bool(e.get("value").i != 0); }
+    if k == "Str" { return CVal { kind: 3, i: 0, s: String.from(e.get("value").s) }; }
+    if k == "Ident" {
+        let name = String.from(e.str_of("name"));
+        let s = lookup_sym(ck, mi, name);
+        if s >= 0 && ck.syms.at(s).kind == "const" { return const_value(ck, s); }
+        nc_raise(ck, mi, e.span, format("`{name}` is not a constant"));
+        return cv_int(0);
+    }
+    if k == "Field" && e.node_of("obj").kind == "Ident" && import_of(ck, mi, e.node_of("obj").str_of("name")) >= 0 {
+        let alias = String.from(e.node_of("obj").str_of("name"));
+        let name = String.from(e.str_of("name"));
+        let im = import_of(ck, mi, alias);
+        let tm = ck.cmods.at(mi).imports.at(im).mod_idx;
+        let s = lookup_sym(ck, tm, name);
+        if s >= 0 && ck.syms.at(s).kind == "const" && (ck.syms.at(s).is_pub || tm == mi) {
+            ck.cmods.at(mi).imports.at(im).used = true;
+            return const_value(ck, s);
+        }
+        nc_raise(ck, mi, e.span, format("`{alias}.{name}` is not a public constant"));
+        return cv_int(0);
+    }
+    if k == "Unary" {
+        let v = const_eval(ck, e.node_of("expr"), mi);
+        if ck.nc { return v; }
+        let op: str = e.str_of("op");
+        if op == "-" && v.kind != 2 && v.kind != 3 {
+            if v.kind == 1 { return cv_float(); }
+            return cv_int(0 - v.i);
+        }
+        if op == "!" && v.kind == 2 { return cv_bool(v.i == 0); }
+        if op == "~" && v.kind == 0 { return cv_int(~v.i); }
+        nc_raise(ck, mi, e.span, "operator not allowed in a constant expression");
+        return cv_int(0);
+    }
+    if k == "Binary" {
+        let mut a = const_eval(ck, e.node_of("l"), mi);
+        if ck.nc { return a; }
+        let b = const_eval(ck, e.node_of("r"), mi);
+        if ck.nc { return b; }
+        let op: str = e.str_of("op");
+        if op == "&&" { return cv_truth(&a) ? b : a; }
+        if op == "||" { return cv_truth(&a) ? a : b; }
+        if a.kind == 3 || b.kind == 3 {
+            if op == "==" { return cv_bool(a.kind == b.kind && a.s == b.s); }
+            if op == "!=" { return cv_bool(!(a.kind == b.kind && a.s == b.s)); }
+            nc_raise(ck, mi, e.span, "operator not allowed on strings in a constant expression");
+            return cv_int(0);
+        }
+        let fl = a.kind == 1 || b.kind == 1;
+        let x = a.i;
+        let y = b.i;
+        if op == "+" { return fl ? cv_float() : cv_int(x + y); }
+        if op == "-" { return fl ? cv_float() : cv_int(x - y); }
+        if op == "*" { return fl ? cv_float() : cv_int(x * y); }
+        if op == "/" || op == "%" {
+            if fl { return cv_float(); }
+            if y == 0 {
+                nc_raise(ck, mi, e.span, "division by zero in constant expression");
+                return cv_int(0);
+            }
+            return cv_int(op == "/" ? x / y : x % y);
+        }
+        if op == "<<" {
+            if y < 0 || y >= 63 { return cv_int(x == 0 ? 0 : 9223372036854775807); }
+            return cv_int(x << y);
+        }
+        if op == ">>" {
+            if y < 0 || y >= 64 { return cv_int(x < 0 ? -1 : 0); }
+            return cv_int(x >> y);
+        }
+        if op == "&" { return cv_int(x & y); }
+        if op == "|" { return cv_int(x | y); }
+        if op == "^" { return cv_int(x ^ y); }
+        if fl { return cv_bool(false); }
+        if op == "==" { return cv_bool(x == y); }
+        if op == "!=" { return cv_bool(x != y); }
+        if op == "<" { return cv_bool(x < y); }
+        if op == ">" { return cv_bool(x > y); }
+        if op == "<=" { return cv_bool(x <= y); }
+        if op == ">=" { return cv_bool(x >= y); }
+        nc_raise(ck, mi, e.span, "operator not allowed in a constant expression");
+        return cv_int(0);
+    }
+    if k == "Cast" {
+        let v = const_eval(ck, e.node_of("expr"), mi);
+        if ck.nc { return v; }
+        let tn = e.node_of("tyn");
+        if tn.kind == "TName" && tn.get("path").items.len == 1 && is_prim_name(tn.get("path").items.at(0).s) {
+            let t = types.prim_named(tn.get("path").items.at(0).s);
+            if types.is_int(t) && v.kind != 3 { return cv_int(wrap_int(v.i, t)); }
+            if types.is_float(t) && v.kind != 3 { return cv_float(); }
+        }
+        nc_raise(ck, mi, e.span, "cast not allowed in a constant expression");
+        return cv_int(0);
+    }
+    nc_raise(ck, mi, e.span, "this expression is not a compile-time constant");
+    return cv_int(0);
+}
+
+// ---- signatures -----------------------------------------------------------------------------------------------------------
+
+pub fn resolve_sigs(ck: *Checker, mi: i64) {
+    ck.cur_mod = mi;
+    let nsyms = ck.cmods.at(mi).order.len;
+    for q in 0..nsyms {
+        let sid = *ck.cmods.at(mi).order.at(q);
+        let nid = ck.syms.at(sid).node;
+        if ck.syms.at(sid).tparams.len > 0 { continue; }
+        let kd = String.from(ck.syms.at(sid).kind);
+        let name = String.from(ck.syms.at(sid).name);
+        if kd == "fn" {
+            let mut seen: List<String> = List.new();
+            let np = ck.nodes.at(nid).get("params").items.len;
+            for pi in 0..np {
+                let p = ck.nodes.at(nid).get("params").items.at(pi).node.at(0);
+                let tyn = p.node_of("tyn");
+                let mut t = resolve_type(ck, tyn, mi, false);
+                if t != types.POISON && !sized(ck, t, mi, tyn.span) { t = types.POISON; }
+                ck.syms.at(sid).params.push(t);
+                let pname = String.from(p.str_of("name"));
+                if has_name(&seen, pname) {
+                    err(ck, mi, p.get("name_span").span, format("parameter `{pname}` is declared more than once"), "", "", "");
+                }
+                seen.push(pname);
+            }
+            let has_ret = !ck.nodes.at(nid).is_none("ret");
+            let mut rt = types.VOID;
+            if has_ret { rt = resolve_type(ck, ck.nodes.at(nid).node_of("ret"), mi, true); }
+            ck.syms.at(sid).ret = rt;
+            if has_ret && rt != types.POISON && !sized(ck, rt, mi, ck.nodes.at(nid).node_of("ret").span) {
+                ck.syms.at(sid).ret = types.POISON;
+            }
+        } else if kd == "struct" {
+            let nf = ck.nodes.at(nid).get("fields").items.len;
+            if nf == 0 && ck.nodes.at(nid).get("opaque").i == 0 {
+                err(ck, mi, ck.nodes.at(nid).span, format("struct `{name}` has no fields"), "", "", "");
+            }
+            for fi in 0..nf {
+                let f = ck.nodes.at(nid).get("fields").items.at(fi).node.at(0);
+                let tyn = f.node_of("tyn");
+                let t0 = resolve_type(ck, tyn, mi, false);
+                let fname = String.from(f.str_of("name"));
+                if find_field(ck, sid, fname) >= 0 {
+                    err(ck, mi, f.span, format("field `{fname}` is declared more than once in `{name}`"), "", "", "");
+                    continue;
+                }
+                let mut t = t0;
+                if t != types.POISON && !sized(ck, t, mi, tyn.span) { t = types.POISON; }
+                ck.syms.at(sid).fields.push(SField { name: fname, ty: t, span: f.span });
+            }
+        } else if kd == "const" {
+            let tyn = ck.nodes.at(nid).node_of("tyn");
+            let mut t = resolve_type(ck, tyn, mi, false);
+            let ts = ty_str(ck, t);
+            if ck.syms.at(sid).is_extern {
+                if t != types.POISON && !(types.is_numeric(t) || t == types.BOOL || tk(ck, t) == types.K_PTR) {
+                    err(ck, mi, tyn.span, format("extern constants must be numbers, `bool` or pointers, not `{ts}`"), "",
+                        "for C strings, bind a function such as `SDL_GetError()` instead", "");
+                    t = types.POISON;
+                }
+            } else if t != types.POISON && !(types.is_numeric(t) || t == types.BOOL || t == types.STR) {
+                err(ck, mi, tyn.span, format("constants must be integers, floats, `bool` or `str`, not `{ts}`"), "", "", "");
+                t = types.POISON;
+            }
+            ck.syms.at(sid).ty = t;
+        }
+    }
+}
+
+// ---- C ABI ---------------------------------------------------------------------------------------------------------------
+
+fn ffi_ok(ck: *Checker, t: i64, seen: *List<String>) -> bool {
+    let k = tk(ck, t);
+    if k == types.K_PRIM { return types.is_numeric(t) || t == types.BOOL; }
+    if k == types.K_PTR || k == types.K_FN || k == types.K_ENUM { return true; }
+    if k == types.K_ARR { return ffi_ok(ck, ck.types.tys.at(t).inner, seen); }
+    if k == types.K_STRUCT {
+        let sid = ck.types.tys.at(t).sym;
+        if ck.syms.at(sid).opaque { return false; }
+        let full = String.from(ck.syms.at(sid).full);
+        if has_name(seen, full) { return true; }
+        seen.push(full);
+        let nf = ck.syms.at(sid).fields.len;
+        for i in 0..nf {
+            if !ffi_ok(ck, ck.syms.at(sid).fields.at(i).ty, seen) { return false; }
+        }
+        return true;
+    }
+    return false;
+}
+
+fn ffi_why(ck: *Checker, t: i64) -> String {
+    let k = tk(ck, t);
+    if t == types.STR { return String.from("`str` is a Crumbs view (pointer + length); pass `cstr(s)` for a C string"); }
+    if t == types.STRING { return String.from("`String` is a Crumbs type; pass `cstr(s)` or `s.ptr` instead"); }
+    if k == types.K_SLICE { return String.from("slices are (pointer, length) pairs in Crumbs; pass `s.ptr` and `s.len` separately"); }
+    if k == types.K_EU { return String.from("error unions have no C equivalent"); }
+    if k == types.K_STRUCT {
+        let sid = ck.types.tys.at(t).sym;
+        let n = String.from(ck.syms.at(sid).name);
+        if ck.syms.at(sid).opaque { return format("`{n}` is opaque; use `*{n}`"); }
+        return format("`{n}` contains fields that have no C layout (`str`, slices, ...)");
+    }
+    if k == types.K_ERR { return String.from("use `i32` and convert errors yourself"); }
+    return String.empty();
+}
+
+fn ffi_check(ck: *Checker, mi: i64, t: i64, sp: ast.Span, what: str) {
+    if t == types.POISON || t == types.VOID { return; }
+    let mut seen: List<String> = List.new();
+    if !ffi_ok(ck, t, &seen) {
+        let ts = ty_str(ck, t);
+        err(ck, mi, sp, format("{what} uses type `{ts}`, which has no C ABI equivalent"), "", ffi_why(ck, t), "");
+    }
+}
+
+pub fn check_ffi(ck: *Checker) {
+    let nf = ck.fns.len;
+    for q in 0..nf {
+        let sid = *ck.fns.at(q);
+        if !(ck.syms.at(sid).is_extern || ck.syms.at(sid).is_export) { continue; }
+        let mi = ck.syms.at(sid).mod_idx;
+        let nid = ck.syms.at(sid).node;
+        let name = String.from(ck.syms.at(sid).name);
+        let what = ck.syms.at(sid).is_extern ? format("extern function `{name}`") : format("exported function `{name}`");
+        let np = ck.nodes.at(nid).get("params").items.len;
+        for pi in 0..np {
+            if pi >= ck.syms.at(sid).params.len { break; }
+            let sp = ck.nodes.at(nid).get("params").items.at(pi).node.at(0).node_of("tyn").span;
+            ffi_check(ck, mi, *ck.syms.at(sid).params.at(pi), sp, what);
+        }
+        let rt = ck.syms.at(sid).ret;
+        if tk(ck, rt) == types.K_EU {
+            err(ck, mi, ck.nodes.at(nid).span, format("{what} cannot return an error union"), "", "return an `i32` status code instead", "");
+        } else {
+            let has_ret = !ck.nodes.at(nid).is_none("ret");
+            let sp = has_ret ? ck.nodes.at(nid).node_of("ret").span : ck.nodes.at(nid).span;
+            ffi_check(ck, mi, rt, sp, what);
+        }
+    }
+    let ns = ck.structs.len;
+    for q in 0..ns {
+        let sid = *ck.structs.at(q);
+        if !ck.syms.at(sid).extern_struct { continue; }
+        let mi = ck.syms.at(sid).mod_idx;
+        let name = String.from(ck.syms.at(sid).name);
+        for fi in 0..ck.syms.at(sid).fields.len {
+            let fname = String.from(ck.syms.at(sid).fields.at(fi).name);
+            ffi_check(ck, mi, ck.syms.at(sid).fields.at(fi).ty, ck.syms.at(sid).fields.at(fi).span,
+                      format("field `{fname}` of extern struct `{name}`"));
+        }
+    }
+}
+
+// ---- recursive structs --------------------------------------------------------------------------------------------------------
+
+fn value_structs(ck: *Checker, t: i64, out: *List<i64>) {
+    let k = tk(ck, t);
+    if k == types.K_STRUCT { out.push(ck.types.tys.at(t).sym); }
+    else if k == types.K_ARR { value_structs(ck, ck.types.tys.at(t).inner, out); }
+}
+
+fn cycle_visit(ck: *Checker, state: *List<i64>, sid: i64, path: *List<i64>) {
+    let st = *state.at(sid);
+    if st == 2 { return; }
+    if st == 1 {
+        let mut start = 0 as i64;
+        for i in 0..path.len { if *path.at(i) == sid { start = i; break; } }
+        let mut chain = String.empty();
+        for i in start..path.len { chain.append(ck.syms.at(*path.at(i)).name); chain.append(" -> "); }
+        chain.append(ck.syms.at(sid).name);
+        let name = String.from(ck.syms.at(sid).name);
+        err(ck, ck.syms.at(sid).mod_idx, ck.nodes.at(ck.syms.at(sid).node).span,
+            format("recursive type `{name}` has infinite size"), "contains itself by value",
+            format("use a pointer (`*{name}`) to break the cycle"), format("cycle: {chain}"));
+        *state.at(sid) = 2;
+        return;
+    }
+    *state.at(sid) = 1;
+    let nf = ck.syms.at(sid).fields.len;
+    for i in 0..nf {
+        let mut ds: List<i64> = List.new();
+        value_structs(ck, ck.syms.at(sid).fields.at(i).ty, &ds);
+        for q in 0..ds.len {
+            let mut p2: List<i64> = List.new();
+            for z in 0..path.len { p2.push(*path.at(z)); }
+            p2.push(sid);
+            cycle_visit(ck, state, *ds.at(q), &p2);
+        }
+    }
+    *state.at(sid) = 2;
+}
+
+pub fn check_struct_cycles(ck: *Checker) {
+    let mut state: List<i64> = List.new();
+    for i in 0..ck.syms.len { state.push(0); }
+    let n = ck.structs.len;
+    for q in 0..n {
+        let mut path: List<i64> = List.new();
+        cycle_visit(ck, &state, *ck.structs.at(q), &path);
+    }
+}
+
+// the signature phase of `Checker._run`
+pub fn run_sigs(ck: *Checker) {
+    for oi in 0..ck.ld.order.len { resolve_sigs(ck, *ck.ld.order.at(oi)); }
+    check_ffi(ck);
 }

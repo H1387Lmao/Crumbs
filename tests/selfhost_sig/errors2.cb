@@ -1,0 +1,20 @@
+trait Show { fn show(self) -> str; }
+trait Eq2 { fn eq2(self, o: Self) -> bool; }
+struct A { x: i64 }
+struct B { y: i64 }
+impl Show for A { fn show(self) -> str { return "a"; } }
+struct Box1<T: Show> { v: T }
+struct Box2<T: Show, U: Eq2> { v: T, u: U }
+impl<T: Show> Show for Box1<T> { fn show(self) -> str { return "b"; } }
+struct Use { a: Box1<A>, b: Box1<B>, c: Box1<i64>, d: Box1<*A>, e: Box2<A, A>, f: Box1<Box1<A>>, g: Box1<Box1<B>> }
+fn gen<T: Show>(x: T) {}
+const C1: Show = 1;
+const C2: [3]i64 = 1;
+const C3: i64 = 1;
+const C4: *i64 = 0;
+extern const E1: i64;
+extern const E2: str;
+extern const E3: *u8;
+extern const E4: f64;
+extern const E5: List<i64>;
+fn main() {}
