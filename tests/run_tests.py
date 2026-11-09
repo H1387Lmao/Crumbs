@@ -203,6 +203,9 @@ def main():
                       extra=("--nostd", "--std=" + os.path.join(HERE, "..", "src", "std")))
         test_selfhost("checker-body-std", "ckdump.cb", "ckdump.py", ["tests/selfhost_ck/builtin*.cb"], skip_async=True,
                       extra=("--std=" + os.path.join(HERE, "..", "src", "std"),))
+        test_selfhost("checker-std-bodies", "ckdump.cb", "ckdump.py",
+                      ["tests/ok/closures.cb", "tests/ok/collections2.cb", "tests/ok/iterators.cb", "tests/ok/regions.cb", "tests/ok/traits.cb"], skip_async=True,
+                      extra=("--all", "--std=" + os.path.join(HERE, "..", "src", "std")))
         test_selfhost("preprocessor", "ppdump.cb", "ppdump.py", pats + ["tests/selfhost_pp/*.cb"], extra=("-DMODE=2", "-DFEATURE"))
     if not only or "cookie" in " ".join(only):
         print("== cookie build tool")

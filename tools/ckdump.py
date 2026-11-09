@@ -68,10 +68,13 @@ def dump(v):
 def main():
     path = sys.argv[1]
     nostd = False
+    show_std = False
     include = ()
     for a in sys.argv[2:]:
         if a == "--nostd":
             nostd = True
+        elif a == "--all":
+            show_std = True
         elif a.startswith("--std="):
             pass
     d = Diagnostics()
@@ -89,13 +92,13 @@ def main():
     except CompileError as e:
         print(f"fatal: {e}")
     for m in mods:
-        if "/std/" in m.path.replace("\\", "/"):
+        if "/std/" in m.path.replace("\\", "/") and not show_std:
             continue
         print(f"module {m.name}")
         for it in m.ast.items:
             print("item " + dump(it))
     for i, e in enumerate(d.items):
-        if "/std/" in e.span.src.path.replace("\\", "/"):
+        if "/std/" in e.span.src.path.replace("\\", "/") and not show_std:
             continue
         if i < n_loader:
             print(f"{e.level} {e.span.src.path}:{e.span.line}:{e.span.col} {e.msg}")
