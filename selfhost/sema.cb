@@ -23,6 +23,7 @@ pub struct Local {
     name: String, ty: i64, is_mut: bool, cname: String, span: ast.Span, used: bool, is_param: bool, glue: bool,
     rdepth: i64, id: i64, captured: bool, written: bool, region_handle: bool, byref: bool, outer: i64, taint: i64, rd: i64,
 }
+pub struct SumEnt { kind: i64, idx: i64 }
 pub struct CloInfo { is_move: bool, span: ast.Span, outer: List<i64>, proxy: List<i64>, sym: i64 }
 pub struct BckEnt { sym: i64, body: ast.Node, params: List<i64>, context: String }
 pub struct MovedEnt { local: i64, line: i64 }
@@ -70,6 +71,8 @@ pub struct Sym {
     evaluating: bool,
     evaluated: bool,
     drop_inst: i64,
+    summary: List<SumEnt>,
+    has_summary: bool,
     clo: i64,
     param_locals: List<i64>,
 }
@@ -198,7 +201,7 @@ fn new_sym(ck: *Checker, kind: str, name: str, mi: i64, node: i64, is_pub: bool)
         method_name: String.empty(), is_drop: false, code: 0, variants: List.new(), trait_methods: List.new(),
         supers: List.new(), drop_sym: -1, has_bounds: false, bounds: List.new(),
         ty: -1, params: List.new(), ret: types.VOID, fields: List.new(), base: -1, targs: List.new(), tenv: List.new(),
-        cv: CVal { kind: 0, i: 0, s: String.empty() }, evaluating: false, evaluated: false, drop_inst: -1, clo: -1, param_locals: List.new(),
+        cv: CVal { kind: 0, i: 0, s: String.empty() }, evaluating: false, evaluated: false, drop_inst: -1, summary: List.new(), has_summary: false, clo: -1, param_locals: List.new(),
     };
 }
 
@@ -4875,15 +4878,23 @@ fn check_fn_body(ck: *Checker, sid: i64) {
     ck.scopes = List.new();
     push_scope(ck);
     ck.moved = List.new();
+    ck.syms.at(sid).param_locals = List.new();
     let np = ck.nodes.at(nid).get("params").items.len;
     for i in 0..np {
         if i >= ck.syms.at(sid).params.len { break; }
         let p = ck.nodes.at(nid).get("params").items.at(i).node.at(0);
-        declare_local(ck, p.str_of("name"), *ck.syms.at(sid).params.at(i), flag(p, "mut"), p.get("name_span").span, true);
+        let pl = declare_local(ck, p.str_of("name"), *ck.syms.at(sid).params.at(i), flag(p, "mut"), p.get("name_span").span, true);
+        ck.syms.at(sid).param_locals.push(pl);
     }
     let body = ck.nodes.at(nid).node_of("body");
+    let n_err = ck.d.error_count();
     check_block(ck, body, true);
     pop_scope(ck);
+    if ck.d.error_count() == n_err {
+        let mut ps: List<i64> = List.new();
+        for i in 0..ck.syms.at(sid).param_locals.len { ps.push(*ck.syms.at(sid).param_locals.at(i)); }
+        ck.bck.push(BckEnt { sym: sid, body: ast.clone_node(body), params: ps, context: String.from(ck.d.context) });
+    }
     let rt = ck.syms.at(sid).ret;
     if tk(ck, rt) != types.K_EU && rt != types.VOID && rt != types.POISON && !terminates(ck, body) {
         let ts = ty_str(ck, rt);
@@ -5007,6 +5018,7 @@ pub fn run_bodies(ck: *Checker) {
         ck.pending = rest;
         check_fn_body(ck, sid);
     }
+    if ck.bck.len > 0 && ck.d.error_count() == 0 { run_borrowck(ck); }
     check_struct_cycles(ck);
     for oi in 0..ck.ld.order.len {
         let mi = *ck.ld.order.at(oi);
@@ -6126,4 +6138,679 @@ fn builtin(ck: *Checker, e: *ast.Node, name: String) -> i64 {
         }
     }
     return types.VOID;
+}
+
+// ---- borrow checker ----------------------------------------------------------------------------------------------------------
+// A port of src/crumbsc/borrowck.py. Owners of loans are local indices (>= 0) or, for what a parameter's referent stands for,
+// -(index + 1). Loan kinds: 0 borrow, 1 into, 2 through.
+
+pub struct Loan { owner: i64, path: List<String>, excl: bool, span: ast.Span, via_own: bool, closure: bool, kind: i64 }
+pub struct Root { ok: bool, loc: i64, path: List<String> }
+struct UseEnt { tick: i64, span: ast.Span }
+
+pub struct Bck {
+    report: bool,
+    phase: i64,
+    tick: i64,
+    addr: i64,
+    summary: List<SumEnt>,
+    last: List<i64>,          // per local: last tick of use (-1: none)
+    decl: List<i64>,          // per local: tick of its declaration (-1: none)
+    uses: List<List<UseEnt>>,
+    loop_s: List<i64>,
+    loop_e: List<i64>,
+    touched: List<i64>,
+    tmark: List<bool>,
+    hix: List<i64>,           // per local: position in h_keys (-1: none)
+    h_keys: List<i64>,
+    h_vals: List<List<Loan>>,
+    moved: List<bool>,
+    pnames: List<String>,
+}
+
+fn clone_loan(l: *Loan) -> Loan {
+    let mut p: List<String> = List.new();
+    for i in 0..l.path.len { p.push(String.from(*l.path.at(i))); }
+    return Loan { owner: l.owner, path: p, excl: l.excl, span: l.span, via_own: l.via_own, closure: l.closure, kind: l.kind };
+}
+
+fn extend_loans(dst: *List<Loan>, src: *List<Loan>) { for i in 0..src.len { dst.push(clone_loan(src.at(i))); } }
+
+fn copy_loans(src: *List<Loan>) -> List<Loan> {
+    let mut o: List<Loan> = List.new();
+    extend_loans(&o, src);
+    return o;
+}
+
+fn b_touch(b: *Bck, loc: i64) {
+    if !*b.tmark.at(loc) { *b.tmark.at(loc) = true; b.touched.push(loc); }
+}
+
+fn b_prepare(ck: *Checker, b: *Bck) {
+    while b.last.len < ck.locals.len {
+        b.last.push(-1);
+        b.decl.push(-1);
+        let ul: List<UseEnt> = List.new();
+        b.uses.push(ul);
+        b.tmark.push(false);
+        b.hix.push(-1);
+        b.moved.push(false);
+    }
+}
+
+fn b_reset(b: *Bck) {
+    for i in 0..b.touched.len {
+        let l = *b.touched.at(i);
+        *b.last.at(l) = -1;
+        *b.decl.at(l) = -1;
+        b.uses.at(l).clear();
+        *b.tmark.at(l) = false;
+        *b.hix.at(l) = -1;
+        *b.moved.at(l) = false;
+    }
+    b.touched.clear();
+    b.h_keys.clear();
+    b.h_vals.clear();
+    b.loop_s.clear();
+    b.loop_e.clear();
+}
+
+fn b_last0(b: *Bck, l: i64) -> i64 { let v = *b.last.at(l); return v < 0 ? 0 : v; }
+fn b_decl0(b: *Bck, l: i64) -> i64 { let v = *b.decl.at(l); return v < 0 ? 0 : v; }
+fn b_set_decl(b: *Bck, l: i64, v: i64) { b_touch(b, l); *b.decl.at(l) = v; }
+fn b_decl_default(b: *Bck, l: i64, v: i64) { b_touch(b, l); if *b.decl.at(l) < 0 { *b.decl.at(l) = v; } }
+fn b_last_default(b: *Bck, l: i64, v: i64) { b_touch(b, l); if *b.last.at(l) < 0 { *b.last.at(l) = v; } }
+
+fn mark_use(b: *Bck, loc: i64, sp: ast.Span) {
+    b_touch(b, loc);
+    *b.last.at(loc) = b.tick;
+    b.uses.at(loc).push(UseEnt { tick: b.tick, span: sp });
+}
+
+fn live_after(b: *Bck, h: i64) -> bool { return b_last0(b, h) > b.tick; }
+
+fn holds_get(b: *Bck, l: i64) -> List<Loan> {
+    let ix = *b.hix.at(l);
+    if ix < 0 { let mut e: List<Loan> = List.new(); return e; }
+    return copy_loans(b.h_vals.at(ix));
+}
+
+fn holds_set(b: *Bck, l: i64, v: List<Loan>) {
+    b_touch(b, l);
+    let ix = *b.hix.at(l);
+    if ix >= 0 { *b.h_vals.at(ix) = v; return; }
+    *b.hix.at(l) = b.h_keys.len;
+    b.h_keys.push(l);
+    b.h_vals.push(v);
+}
+
+fn holds_extend(b: *Bck, l: i64, v: *List<Loan>) {
+    b_touch(b, l);
+    let ix = *b.hix.at(l);
+    if ix < 0 {
+        *b.hix.at(l) = b.h_keys.len;
+        b.h_keys.push(l);
+        b.h_vals.push(copy_loans(v));
+        return;
+    }
+    extend_loans(b.h_vals.at(ix), v);
+}
+
+fn owner_name(ck: *Checker, b: *Bck, o: i64) -> String {
+    if o >= 0 { return String.from(ck.locals.at(o).name); }
+    return String.from(*b.pnames.at(-o - 1));
+}
+
+fn overlap(a: *List<String>, c: *List<String>) -> bool {
+    let n = a.len < c.len ? a.len : c.len;
+    for i in 0..n { if *a.at(i) != *c.at(i) { return false; } }
+    return true;
+}
+
+fn b_err(ck: *Checker, b: *Bck, sp: ast.Span, msg: str, label: str, help: str) {
+    if b.report { here(ck, sp, msg, label, help); }
+}
+
+fn truthy(e: *ast.Node, name: str) -> bool {
+    if !e.has(name) { return false; }
+    let v = e.get(name);
+    if v.tag == 0 { return false; }
+    if v.tag == 1 { return v.i != 0; }
+    return true;
+}
+
+fn b_holds_ptr(ck: *Checker, t: i64) -> bool { return t >= 0 && t != types.POISON && holds_ptr(ck, t); }
+
+fn next_use(b: *Bck, loc: i64) -> i32 {
+    for i in 0..b.uses.at(loc).len { if b.uses.at(loc).at(i).tick > b.tick { return i as i32; } }
+    return -1;
+}
+
+fn b_kids(n: *ast.Node) -> List<*ast.Node> {
+    let mut out: List<*ast.Node> = List.new();
+    for ai in 0..n.attrs.len {
+        let an: str = n.attrs.at(ai).name;
+        if an == "span" || an == "ty" || an == "local" || an == "sym" || an == "handler" || an == "orig_args" || an == "eu_ty" || an == "opty"
+            || an == "elem" || an == "region_local" || an == "name_span" || an == "tyn" || an == "targ" || an == "targs" { continue; }
+        let v = &n.attrs.at(ai).v;
+        if v.tag == 4 { out.push(v.node.at(0)); }
+        else if v.tag == 5 {
+            for q in 0..v.items.len {
+                let it = v.items.at(q);
+                if it.tag == 4 { out.push(it.node.at(0)); }
+                else if it.tag == 5 {
+                    for r in 0..it.items.len { if it.items.at(r).tag == 4 { out.push(it.items.at(r).node.at(0)); } }
+                }
+            }
+        }
+    }
+    return out;
+}
+
+fn place_root(ck: *Checker, e0: *ast.Node) -> Root {
+    let mut path: List<String> = List.new();
+    let mut e = e0;
+    while true {
+        let k: str = e.kind;
+        if k == "Ident" {
+            if e.has("local") && e.get("local").tag == 12 {
+                let loc = e.get("local").i;
+                if ck.locals.at(loc).region_handle || ck.locals.at(loc).captured { return Root { ok: false, loc: -1, path: List.new() }; }
+                path.reverse();
+                return Root { ok: true, loc: loc, path: path };
+            }
+            return Root { ok: false, loc: -1, path: List.new() };
+        }
+        if k == "Field" {
+            if !(e.has("mode") && e.get("mode").tag == 3 && e.str_of("mode") == "field") { return Root { ok: false, loc: -1, path: List.new() }; }
+            path.push(String.from(e.str_of("name")));
+            e = e.node_of("obj");
+            continue;
+        }
+        if k == "Index" {
+            let bt = ty_of(e.node_of("obj"));
+            if bt < 0 || tk(ck, bt) != types.K_ARR { return Root { ok: false, loc: -1, path: List.new() }; }
+            path.push(String.from("[]"));
+            e = e.node_of("obj");
+            continue;
+        }
+        return Root { ok: false, loc: -1, path: List.new() };
+    }
+    return Root { ok: false, loc: -1, path: List.new() };
+}
+
+fn is_own_ty(ck: *Checker, t: i64) -> bool {
+    if t < 0 || tk(ck, t) != types.K_STRUCT { return false; }
+    let sy = ck.types.tys.at(t).sym;
+    return ck.syms.at(sy).name.starts_with("Own") && ck.syms.at(sy).full.contains("own");
+}
+
+fn is_checked_ty(ck: *Checker, t: i64) -> bool {
+    if t < 0 || tk(ck, t) != types.K_STRUCT { return false; }
+    let sy = ck.types.tys.at(t).sym;
+    return (ck.syms.at(sy).name.starts_with("Ref") || ck.syms.at(sy).name.starts_with("Weak")) && ck.syms.at(sy).full.contains("own");
+}
+
+fn b_access(ck: *Checker, b: *Bck, loc: i64, path: *List<String>, kind: str, sp: ast.Span) {
+    if b.phase != 2 { return; }
+    for hi in 0..b.h_keys.len {
+        let h = *b.h_keys.at(hi);
+        if h == loc || !live_after(b, h) { continue; }
+        for li in 0..b.h_vals.at(hi).len {
+            let ln = b.h_vals.at(hi).at(li);
+            if ln.owner != loc || !overlap(&ln.path, path) { continue; }
+            if (kind == "read" || kind == "shared") && !ln.excl { continue; }
+            if kind == "move" && ln.via_own { continue; }
+            b_conflict(ck, b, loc, kind, ln, h, sp);
+            return;
+        }
+    }
+}
+
+fn b_conflict(ck: *Checker, b: *Bck, loc: i64, kind: str, ln: *Loan, holder: i64, sp: ast.Span) {
+    let ln_name = String.from(ck.locals.at(loc).name);
+    let hn = String.from(ck.locals.at(holder).name);
+    let what = kind == "read" ? "use" : (kind == "write" ? "assign to" : (kind == "move" ? "move out of" : (kind == "excl" ? "borrow mutably" : "borrow")));
+    let state = ln.excl ? "mutably borrowed" : "borrowed";
+    let how = ln.excl ? "mutable" : "shared";
+    let lab = kind == "read" ? format("`{ln_name}` is read here")
+        : (kind == "write" ? format("`{ln_name}` is assigned here")
+        : (kind == "move" ? format("`{ln_name}` is moved here")
+        : (kind == "excl" ? format("`{ln_name}` is borrowed mutably here") : format("`{ln_name}` is borrowed here"))));
+    b_err(ck, b, sp, format("cannot {what} `{ln_name}` because it is {state}"), format("{lab} while the {how} borrow is alive"),
+          format("finish using `{hn}` before this, or make a copy of what you need"));
+}
+
+fn walk_index_parts(ck: *Checker, b: *Bck, e0: *ast.Node) {
+    let mut e = e0;
+    while e.kind == "Field" || e.kind == "Index" {
+        if e.kind == "Index" { walk(ck, b, e.node_of("idx")); }
+        e = e.node_of("obj");
+    }
+}
+
+fn read_through(ck: *Checker, b: *Bck, loans: *List<Loan>) -> List<Loan> {
+    let mut out: List<Loan> = List.new();
+    for i in 0..loans.len {
+        let ln = loans.at(i);
+        if ln.owner < 0 {
+            out.push(Loan { owner: ln.owner, path: List.new(), excl: false, span: ln.span, via_own: false, closure: false, kind: 2 });
+        } else if ln.kind == 0 {
+            let mut h = holds_get(b, ln.owner);
+            extend_loans(&out, &h);
+        }
+    }
+    return out;
+}
+
+fn place_loans(ck: *Checker, b: *Bck, e: *ast.Node) -> List<Loan> {
+    if e.kind == "Field" || e.kind == "Index" {
+        if e.kind == "Index" { walk(ck, b, e.node_of("idx")); }
+        return place_loans(ck, b, e.node_of("obj"));
+    }
+    if e.kind == "Unary" && e.str_of("op") == "*" { return walk(ck, b, e.node_of("expr")); }
+    return walk(ck, b, e);
+}
+
+fn walk_kids(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+    let mut carried: List<Loan> = List.new();
+    let mut ks = b_kids(n);
+    for i in 0..ks.len {
+        let mut c = walk(ck, b, *ks.at(i));
+        extend_loans(&carried, &c);
+    }
+    return carried;
+}
+
+fn walk(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+    let k: str = n.kind;
+    if k == "Ident" { return w_ident(ck, b, n); }
+    if k == "Field" || k == "Index" { return w_place_read(ck, b, n); }
+    if k == "Unary" { return w_unary(ck, b, n); }
+    if k == "Call" { return w_call(ck, b, n); }
+    if k == "Assign" { return w_assign(ck, b, n); }
+    if k == "IncDec" { return w_incdec(ck, b, n); }
+    if k == "Let" { return w_let(ck, b, n); }
+    if k == "Block" { return w_block(ck, b, n); }
+    if k == "Return" { return w_return(ck, b, n); }
+    if k == "While" || k == "Loop" { return b_loop(ck, b, n); }
+    if k == "For" {
+        if truthy(n, "desugared") { return walk(ck, b, n.node_of("desugared")); }
+        return b_loop(ck, b, n);
+    }
+    if k == "Fn" { let mut e: List<Loan> = List.new(); return e; }
+    if k == "Closure" { return w_closure(ck, b, n); }
+    let mut carried = walk_kids(ck, b, n);
+    if b_holds_ptr(ck, ty_of(n)) { return carried; }
+    let mut e: List<Loan> = List.new();
+    return e;
+}
+
+fn w_ident(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+    let mut out: List<Loan> = List.new();
+    if !(n.has("local") && n.get("local").tag == 12) { return out; }
+    let loc = n.get("local").i;
+    b.tick += 1;
+    if b.phase == 1 {
+        mark_use(b, loc, n.span);
+        b_decl_default(b, loc, b.tick);
+        return out;
+    }
+    let mut none: List<String> = List.new();
+    if flag(n, "move") {
+        b_access(ck, b, loc, &none, "move", n.span);
+        *b.moved.at(loc) = true; b_touch(b, loc);
+    } else { b_access(ck, b, loc, &none, "read", n.span); }
+    if b_holds_ptr(ck, ck.locals.at(loc).ty) { out = holds_get(b, loc); }
+    return out;
+}
+
+fn w_place_read(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+    let mut root = place_root(ck, n);
+    if root.ok {
+        walk_index_parts(ck, b, n);
+        b.tick += 1;
+        let mut out: List<Loan> = List.new();
+        if b.phase == 1 {
+            mark_use(b, root.loc, n.span);
+            b_decl_default(b, root.loc, b.tick);
+            return out;
+        }
+        b_access(ck, b, root.loc, &root.path, flag(n, "move") ? "move" : "read", n.span);
+        if b_holds_ptr(ck, ty_of(n)) { out = holds_get(b, root.loc); }
+        return out;
+    }
+    let mut carried = walk_kids(ck, b, n);
+    let mut e: List<Loan> = List.new();
+    if !b_holds_ptr(ck, ty_of(n)) { return e; }
+    if b.addr != 0 { return carried; }
+    return read_through(ck, b, &carried);
+}
+
+fn w_unary(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+    let op = String.from(n.str_of("op"));
+    if op == "&" {
+        let mut root = place_root(ck, n.node_of("expr"));
+        if root.ok {
+            let excl = !flag(n, "auto_ref");
+            walk_index_parts(ck, b, n.node_of("expr"));
+            b.tick += 1;
+            let mut out: List<Loan> = List.new();
+            if b.phase == 1 {
+                mark_use(b, root.loc, n.span);
+                b_decl_default(b, root.loc, b.tick);
+                return out;
+            }
+            b_access(ck, b, root.loc, &root.path, excl ? "excl" : "shared", n.span);
+            out.push(Loan { owner: root.loc, path: copy_strs(&root.path), excl: excl, span: n.span, via_own: is_own_ty(ck, ck.locals.at(root.loc).ty), closure: false, kind: 0 });
+            return out;
+        }
+        return place_loans(ck, b, n.node_of("expr"));
+    }
+    let mut carried = walk_kids(ck, b, n);
+    let mut e: List<Loan> = List.new();
+    if !b_holds_ptr(ck, ty_of(n)) { return e; }
+    if op == "*" { return read_through(ck, b, &carried); }
+    return carried;
+}
+
+fn copy_strs(l: *List<String>) -> List<String> {
+    let mut o: List<String> = List.new();
+    for i in 0..l.len { o.push(String.from(*l.at(i))); }
+    return o;
+}
+
+fn w_call(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+    let c = n.node_of("callee");
+    let indirect = truthy(n, "indirect");
+    let mut callee_loans: List<Loan> = List.new();
+    if indirect { callee_loans = walk(ck, b, c); }
+    else if !(flag(n, "method_recv") || c.kind != "Ident" || !(c.has("local") && c.get("local").tag == 12)) { walk(ck, b, c); }
+    let mut per_arg: List<List<Loan>> = List.new();
+    for i in 0..n.get("args").items.len { per_arg.push(walk(ck, b, n.get("args").items.at(i).node.at(0))); }
+    let mut none: List<Loan> = List.new();
+    if is_checked_ty(ck, ty_of(n)) { return none; }
+    let has_sym = n.has("sym") && n.get("sym").tag == 11;
+    let sym = has_sym ? n.get("sym").i : -1;
+    let is_ext = has_sym && ck.syms.at(sym).is_extern;
+    if b.phase == 2 && !is_ext {
+        for i in 0..per_arg.len {
+            for j in (i + 1)..per_arg.len {
+                for x in 0..per_arg.at(i).len {
+                    for y in 0..per_arg.at(j).len {
+                        let l1 = per_arg.at(i).at(x);
+                        let l2 = per_arg.at(j).at(y);
+                        if l1.owner == l2.owner && overlap(&l1.path, &l2.path) && (l1.excl || l2.excl) {
+                            let on = owner_name(ck, b, l1.owner);
+                            let ln1 = l1.span.line;
+                            b_err(ck, b, l2.span, format("cannot borrow `{on}` twice in one call"),
+                                  format("`{on}` is also borrowed at line {ln1} in this call"), "borrow it once, or borrow different fields");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !b_holds_ptr(ck, ty_of(n)) { return none; }
+    if is_ext && !indirect { return none; }
+    let mut carried = copy_loans(&callee_loans);
+    let has_builtin = n.has("builtin") && n.get("builtin").tag == 3 && n.str_of("builtin").len > 0;
+    if indirect || !has_sym || !ck.syms.at(sym).has_summary || has_builtin {
+        for i in 0..per_arg.len { extend_loans(&carried, per_arg.at(i)); }
+        return carried;
+    }
+    for si in 0..ck.syms.at(sym).summary.len {
+        let kind = ck.syms.at(sym).summary.at(si).kind;
+        let i = ck.syms.at(sym).summary.at(si).idx;
+        if i < per_arg.len {
+            if kind == 1 { extend_loans(&carried, per_arg.at(i)); }
+            else { let mut r = read_through(ck, b, per_arg.at(i)); extend_loans(&carried, &r); }
+        }
+    }
+    return carried;
+}
+
+fn w_assign(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+    let t = n.node_of("target");
+    let mut carried = walk(ck, b, n.node_of("value"));
+    let mut root = place_root(ck, t);
+    let mut e: List<Loan> = List.new();
+    if root.ok {
+        walk_index_parts(ck, b, t);
+        b.tick += 1;
+        if b.phase == 1 {
+            mark_use(b, root.loc, t.span);
+            b_decl_default(b, root.loc, b.tick);
+            return e;
+        }
+        b_access(ck, b, root.loc, &root.path, "write", t.span);
+        if carried.len > 0 && b_holds_ptr(ck, ck.locals.at(root.loc).ty) { holds_extend(b, root.loc, &carried); }
+        return e;
+    }
+    let mut ks = b_kids(t);
+    for i in 0..ks.len { walk(ck, b, *ks.at(i)); }
+    return e;
+}
+
+fn w_incdec(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+    let x = n.node_of("expr");
+    let mut root = place_root(ck, x);
+    let mut e: List<Loan> = List.new();
+    if root.ok {
+        walk_index_parts(ck, b, x);
+        b.tick += 1;
+        if b.phase == 1 {
+            mark_use(b, root.loc, x.span);
+            b_decl_default(b, root.loc, b.tick);
+            return e;
+        }
+        b_access(ck, b, root.loc, &root.path, "write", x.span);
+        return e;
+    }
+    walk(ck, b, x);
+    return e;
+}
+
+fn w_let(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+    let mut carried = (n.has("init") && !n.is_none("init")) ? walk(ck, b, n.node_of("init")) : List.new();
+    let mut e: List<Loan> = List.new();
+    if n.has("local") && n.get("local").tag == 12 {
+        let loc = n.get("local").i;
+        if b.phase == 1 {
+            b_set_decl(b, loc, b.tick);
+            b_last_default(b, loc, b.tick);
+        } else if carried.len > 0 && b_holds_ptr(ck, ck.locals.at(loc).ty) { holds_set(b, loc, copy_loans(&carried)); }
+    }
+    return e;
+}
+
+fn w_block(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+    let start = b.tick;
+    let mut owners: List<i64> = List.new();
+    for i in 0..n.get("stmts").items.len {
+        let st = n.get("stmts").items.at(i).node.at(0);
+        walk(ck, b, st);
+        if st.kind == "Let" && st.has("local") && st.get("local").tag == 12 { owners.push(st.get("local").i); }
+    }
+    if b.phase == 2 {
+        for oi in 0..owners.len {
+            let x = *owners.at(oi);
+            for hi in 0..b.h_keys.len {
+                let h = *b.h_keys.at(hi);
+                if h == x || b_decl0(b, h) > start || !live_after(b, h) { continue; }
+                for li in 0..b.h_vals.at(hi).len {
+                    let ln = b.h_vals.at(hi).at(li);
+                    if ln.owner == x {
+                        let xn = String.from(ck.locals.at(x).name);
+                        let hn = String.from(ck.locals.at(h).name);
+                        if ln.via_own {
+                            b_err(ck, b, ln.span, format("pointer into the owned value `{xn}` would outlive it if stored here"),
+                                  format("`{xn}` is freed when its scope ends, so this pointer would dangle"), "move the owner out instead, or keep the borrow inside this scope");
+                        } else {
+                            b_err(ck, b, ln.span, format("`{xn}` does not live long enough"),
+                                  format("`{hn}` borrows `{xn}` here but is used after `{xn}` goes out of scope"), "move the owner out instead, or keep the borrow inside this scope");
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    let mut e: List<Loan> = List.new();
+    return e;
+}
+
+fn sum_add(l: *List<SumEnt>, kind: i64, idx: i64) {
+    for i in 0..l.len { if l.at(i).kind == kind && l.at(i).idx == idx { return; } }
+    l.push(SumEnt { kind: kind, idx: idx });
+}
+
+fn w_return(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+    let mut e: List<Loan> = List.new();
+    if !n.has("expr") || n.is_none("expr") { return e; }
+    let mut carried = walk(ck, b, n.node_of("expr"));
+    if b.phase == 2 {
+        for i in 0..carried.len {
+            let ln = carried.at(i);
+            if ln.owner < 0 { sum_add(&b.summary, ln.kind, -ln.owner - 1); continue; }
+            if *b.moved.at(ln.owner) { continue; }
+            let on = String.from(ck.locals.at(ln.owner).name);
+            if ln.via_own {
+                b_err(ck, b, ln.span, format("pointer into the owned value `{on}` cannot be returned"),
+                      format("`{on}` is freed when its scope ends, so this pointer would dangle"),
+                      "move the owner out instead (return it or store it), or keep a checked `Ref` with `.ref()`");
+            } else if ln.closure {
+                b_err(ck, b, ln.span, format("this closure borrows the local `{on}` and cannot be returned"),
+                      format("`{on}` is destroyed when the function returns, so the closure would dangle"), "write `move |..| ...` to give the closure its own copy");
+            } else {
+                b_err(ck, b, ln.span, format("cannot return a reference to the local `{on}`"),
+                      format("`{on}` is destroyed when the function returns, so this would dangle"), "return the value itself, or allocate it with `alloc` / `own.new`");
+            }
+            break;
+        }
+    }
+    return e;
+}
+
+fn b_loop(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+    let start = b.tick;
+    if n.has("local") && n.get("local").tag == 12 && b.phase == 1 { b_set_decl(b, n.get("local").i, b.tick); }
+    let mut ks = b_kids(n);
+    for i in 0..ks.len { walk(ck, b, *ks.at(i)); }
+    if b.phase == 1 { b.loop_s.push(start + 1); b.loop_e.push(b.tick); }
+    let mut e: List<Loan> = List.new();
+    return e;
+}
+
+fn w_closure(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+    let mut carried: List<Loan> = List.new();
+    let mut none: List<String> = List.new();
+    for i in 0..n.get("captures").items.len {
+        let pr = n.get("captures").items.at(i);
+        let outer = pr.items.at(0).i;
+        let proxy = pr.items.at(1).i;
+        b.tick += 1;
+        if b.phase == 1 {
+            mark_use(b, outer, n.span);
+            b_decl_default(b, outer, b.tick);
+            continue;
+        }
+        if ck.locals.at(proxy).byref {
+            let w = ck.locals.at(proxy).written;
+            b_access(ck, b, outer, &none, w ? "excl" : "shared", n.span);
+            if !ck.locals.at(outer).captured {
+                carried.push(Loan { owner: outer, path: List.new(), excl: w, span: n.span, via_own: false, closure: true, kind: 0 });
+            } else { let mut h = holds_get(b, outer); extend_loans(&carried, &h); }
+        } else {
+            b_access(ck, b, outer, &none, ck.locals.at(outer).glue ? "move" : "read", n.span);
+            if ck.locals.at(outer).glue { *b.moved.at(outer) = true; b_touch(b, outer); }
+            if b_holds_ptr(ck, ck.locals.at(outer).ty) { let mut h = holds_get(b, outer); extend_loans(&carried, &h); }
+        }
+    }
+    return carried;
+}
+
+fn sums_equal(a: *List<SumEnt>, c: *List<SumEnt>) -> bool {
+    if a.len != c.len { return false; }
+    for i in 0..a.len { let mut f = false; for j in 0..c.len { if a.at(i).kind == c.at(j).kind && a.at(i).idx == c.at(j).idx { f = true; } } if !f { return false; } }
+    return true;
+}
+
+fn b_analyze(ck: *Checker, b: *Bck, ei: i64, report: bool) -> List<SumEnt> {
+    b.report = report;
+    b.summary = List.new();
+    b_prepare(ck, b);
+    b_reset(b);
+    b.addr = 0;
+    let sid = ck.bck.at(ei).sym;
+    let np = ck.bck.at(ei).params.len;
+    b.pnames = List.new();
+    for i in 0..np { b.pnames.push(String.from(ck.locals.at(*ck.bck.at(ei).params.at(i)).name)); b_set_decl(b, *ck.bck.at(ei).params.at(i), 0); }
+    b.phase = 1;
+    b.tick = 0;
+    let mut body = &ck.bck.at(ei).body;
+    walk(ck, b, body);
+    for ti in 0..b.touched.len {
+        let loc = *b.touched.at(ti);
+        if *b.last.at(loc) < 0 { continue; }
+        let uses = *b.last.at(loc);
+        for li in 0..b.loop_s.len {
+            let s = *b.loop_s.at(li);
+            let e = *b.loop_e.at(li);
+            if b_decl0(b, loc) < s && s <= uses && uses <= e {
+                if e > *b.last.at(loc) { *b.last.at(loc) = e; }
+            }
+        }
+    }
+    b.phase = 2;
+    b.tick = 0;
+    b.h_keys.clear();
+    b.h_vals.clear();
+    for i in 0..b.touched.len { *b.hix.at(*b.touched.at(i)) = -1; }
+    for i in 0..np {
+        let p = *ck.bck.at(ei).params.at(i);
+        if b_holds_ptr(ck, ck.locals.at(p).ty) {
+            let mut l: List<Loan> = List.new();
+            l.push(Loan { owner: -(i as i64) - 1, path: List.new(), excl: false, span: ck.locals.at(p).span, via_own: false, closure: false, kind: 1 });
+            holds_set(b, p, l);
+        }
+    }
+    walk(ck, b, body);
+    let mut out: List<SumEnt> = List.new();
+    let own = ck.syms.at(sid).name == "Own.at" && ck.ld.mods.at(ck.syms.at(sid).mod_idx).name == "std.own";
+    for i in 0..b.summary.len {
+        let k = b.summary.at(i).kind;
+        sum_add(&out, (own && k == 2) ? 1 : k, b.summary.at(i).idx);
+    }
+    return out;
+}
+
+fn run_borrowck(ck: *Checker) {
+    let mut b = Bck { report: false, phase: 1, tick: 0, addr: 0, summary: List.new(), last: List.new(), decl: List.new(), uses: List.new(),
+        loop_s: List.new(), loop_e: List.new(), touched: List.new(), tmark: List.new(), hix: List.new(), h_keys: List.new(), h_vals: List.new(),
+        moved: List.new(), pnames: List.new() };
+    let n = ck.bck.len;
+    for i in 0..n { let s = ck.bck.at(i).sym; ck.syms.at(s).summary = List.new(); ck.syms.at(s).has_summary = true; }
+    for round in 0..6 {
+        let mut changed = false;
+        for i in 0..n {
+            let s = ck.bck.at(i).sym;
+            let mut got = b_analyze(ck, &b, i, false);
+            let mut merged = copy_sums(&ck.syms.at(s).summary);
+            for q in 0..got.len { sum_add(&merged, got.at(q).kind, got.at(q).idx); }
+            if !sums_equal(&merged, &ck.syms.at(s).summary) { ck.syms.at(s).summary = merged; changed = true; }
+        }
+        if !changed { break; }
+    }
+    for i in 0..n {
+        ck.d.context = String.from(ck.bck.at(i).context);
+        b_analyze(ck, &b, i, true);
+    }
+    ck.d.context = String.empty();
+}
+
+fn copy_sums(l: *List<SumEnt>) -> List<SumEnt> {
+    let mut o: List<SumEnt> = List.new();
+    for i in 0..l.len { o.push(SumEnt { kind: l.at(i).kind, idx: l.at(i).idx }); }
+    return o;
 }
