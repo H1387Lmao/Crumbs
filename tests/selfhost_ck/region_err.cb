@@ -1,0 +1,20 @@
+struct Holder { p: []i64 }
+fn main() {
+    let mut keep: []i64 = alloc(i64, 1);
+    let mut h = Holder { p: keep };
+    region r {
+        let a = alloc_in(i64, 8, r);
+        keep = a;
+        h.p = a;
+        free(a);
+        let bad = r;
+        let x = alloc_in(i64, 2);
+        let y = alloc_in(i64, 2.5, r);
+        let z = alloc_in(i64, 2, keep);
+        let w = alloc_in(i64, 2, nothing);
+    }
+}
+fn f(x: i32) -> []i64 {
+    region r { return alloc_in(i64, 1, r); }
+    return alloc(i64, 1);
+}

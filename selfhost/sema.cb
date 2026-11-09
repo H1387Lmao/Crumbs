@@ -21,7 +21,7 @@ pub struct NameTy { name: String, ty: i64 }
 
 pub struct Local {
     name: String, ty: i64, is_mut: bool, cname: String, span: ast.Span, used: bool, is_param: bool, glue: bool,
-    rdepth: i64, id: i64, captured: bool, written: bool, region_handle: bool, byref: bool, outer: i64,
+    rdepth: i64, id: i64, captured: bool, written: bool, region_handle: bool, byref: bool, outer: i64, taint: i64, rd: i64,
 }
 pub struct CloInfo { is_move: bool, span: ast.Span, outer: List<i64>, proxy: List<i64>, sym: i64 }
 pub struct BckEnt { sym: i64, body: ast.Node, params: List<i64>, context: String }
@@ -2135,6 +2135,7 @@ fn capture(ck: *Checker, ci: i64, loc: i64) -> i64 {
     ck.locals.at(p).byref = byref;
     ck.locals.at(p).outer = loc;
     ck.locals.at(p).region_handle = ck.locals.at(loc).region_handle;
+    ck.locals.at(p).taint = ck.locals.at(loc).taint;
     ck.locals.at(loc).used = true;
     ck.clos.at(ci).outer.push(loc);
     ck.clos.at(ci).proxy.push(p);
@@ -2157,7 +2158,7 @@ fn alloc_cname(ck: *Checker, name: str) -> String {
 fn new_local(ck: *Checker, name: str, ty: i64, is_mut: bool, cname: String, sp: ast.Span, is_param: bool) -> i64 {
     let id = ck.locals.len;
     ck.locals.push(Local { name: String.from(name), ty: ty, is_mut: is_mut, cname: cname, span: sp, used: false, is_param: is_param,
-                           glue: false, rdepth: 0, id: id + 1, captured: false, written: false, region_handle: false, byref: false, outer: -1 });
+                           glue: false, rdepth: 0, id: id + 1, captured: false, written: false, region_handle: false, byref: false, outer: -1, taint: -1, rd: 0 });
     return id;
 }
 
@@ -2845,8 +2846,10 @@ fn ex_field(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     }
     let mut ot = check(ck, e.node_of("obj"), -1, false);
     if ot == types.POISON { return types.POISON; }
-    if tk(ck, ot) == types.K_PTR && tk(ck, ck.types.tys.at(ot).inner) == types.K_PTR {
-        return unimpl(ck, e, "field access through `**T`");
+    while tk(ck, ot) == types.K_PTR && tk(ck, ck.types.tys.at(ot).inner) == types.K_PTR {
+        let w = unary_node(e.node_of("obj").span, "*", e.node_of("obj"));
+        e.set("obj", ast.v_node(w));
+        ot = check(ck, e.node_of("obj"), -1, false);
     }
     let mut base = ot;
     e.set("mode", ast.v_str("field"));
@@ -3842,6 +3845,7 @@ fn check_stmt(ck: *Checker, s: *ast.Node) {
     else if k == "ExprStmt" { st_exprstmt(ck, s); }
     else if k == "Assign" { st_assign(ck, s); }
     else if k == "For" { st_for(ck, s); }
+    else if k == "Region" { st_region(ck, s); }
     else if k == "Match" { st_match(ck, s); }
     else if k == "Throw" { st_throw(ck, s); }
     else if k == "TryBlock" { st_tryblock(ck, s); }
@@ -3886,6 +3890,7 @@ fn st_let(ck: *Checker, s: *ast.Node) {
     }
     let loc = declare_local(ck, name, ty, flag(s, "mut"), s.get("name_span").span, false);
     s.set("local", ast.v_tag(12, loc));
+    if ty != types.POISON && holds_ptr(ck, ty) { ck.locals.at(loc).taint = taint(ck, s.node_of("init")); }
 }
 
 fn cond(ck: *Checker, c: *ast.Node) {
@@ -4571,6 +4576,139 @@ fn ex_closure(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     return ct;
 }
 
+// ---- regions (lifetimes) -----------------------------------------------------------------------------------------------------
+
+fn st_region(ck: *Checker, s: *ast.Node) {
+    ck.fn_rdepth += 1;
+    push_scope(ck);
+    let loc = declare_local(ck, s.str_of("name"), types.REGION, false, s.get("name_span").span, false);
+    ck.locals.at(loc).region_handle = true;
+    ck.locals.at(loc).used = true;
+    ck.locals.at(loc).glue = false;
+    ck.locals.at(loc).rd = ck.fn_rdepth;
+    s.set("local", ast.v_tag(12, loc));
+    check_block(ck, s.node_of("body"), true);
+    pop_scope(ck);
+    ck.fn_rdepth -= 1;
+}
+
+// can a value of type `t` contain a pointer into region memory?
+fn holds_ptr(ck: *Checker, t: i64) -> bool {
+    let k = tk(ck, t);
+    if k == types.K_PRIM { return false; }
+    if k == types.K_ENUM || k == types.K_ERR || k == types.K_POISON { return false; }
+    if k == types.K_ARR || k == types.K_OPT || k == types.K_EU { return holds_ptr(ck, ck.types.tys.at(t).inner); }
+    if k == types.K_STRUCT {
+        let sy = ck.types.tys.at(t).sym;
+        for i in 0..ck.syms.at(sy).fields.len { if holds_ptr(ck, ck.syms.at(sy).fields.at(i).ty) { return true; } }
+        return false;
+    }
+    return true;
+}
+
+fn ty_of(e: *ast.Node) -> i64 {
+    if e.has("ty") && e.get("ty").tag == 10 { return e.get("ty").i; }
+    return -1;
+}
+
+// the innermost region whose memory the value of `e` may refer to (a handle local), or -1
+fn taint(ck: *Checker, e: *ast.Node) -> i64 {
+    let t = ty_of(e);
+    if t < 0 || t == types.POISON || !holds_ptr(ck, t) { return -1; }
+    if e.kind == "Call" && e.has("builtin") && !e.is_none("builtin") && e.str_of("builtin") == "alloc_in" { return e.get("region_local").i; }
+    if e.kind == "Ident" {
+        if e.has("local") && e.get("local").tag == 12 { return ck.locals.at(e.get("local").i).taint; }
+        return -1;
+    }
+    if e.kind == "Unary" && e.str_of("op") == "&" { return place_taint(ck, e.node_of("expr")); }
+    let mut best = -1 as i64;
+    for ai in 0..e.attrs.len {
+        let an: str = e.attrs.at(ai).name;
+        if an == "span" || an == "ty" || an == "local" || an == "sym" || an == "handler" { continue; }
+        let v = &e.attrs.at(ai).v;
+        if v.tag == 4 {
+            let c = v.node.at(0);
+            if c.kind != "Block" && c.has("ty") {
+                let tc = taint(ck, c);
+                if tc >= 0 && (best < 0 || ck.locals.at(tc).rd > ck.locals.at(best).rd) { best = tc; }
+            }
+        } else if v.tag == 5 {
+            for q in 0..v.items.len {
+                if v.items.at(q).tag != 4 { continue; }
+                let c = v.items.at(q).node.at(0);
+                if c.kind != "Block" && c.has("ty") {
+                    let tc = taint(ck, c);
+                    if tc >= 0 && (best < 0 || ck.locals.at(tc).rd > ck.locals.at(best).rd) { best = tc; }
+                }
+            }
+        }
+    }
+    return best;
+}
+
+fn is_view(ck: *Checker, t: i64) -> bool {
+    return tk(ck, t) == types.K_PTR || tk(ck, t) == types.K_SLICE || t == types.STR || t == types.STRING;
+}
+
+fn place_taint(ck: *Checker, t0: *ast.Node) -> i64 {
+    let mut t = t0;
+    while t.kind == "Field" || t.kind == "Index" {
+        let bt = ty_of(t.node_of("obj"));
+        if bt >= 0 && is_view(ck, bt) { return taint(ck, t.node_of("obj")); }
+        t = t.node_of("obj");
+    }
+    if t.kind == "Unary" && t.str_of("op") == "*" { return taint(ck, t.node_of("expr")); }
+    return -1;
+}
+
+// region nesting depth of the storage that assignment target `t0` lives in (0 = outside every region)
+fn place_depth(ck: *Checker, t0: *ast.Node) -> i64 {
+    let mut t = t0;
+    while true {
+        let k: str = t.kind;
+        if k == "Ident" {
+            if t.has("local") && t.get("local").tag == 12 { return ck.locals.at(t.get("local").i).rdepth; }
+            return 0;
+        }
+        if k == "Field" || k == "Index" {
+            let base = t.node_of("obj");
+            let bt = ty_of(base);
+            if bt >= 0 && is_view(ck, bt) {
+                let tb = taint(ck, base);
+                return tb >= 0 ? ck.locals.at(tb).rd : 0;
+            }
+            t = base;
+            continue;
+        }
+        if k == "Unary" && t.str_of("op") == "*" {
+            let tb = taint(ck, t.node_of("expr"));
+            return tb >= 0 ? ck.locals.at(tb).rd : 0;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+fn escape_error(ck: *Checker, sp: ast.Span, region: i64, what: str) {
+    let rn = String.from(ck.locals.at(region).name);
+    here(ck, sp, format("memory from region `{rn}` {what}"), format("allocated with `alloc_in(.., {rn})`, which is freed when the region ends"),
+         "copy what you need out of the region before it ends, or allocate it outside with `alloc`");
+}
+
+fn check_escape_store(ck: *Checker, target: *ast.Node, value: *ast.Node) {
+    let tv = taint(ck, value);
+    if tv < 0 { return; }
+    if ck.locals.at(tv).rd > place_depth(ck, target) { escape_error(ck, value.span, tv, "would outlive the region if stored here"); }
+    let mut root = target;
+    while root.kind == "Field" || root.kind == "Index" { root = root.node_of("obj"); }
+    if root.kind == "Ident" && root.has("local") && root.get("local").tag == 12 {
+        let rl = root.get("local").i;
+        if holds_ptr(ck, ck.locals.at(rl).ty) {
+            if ck.locals.at(rl).taint < 0 || ck.locals.at(tv).rd > ck.locals.at(ck.locals.at(rl).taint).rd { ck.locals.at(rl).taint = tv; }
+        }
+    }
+}
+
 fn st_break(ck: *Checker, s: *ast.Node, is_break: bool) {
     if ck.fn_loops == 0 {
         here(ck, s.span, is_break ? "`break` outside of a loop" : "`continue` outside of a loop", "", "");
@@ -4599,6 +4737,8 @@ fn st_return(ck: *Checker, s: *ast.Node) {
         return;
     }
     expect(ck, x, tt, false);
+    let tx = taint(ck, x);
+    if tx >= 0 { escape_error(ck, x.span, tx, "cannot be returned"); }
     if tt == types.STR && x.kind == "Ident" && flag(x, "coerce") && x.has("local") && x.get("local").tag == 12
         && ck.locals.at(x.get("local").i).glue {
         let nm = String.from(x.str_of("name"));
@@ -4655,6 +4795,7 @@ fn st_assign(ck: *Checker, s: *ast.Node) {
     if place_mut(ck, t, &label, &help) { here(ck, t.span, "cannot assign to an immutable place", label, help); }
     if op == "=" {
         expect(ck, v, tt, false);
+        check_escape_store(ck, t, v);
         if t.kind == "Ident" && t.has("local") && t.get("local").tag == 12 {
             let at = moved_at(&ck.moved, t.get("local").i);
             if at >= 0 {
@@ -5216,7 +5357,7 @@ fn receiver_arg(ck: *Checker, obj: *ast.Node, ot: i64, cand: i64, meth: i64, bas
 // `Type.f(args)` / `value.f(args)`: -1 not a method call, -2 error reported, -3 optional method, else the method symbol
 fn find_method(ck: *Checker, e: *ast.Node) -> i64 {
     let c = e.node_of("callee");
-    let obj = c.node_of("obj");
+    let mut obj = c.node_of("obj");
     let name = String.from(c.str_of("name"));
     let mut tent = Ent { kind: 0, idx: -1 };
     if obj.kind == "Ident" || obj.kind == "Field" { tent = entity(ck, obj); }
@@ -5246,12 +5387,17 @@ fn find_method(ck: *Checker, e: *ast.Node) -> i64 {
         return meth;
     }
     if obj.kind == "Ident" && lookup_local(ck, obj.str_of("name")) < 0 { return -1; }
-    let ot = check(ck, obj, -1, false);
+    let mut ot = check(ck, obj, -1, false);
     if ot == types.POISON {
         check_all_args(ck, e);
         return -2;
     }
-    if tk(ck, ot) == types.K_PTR && tk(ck, ck.types.tys.at(ot).inner) == types.K_PTR { unimpl(ck, e, "method call through `**T`"); return -2; }
+    while tk(ck, ot) == types.K_PTR && tk(ck, ck.types.tys.at(ot).inner) == types.K_PTR {
+        let w = unary_node(obj.span, "*", obj);
+        c.set("obj", ast.v_node(w));
+        obj = c.node_of("obj");
+        ot = check(ck, obj, -1, false);
+    }
     if tk(ck, ot) == types.K_OPT && is_opt_method(name) { return -3; }
     let base = (tk(ck, ot) == types.K_PTR && ck.types.tys.at(ot).inner != types.VOID) ? ck.types.tys.at(ot).inner : ot;
     if tk(ck, base) == types.K_STRUCT && find_field(ck, ck.types.tys.at(base).sym, name) >= 0 { return -1; }
@@ -5821,7 +5967,44 @@ fn builtin(ck: *Checker, e: *ast.Node, name: String) -> i64 {
         set_tyn(e, "elem", t);
         return t == types.POISON ? types.POISON : types.slc(&ck.types, t);
     }
-    if name == "alloc_in" { return unimpl(ck, e, "`alloc_in` (regions)"); }
+    if name == "alloc_in" {
+        let t = resolve_type(ck, e.node_of("targ"), mi, false);
+        if na != 2 {
+            here(ck, e.span, "`alloc_in` takes a type, a count and a region: `alloc_in(T, n, r)`", "", "");
+            for i in 0..na {
+                let a = child(e.get("args"), i);
+                let mut skip = false;
+                if a.kind == "Ident" {
+                    let l = lookup_local(ck, a.str_of("name"));
+                    if l >= 0 && ck.locals.at(l).region_handle { skip = true; }
+                }
+                if !skip { check(ck, a, -1, false); }
+            }
+            return types.POISON;
+        }
+        let a0 = child(e.get("args"), 0);
+        let nt = check(ck, a0, untyped(ck, a0) ? types.I64 : -1, false);
+        if nt != types.POISON && !types.is_int(nt) {
+            let ns = ty_str(ck, nt);
+            here(ck, a0.span, format("allocation count must be an integer, found `{ns}`"), "", "");
+        }
+        let r = child(e.get("args"), 1);
+        let mut loc = -1 as i64;
+        if r.kind == "Ident" { loc = lookup_local(ck, r.str_of("name")); }
+        if loc < 0 || !ck.locals.at(loc).region_handle {
+            let n0 = ck.d.error_count();
+            check(ck, r, -1, false);
+            if ck.d.error_count() == n0 {
+                here(ck, r.span, "the last argument of `alloc_in` must be a region", "", "declare one with `region r { ... }` and allocate inside the block");
+            }
+            return types.POISON;
+        }
+        ck.locals.at(loc).used = true;
+        r.set("local", ast.v_tag(12, loc));
+        e.set("region_local", ast.v_tag(12, loc));
+        set_tyn(e, "elem", t);
+        return t == types.POISON ? types.POISON : types.slc(&ck.types, t);
+    }
     if name == "gc_collections" || name == "gc_bytes" { arity(ck, e, name, 0, 0); return types.I64; }
     if name == "gc_collect" { arity(ck, e, name, 0, 0); return types.VOID; }
     if name == "gc_collect_gen" || name == "gc_gen_bytes" || name == "gc_gen_collections" {
@@ -5935,6 +6118,11 @@ fn builtin(ck: *Checker, e: *ast.Node, name: String) -> i64 {
             here(ck, a.span, format("`free` expects a slice or a `String`, found `{ts}`"), "", "");
         } else if t == types.STRING {
             consume(ck, a);
+        }
+        let tr = taint(ck, a);
+        if tr >= 0 {
+            let rn = String.from(ck.locals.at(tr).name);
+            here(ck, a.span, format("memory from region `{rn}` is freed when the region ends"), "", "remove the `free`");
         }
     }
     return types.VOID;
