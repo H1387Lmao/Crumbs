@@ -21,10 +21,12 @@ pub struct NameTy { name: String, ty: i64 }
 
 pub struct Local {
     name: String, ty: i64, is_mut: bool, cname: String, span: ast.Span, used: bool, is_param: bool, glue: bool,
-    rdepth: i64, id: i64, captured: bool, written: bool, region_handle: bool,
+    rdepth: i64, id: i64, captured: bool, written: bool, region_handle: bool, byref: bool, outer: i64,
 }
+pub struct CloInfo { is_move: bool, span: ast.Span, outer: List<i64>, proxy: List<i64>, sym: i64 }
+pub struct BckEnt { sym: i64, body: ast.Node, params: List<i64>, context: String }
 pub struct MovedEnt { local: i64, line: i64 }
-pub struct Scope { names: List<String>, ids: List<i64> }
+pub struct Scope { names: List<String>, ids: List<i64>, clo: i64 }
 pub struct LoopFrame { breaks: List<List<MovedEnt>>, conts: List<List<MovedEnt>> }
 pub struct ImplRec { item: i64, fn_nodes: List<i64>, fn_idx: List<i64> }
 pub struct GlueEnt { key: String, v: bool }
@@ -68,6 +70,8 @@ pub struct Sym {
     evaluating: bool,
     evaluated: bool,
     drop_inst: i64,
+    clo: i64,
+    param_locals: List<i64>,
 }
 
 pub struct CImp { alias: String, mod_idx: i64, node_line: i64, node_col: i64, node_len: i64, used: bool }
@@ -147,6 +151,8 @@ pub struct Checker {
     impl_recs: List<ImplRec>,
     gc_mode: String,
     recv_wrap: bool,
+    clos: List<CloInfo>,
+    bck: List<BckEnt>,
     try_stack: List<List<List<MovedEnt>>>,   // per enclosing `try { }`: the moved-sets at each point that can fail
 }
 
@@ -160,7 +166,7 @@ pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
         nc: false, nc_mi: 0, nc_span: ast.span(0, 0, 1), nc_msg: String.empty(),
         locals: List.new(), scopes: List.new(), moved: List.new(), has_fn: false, fn_sym: -1, fn_ret: types.VOID, fn_names: List.new(),
         fn_loops: 0, fn_rdepth: 0, loop_stack: List.new(), reinit_line: 0, reinit_col: 0, glue: List.new(), glue_busy: List.new(),
-        strict: false, entry_name: String.from("main"), opt_consumed: List.new(), impl_recs: List.new(), gc_mode: String.from("auto"), recv_wrap: false, try_stack: List.new(), main_sym: -1, entry_mod: ld.order.len > 0 ? *ld.order.at(ld.order.len - 1) : 0,
+        strict: false, entry_name: String.from("main"), opt_consumed: List.new(), impl_recs: List.new(), gc_mode: String.from("auto"), recv_wrap: false, clos: List.new(), bck: List.new(), try_stack: List.new(), main_sym: -1, entry_mod: ld.order.len > 0 ? *ld.order.at(ld.order.len - 1) : 0,
     };
     // move every module's items into the node arena; syms and later phases refer to them by index
     for mi in 0..ld.mods.len {
@@ -192,7 +198,7 @@ fn new_sym(ck: *Checker, kind: str, name: str, mi: i64, node: i64, is_pub: bool)
         method_name: String.empty(), is_drop: false, code: 0, variants: List.new(), trait_methods: List.new(),
         supers: List.new(), drop_sym: -1, has_bounds: false, bounds: List.new(),
         ty: -1, params: List.new(), ret: types.VOID, fields: List.new(), base: -1, targs: List.new(), tenv: List.new(),
-        cv: CVal { kind: 0, i: 0, s: String.empty() }, evaluating: false, evaluated: false, drop_inst: -1,
+        cv: CVal { kind: 0, i: 0, s: String.empty() }, evaluating: false, evaluated: false, drop_inst: -1, clo: -1, param_locals: List.new(),
     };
 }
 
@@ -2083,7 +2089,7 @@ fn in_range(neg: bool, mag: str, t: i64) -> bool {
 
 // ---- scopes and locals -----------------------------------------------------------------------------------------------
 
-fn push_scope(ck: *Checker) { ck.scopes.push(Scope { names: List.new(), ids: List.new() }); }
+fn push_scope(ck: *Checker) { ck.scopes.push(Scope { names: List.new(), ids: List.new(), clo: -1 }); }
 
 fn pop_scope(ck: *Checker) {
     let sc = ck.scopes.pop() catch { panic("scope underflow"); };
@@ -2098,13 +2104,41 @@ fn pop_scope(ck: *Checker) {
 }
 
 fn lookup_local(ck: *Checker, name: str) -> i64 {
+    let mut crossed: List<i64> = List.new();
     let mut i = ck.scopes.len;
     while i > 0 {
         i -= 1;
         let sc = ck.scopes.at(i);
-        for q in 0..sc.names.len { if *sc.names.at(q) == name { return *sc.ids.at(q); } }
+        for q in 0..sc.names.len {
+            if *sc.names.at(q) == name {
+                let mut loc = *sc.ids.at(q);
+                let mut c = crossed.len;
+                while c > 0 { c -= 1; loc = capture(ck, *crossed.at(c), loc); }
+                return loc;
+            }
+        }
+        if sc.clo >= 0 { crossed.push(sc.clo); }
     }
     return -1;
+}
+
+// the proxy local that stands for `loc` inside closure `ci`
+fn capture(ck: *Checker, ci: i64, loc: i64) -> i64 {
+    for k in 0..ck.clos.at(ci).outer.len { if *ck.clos.at(ci).outer.at(k) == loc { return *ck.clos.at(ci).proxy.at(k); } }
+    let idx = ck.clos.at(ci).outer.len;
+    let byref = !ck.clos.at(ci).is_move;
+    let cname = byref ? format("(*cb_e->c{idx})") : format("(cb_e->c{idx})");
+    let nm = String.from(ck.locals.at(loc).name);
+    let p = new_local(ck, nm, ck.locals.at(loc).ty, ck.locals.at(loc).is_mut, cname, ck.locals.at(loc).span, false);
+    ck.locals.at(p).used = true;
+    ck.locals.at(p).captured = true;
+    ck.locals.at(p).byref = byref;
+    ck.locals.at(p).outer = loc;
+    ck.locals.at(p).region_handle = ck.locals.at(loc).region_handle;
+    ck.locals.at(loc).used = true;
+    ck.clos.at(ci).outer.push(loc);
+    ck.clos.at(ci).proxy.push(p);
+    return p;
 }
 
 fn alloc_cname(ck: *Checker, name: str) -> String {
@@ -2123,7 +2157,7 @@ fn alloc_cname(ck: *Checker, name: str) -> String {
 fn new_local(ck: *Checker, name: str, ty: i64, is_mut: bool, cname: String, sp: ast.Span, is_param: bool) -> i64 {
     let id = ck.locals.len;
     ck.locals.push(Local { name: String.from(name), ty: ty, is_mut: is_mut, cname: cname, span: sp, used: false, is_param: is_param,
-                           glue: false, rdepth: 0, id: id + 1, captured: false, written: false, region_handle: false });
+                           glue: false, rdepth: 0, id: id + 1, captured: false, written: false, region_handle: false, byref: false, outer: -1 });
     return id;
 }
 
@@ -2604,6 +2638,7 @@ pub fn check(ck: *Checker, e: *ast.Node, exp: i64, eu: bool) -> i64 {
     else if k == "Try" { t = ex_try(ck, e); }
     else if k == "Catch" { t = ex_catch(ck, e); }
     else if k == "OptChain" { t = ex_optchain(ck, e); }
+    else if k == "Closure" { t = ex_closure(ck, e, exp); }
     else if k == "OptPayload" { t = e.get("ty").i; }
     else if k == "NamedArg" {
         here(ck, e.span, "named arguments only work when calling a function that is declared with `fn`", "not allowed here",
@@ -4383,6 +4418,157 @@ fn st_match(ck: *Checker, s: *ast.Node) {
     }
     set_flag(s, "exhaustive", exhaustive);
     set_tyn(s, "scrut_ty", st);
+}
+
+fn raw_val(s: str) -> ast.Val { let mut v = ast.v_tag(14, 0); v.s = String.from(s); return v; }
+
+fn ex_closure(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+    if e.has("clo_type") && !e.is_none("clo_type") { return e.get("clo_type").i; }
+    let np = e.get("params").items.len;
+    let has_hint = exp >= 0 && tk(ck, exp) == types.K_CLO && ck.types.tys.at(exp).params.len == np;
+    let ci = ck.clos.len;
+    ck.clos.push(CloInfo { is_move: flag(e, "move"), span: e.span, outer: List.new(), proxy: List.new(), sym: -1 });
+    let mut ptys: List<i64> = List.new();
+    for i in 0..np {
+        let p = e.get("params").items.at(i).node.at(0);
+        let mut t = types.POISON;
+        if !p.is_none("tyn") { t = resolve_type(ck, p.node_of("tyn"), ck.cur_mod, false); }
+        else if has_hint && *ck.types.tys.at(exp).params.at(i) != types.POISON { t = *ck.types.tys.at(exp).params.at(i); }
+        else {
+            let pn = String.from(p.str_of("name"));
+            here(ck, p.span, format("cannot infer the type of the closure parameter `{pn}`"), "type annotations needed", format("write `|{pn}: <type>|`"));
+        }
+        ptys.push(t);
+    }
+    let mut rt = -1 as i64;
+    if !e.is_none("ret") { rt = resolve_type(ck, e.node_of("ret"), ck.cur_mod, true); }
+    else if has_hint && ck.types.tys.at(exp).inner != types.POISON { rt = ck.types.tys.at(exp).inner; }
+    ck.n_inst += 1;
+    let mut sym = new_sym(ck, "fn", "closure", ck.cur_mod, -1, false);
+    let cpre: str = ck.ld.mods.at(ck.cur_mod).cprefix;
+    sym.cname = format("{cpre}__clo{ck.n_inst}");
+    for i in 0..ptys.len { sym.params.push(*ptys.at(i)); }
+    sym.clo = ci;
+    let sid = ck.syms.len;
+    ck.syms.push(sym);
+    ck.clos.at(ci).sym = sid;
+    // enter the closure: a fresh function state, the outer scopes stay visible through the closure scope
+    let s_has_fn = ck.has_fn;
+    let s_fn_sym = ck.fn_sym;
+    let s_fn_ret = ck.fn_ret;
+    let mut s_names: List<String> = List.new();
+    while ck.fn_names.len > 0 { s_names.push(ck.fn_names.pop() catch { panic("unreachable"); }); }
+    let s_loops = ck.fn_loops;
+    let s_rdepth = ck.fn_rdepth;
+    let mut s_lstack: List<LoopFrame> = List.new();
+    while ck.loop_stack.len > 0 { s_lstack.push(ck.loop_stack.pop() catch { panic("unreachable"); }); }
+    let mut s_tstack: List<List<List<MovedEnt>>> = List.new();
+    while ck.try_stack.len > 0 { s_tstack.push(ck.try_stack.pop() catch { panic("unreachable"); }); }
+    let s_moved = copy_moved(&ck.moved);
+    let s_rl = ck.reinit_line;
+    let s_rc = ck.reinit_col;
+    ck.scopes.push(Scope { names: List.new(), ids: List.new(), clo: ci });
+    ck.moved = List.new();
+    ck.reinit_line = 0;
+    ck.reinit_col = 0;
+    ck.syms.at(sid).ret = rt >= 0 ? rt : types.VOID;
+    ck.has_fn = true;
+    ck.fn_sym = sid;
+    ck.fn_ret = ck.syms.at(sid).ret;
+    ck.fn_loops = 0;
+    ck.fn_rdepth = 0;
+    for i in 0..np {
+        let p = e.get("params").items.at(i).node.at(0);
+        let loc = declare_local(ck, p.str_of("name"), *ptys.at(i), false, p.get("name_span").span, true);
+        ck.syms.at(sid).param_locals.push(loc);
+    }
+    let mut body: ast.Node = ast.new_node("Block", e.span);
+    let expr_body = flag(e, "expr_body");
+    if expr_body {
+        let eb = e.node_of("body");
+        if rt < 0 {
+            let t = check(ck, eb, -1, false);
+            rt = t == types.POISON ? types.POISON : t;
+            ck.syms.at(sid).ret = rt;
+            ck.fn_ret = rt;
+        }
+        let mut st = ast.new_node(rt == types.VOID ? "ExprStmt" : "Return", eb.span);
+        st.set("expr", ast.v_node(ast.clone_node(eb)));
+        let mut sl: List<ast.Node> = List.new();
+        sl.push(st);
+        body = mk_block(eb.span, sl);
+        body.set("end_span", ast.v_span(eb.span));
+    } else {
+        body = ast.clone_node(e.node_of("body"));
+    }
+    let nnode = ck.nodes.len;
+    let mut fnn = ast.new_node("Fn", e.span);
+    fnn.set("name", ast.v_str("closure"));
+    fnn.set("params", ast.clone_val(e.get("params")));
+    fnn.set("ret", ast.clone_val(e.get("ret")));
+    fnn.set("body", ast.v_node(ast.clone_node(&body)));
+    fnn.set("pub", ast.v_bool(false));
+    ck.nodes.push(fnn);
+    ck.syms.at(sid).node = nnode;
+    let n_err = ck.d.error_count();
+    check_block(ck, &body, true);
+    pop_scope(ck);
+    if ck.d.error_count() == n_err {
+        let mut ps: List<i64> = List.new();
+        for i in 0..ck.syms.at(sid).param_locals.len { ps.push(*ck.syms.at(sid).param_locals.at(i)); }
+        ck.bck.push(BckEnt { sym: sid, body: ast.clone_node(&body), params: ps, context: String.from(ck.d.context) });
+    }
+    let rts = ck.syms.at(sid).ret;
+    if tk(ck, rts) != types.K_EU && rts != types.VOID && rts != types.POISON && !terminates(ck, &body) {
+        let rs = ty_str(ck, rts);
+        here(ck, e.span, "this closure does not return a value on every path", format("expected `{rs}` to be returned"),
+             "add a `return` at the end, or make every branch return");
+    }
+    ck.has_fn = s_has_fn;
+    ck.fn_sym = s_fn_sym;
+    ck.fn_ret = s_fn_ret;
+    while ck.fn_names.len > 0 { ck.fn_names.pop() catch { panic("unreachable"); }; }
+    while s_names.len > 0 { ck.fn_names.push(s_names.pop() catch { panic("unreachable"); }); }
+    ck.fn_loops = s_loops;
+    ck.fn_rdepth = s_rdepth;
+    while ck.loop_stack.len > 0 { ck.loop_stack.pop() catch { panic("unreachable"); }; }
+    while s_lstack.len > 0 { ck.loop_stack.push(s_lstack.pop() catch { panic("unreachable"); }); }
+    while ck.try_stack.len > 0 { ck.try_stack.pop() catch { panic("unreachable"); }; }
+    while s_tstack.len > 0 { ck.try_stack.push(s_tstack.pop() catch { panic("unreachable"); }); }
+    ck.moved = s_moved;
+    ck.reinit_line = s_rl;
+    ck.reinit_col = s_rc;
+    // the captures, seen from the enclosing function
+    let mut caps: List<ast.Val> = List.new();
+    for k in 0..ck.clos.at(ci).outer.len {
+        let outer = *ck.clos.at(ci).outer.at(k);
+        let proxy = *ck.clos.at(ci).proxy.at(k);
+        let on = String.from(ck.locals.at(outer).name);
+        let mi = moved_at(&ck.moved, outer);
+        if mi >= 0 {
+            let ml = ck.moved.at(mi).line;
+            here_n(ck, e.span, format("the closure uses `{on}`, which was moved earlier"), "value used after it was moved", "",
+                   format("`{on}` was moved at line {ml}"));
+        }
+        if ck.clos.at(ci).is_move && ck.locals.at(outer).glue { set_moved(&ck.moved, outer, e.span.line); }
+        let mut pr: List<ast.Val> = List.new();
+        pr.push(ast.v_tag(12, outer));
+        pr.push(ast.v_tag(12, proxy));
+        caps.push(ast.v_list(pr));
+    }
+    ck.syms.at(sid).mod_idx = ck.cur_mod;
+    ck.fns.push(sid);
+    e.set("sym", ast.v_tag(11, sid));
+    e.set("info", raw_val("?ClosureInfo"));
+    e.set("captures", ast.v_list(caps));
+    if expr_body { e.set("body", ast.v_node(ast.clone_node(body.get("stmts").items.at(0).node.at(0).node_of("expr")))); }
+    else { e.set("body", ast.v_node(ast.clone_node(&body))); }
+    e.set("local_body", ast.v_node(body));
+    if ck.syms.at(sid).ret == types.POISON { return types.POISON; }
+    for i in 0..ptys.len { if *ptys.at(i) == types.POISON { return types.POISON; } }
+    let ct = types.clo(&ck.types, &ptys, ck.syms.at(sid).ret);
+    e.set("clo_type", ast.v_tag(10, ct));
+    return ct;
 }
 
 fn st_break(ck: *Checker, s: *ast.Node, is_break: bool) {

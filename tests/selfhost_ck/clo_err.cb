@@ -1,0 +1,14 @@
+fn apply(f: |i64| -> i64, x: i64) -> i64 { return f(x); }
+fn main() {
+    let a = |x| x;
+    let b = |x: i64| -> i64 { if x > 0 { return 1; } };
+    let c = |x: i64| -> i64 { return true; };
+    let d = apply(|x| x, 1);
+    let e = apply(|x, y| x, 1);
+    let f = apply(|x| true, 1);
+    let g = |x: nothing| x;
+    let q = 5;
+    let h = || { q = 6; };
+    let z = |a: i64, a: i64| a;
+    let w = || undefined_thing;
+}
