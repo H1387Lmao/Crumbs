@@ -160,7 +160,7 @@ fn load(ld: *Loader, path: str, logical: str, stack: *List<i64>) -> i64! {
     let mut perrs: List<lexer.Diag> = List.new();
     let tree = parser.parse(text, &perrs);
     ld.d.file = String.from(shown);
-    for i in 0..perrs.len { ld.d.add_error(perrs.at(i).line, perrs.at(i).col, 1, perrs.at(i).msg, "", ""); }
+    for i in 0..perrs.len { ld.d.add_error(perrs.at(i).line, perrs.at(i).col, perrs.at(i).len, perrs.at(i).msg, perrs.at(i).label, perrs.at(i).help); }
     let prefix = ld.prefix_for(logical);
     let mi = ld.mods.len;
     ld.mods.push(Module { name: String.from(logical), path: String.from(path), shown: shown, text: text, ast: tree,

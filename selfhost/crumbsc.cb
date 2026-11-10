@@ -170,6 +170,12 @@ fn main() -> void! {
     let mut unchecked = false;
     let mut overflow = false;
     let mut run_args = String.empty();
+    let mut gc_flag = -1;            // -1: not given
+    let mut gc_mode = String.from("auto");
+    let mut gc_interval = 100;
+    let mut nostd = false;
+    let mut cflags = String.empty();
+    let mut user_defs: List<loader.Define> = List.new();
     let mut i = 3;
     while i < env.arg_count() {
         let a: str = env.arg(i);
@@ -181,6 +187,17 @@ fn main() -> void! {
         if a == "--no-warn" { no_warn = true; }
         else if a == "--unchecked" { unchecked = true; }
         else if a == "--overflow-panic" { overflow = true; }
+        else if a.starts_with("--cflag=") { cflags.append(" "); cflags.append(shell_quote(a[8..a.len])); }
+        else if a == "--gc" { gc_flag = 1; }
+        else if a == "-D" || a == "-U" {
+            if i + 1 < env.arg_count() { i += 1; user_defs.push(parse_def(env.arg(i), a == "-U")); }
+        }
+        else if a.starts_with("-D") && a.len > 2 { user_defs.push(parse_def(a[2..a.len], false)); }
+        else if a.starts_with("-U") && a.len > 2 { user_defs.push(parse_def(a[2..a.len], true)); }
+        else if a == "--no-gc" { gc_flag = 0; }
+        else if a == "--no-stdruntime" { nostd = true; }
+        else if a.starts_with("--gc-mode=") { gc_mode = String.from(a[10..a.len]); }
+        else if a.starts_with("--gc-interval=") { gc_interval = parse_i(a[14..a.len]); }
         else if a == "-o" && i + 1 < env.arg_count() { i += 1; out_path = String.from(env.arg(i)); }
         else if a == "-O" && i + 1 < env.arg_count() { i += 1; opt = String.from(env.arg(i)); }
         else if a == "--keep-c" && i + 1 < env.arg_count() { i += 1; keep_c = String.from(env.arg(i)); }
@@ -190,7 +207,19 @@ fn main() -> void! {
         i += 1;
     }
     if cmd != "check" && cmd != "emit" && cmd != "build" && cmd != "run" { fail("unknown command `{cmd}`"); }
-    let mut ld = loader.new_loader(std_dir, false);
+    if gc_flag < 0 { gc_flag = gc_mode != "auto" ? 1 : 0; }
+    if gc_interval < 1 || gc_interval > 60000 { fail("--gc-interval must be between 1 and 60000 milliseconds"); }
+    if gc_mode != "auto" && gc_flag == 0 && !nostd { fail(format("`--gc-mode={gc_mode}` needs the collector, but `--no-gc` is set")); }
+    let gc = gc_flag == 1;
+    let mut ld = loader.new_loader(std_dir, nostd);
+    let one = String.from("1");
+    if gc {
+        ld.predefined.push(loader.Define { name: String.from("CB_GC"), value: String.from(one), undef: false });
+        if gc_mode == "manual" { ld.predefined.push(loader.Define { name: String.from("CB_GC_MANUAL"), value: String.from(one), undef: false }); }
+        if gc_mode == "thread" { ld.predefined.push(loader.Define { name: String.from("CB_GC_THREAD"), value: String.from(one), undef: false }); }
+    }
+    for k in 0..user_defs.len { ld.defines.push(loader.Define { name: String.from(user_defs.at(k).name), value: String.from(user_defs.at(k).value), undef: user_defs.at(k).undef }); }
+    if nostd { ld.predefined.push(loader.Define { name: String.from("CB_NO_STDRUNTIME"), value: String.from(one), undef: false }); }
     if overflow { ld.predefined.push(loader.Define { name: String.from("CB_OVERFLOW_PANIC"), value: String.from("1"), undef: false }); }
     let mut fatal = false;
     try {
@@ -200,7 +229,8 @@ fn main() -> void! {
         fatal = true;
     }
     if fatal { exit(1); }
-    let mut ck = sema.new_checker(&ld, false);
+    let mut ck = sema.new_checker(&ld, nostd);
+    ck.gc_mode = gc ? String.from(gc_mode) : String.from("off");
     let mut all: List<diag.Diagnostic> = List.new();
     let mut errors = ck.ld.d.error_count();
     if errors == 0 {
@@ -222,11 +252,16 @@ fn main() -> void! {
         else { eprintln(format("error: aborting due to {errors} error{s}")); }
         exit(1);
     }
-    if cmd == "check" { return; }
+    if cmd == "check" {
+        let mut w = 0;
+        for k in 0..all.len { if all.at(k).level != "error" { w += 1; } }
+        if w > 0 && !no_warn { eprintln(format("{w} warning{if_s(w)} emitted")); }
+        return;
+    }
     let last = *ck.ld.order.at(ck.ld.order.len - 1);
     let src_name = String.from(ck.ld.mods.at(last).shown);
     let runtime = try fs.read_to_string(runtime_path);
-    let mut cg = cgen.new_cg(&ck, false, false, overflow, "auto", 100);
+    let mut cg = cgen.new_cg(&ck, gc, nostd, overflow, gc_mode, gc_interval);
     let c_src = cgen.generate(&cg, src_name, runtime);
     if cmd == "emit" { print("{c_src}"); return; }
     // link plan
@@ -255,7 +290,7 @@ fn main() -> void! {
     let ccx = cc.len > 0 ? String.from(cc) : String.from("gcc");
     let mut line = format("{ccx} -std=gnu11 -Uunix -Ulinux -Ui386 -O{opt} -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-value");
     if unchecked { line = format("{ccx} -DCB_UNCHECKED -fwrapv -std=gnu11 -Uunix -Ulinux -Ui386 -O{opt} -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-value"); }
-    line.append(format("{flags} {shell_quote(c_path)}"));
+    line.append(format("{flags}{cflags} {shell_quote(c_path)}"));
     line.append(format(" {libs}"));
     if pkgs.len > 0 { line.append(format(" $(pkg-config --cflags --libs{pkgs})")); }
     line.append(format(" -o {shell_quote(out)} -lm -pthread"));
@@ -265,6 +300,19 @@ fn main() -> void! {
         let r = system(cstr(format("{shell_quote(out)}{run_args}")));
         exit(r / 256);
     }
+}
+
+fn parse_def(s: str, undef: bool) -> loader.Define {
+    let mut eq = -1;
+    for i in 0..s.len { if eq < 0 && s[i] == 61 { eq = i; } }
+    if undef || eq < 0 { return loader.Define { name: String.from(s), value: String.from(undef ? "" : "1"), undef: undef }; }
+    return loader.Define { name: String.from(s[0..eq]), value: String.from(s[eq + 1..s.len]), undef: false };
+}
+
+fn parse_i(s: str) -> i64 {
+    let mut v = 0;
+    for i in 0..s.len { if s[i] < 48 || s[i] > 57 { fail("--gc-interval needs a number"); } v = v * 10 + (s[i] - 48) as i64; }
+    return v;
 }
 
 fn if_s(n: i64) -> str { return n != 1 ? "s" : ""; }

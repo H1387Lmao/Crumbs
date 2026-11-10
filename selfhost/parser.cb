@@ -89,14 +89,68 @@ fn has_error_on(p: *P, line: i64) -> bool {
 }
 
 // Diagnostics.error: skips an exact duplicate
-fn add_error(p: *P, line: i64, col: i64, msg: str) {
+fn add_error_lh(p: *P, line: i64, col: i64, len: i64, msg: str, label: str, help: str) {
     for e in p.lx.errors { if e.line == line && e.col == col && e.msg == msg { return; } }
-    p.lx.errors.push(lexer.Diag { line: line, col: col, msg: String.from(msg) });
+    p.lx.errors.push(lexer.Diag { line: line, col: col, len: len, msg: String.from(msg), label: String.from(label), help: String.from(help) });
+}
+fn add_error(p: *P, line: i64, col: i64, msg: str) { add_error_lh(p, line, col, 1, msg, label_of(msg), help_of(msg)); }
+
+fn between(s: str, a: str, b: str) -> String {
+    let mut i = 0;
+    while i + a.len <= s.len && s[i..i + a.len] != a { i += 1; }
+    if i + a.len > s.len { return String.empty(); }
+    let st = i + a.len;
+    let mut j = st;
+    while j + b.len <= s.len && s[j..j + b.len] != b { j += 1; }
+    if j + b.len > s.len { return String.empty(); }
+    return String.from(s[st..j]);
+}
+
+// the label a parse error carries (messages are fixed text, so the label follows from the message)
+fn label_of(m: str) -> String {
+    if m.starts_with("expected `") && m.contains(", found ") { let v = between(m, "expected `", "`"); return format("expected `{v}`"); }
+    if m.starts_with("expected a type, found") { return String.from("expected a type"); }
+    if m.starts_with("expected an expression, found") { return String.from("expected an expression"); }
+    if m.starts_with("expected an item (") { return String.from("not a valid top-level item"); }
+    if m.starts_with("expected ") && m.contains(", found keyword `") {
+        let what = between(m, "expected ", ", found");
+        let k = between(m, "found keyword `", "`");
+        return format("`{k}` is a reserved word");
+    }
+    if m.starts_with("expected ") && m.contains(", found ") && !m.starts_with("expected keyword") { let w = between(m, "expected ", ", found"); return format("expected {w}"); }
+    if m.starts_with("traits are not generic") { return String.from("remove the type arguments"); }
+    if m.starts_with("expected a string after") { return String.from("expected a string literal"); }
+    if m.starts_with("a destructor cannot put") { return String.from("bounds belong on the struct's declaration"); }
+    if m.starts_with("a destructor is declared as") { return String.from("expected the name of a struct declared in this module"); }
+    if m.starts_with("expected a trait name before") { return String.from("`impl Trait for Type`"); }
+    if m.starts_with("methods can only be declared for a named type") { return String.from("expected a struct, enum or built-in type name"); }
+    if m.starts_with("unclosed `impl`") || m.starts_with("unclosed `trait`") || m == "unclosed `{`" { return String.from("this block is never closed"); }
+    if m.starts_with("only functions can be declared inside") { return String.from("expected `fn`"); }
+    if m.starts_with("trait methods cannot be generic") { return String.from("declare the type parameters on the trait's users instead"); }
+    if m.starts_with("expected `fn`, `struct` or `const` after") { return String.from("expected a C declaration"); }
+    if m.starts_with("only `extern fn` declarations can be variadic") { return String.from("`...` is for C functions like `printf`"); }
+    if m.starts_with("a `try { ... }` block needs") { return String.from("expected `catch { ... }` or `catch |e| { ... }`"); }
+    if m.contains(" items are only allowed at the top level") { return String.from("declare it outside the function"); }
+    if m.starts_with("error unions (") { return String.from("not allowed on a variable"); }
+    if m.starts_with("`error` is a keyword") { return String.from("not an expression"); }
+    return String.empty();
+}
+
+fn help_of(m: str) -> String {
+    if m == "unclosed `{`" { return String.from("add a matching `}`"); }
+    if m.starts_with("parameter `") && m.contains("has no default") { return String.from("parameters with defaults must come last"); }
+    if m.starts_with("optional types cannot be nested") { return String.from("`T??` is the same as `T?`"); }
+    if m.starts_with("error unions (") { return String.from("handle the error at the call site with `try` or `catch`"); }
+    if m.starts_with("comparison operators cannot be chained") { return String.from("use `&&` to combine comparisons, e.g. `a < b && b < c`"); }
+    return String.empty();
 }
 
 // records an error at `sp` unless that line already has one (the caller then throws Abort)
 fn fail_at(p: *P, at: ast.Span, msg: str) {
-    if !has_error_on(p, at.line) { add_error(p, at.line, at.col, msg); }
+    if !has_error_on(p, at.line) { add_error_lh(p, at.line, at.col, at.len, msg, label_of(msg), help_of(msg)); }
+}
+fn fail_lh(p: *P, at: ast.Span, msg: str, label: str, help: str) {
+    if !has_error_on(p, at.line) { add_error_lh(p, at.line, at.col, at.len, msg, label, help); }
 }
 
 fn fail(p: *P, msg: str) { fail_at(p, ts(tok(p)), msg); }
@@ -107,7 +161,7 @@ fn expect_op(p: *P, v: str, ctx: str) -> lexer.Token! {
     if ctx.len > 0 { where = format(" {ctx}"); }
     if (v == ";" || v == ")" || v == "]" || v == "}") && p.p > 0 && tok(p).line != prev(p).line {
         let ps = ts(prev(p));
-        if !has_error_on(p, ps.line) { add_error(p, ps.line, ps.col + ps.len, format("expected `{v}`{where}")); }
+        if !has_error_on(p, ps.line) { add_error_lh(p, ps.line, ps.col + ps.len, 1, format("expected `{v}`{where}"), format("expected `{v}` here"), ""); }
         throw Abort;
     }
     fail(p, format("expected `{v}`{where}, found {describe(tok(p))}"));
@@ -819,7 +873,7 @@ fn parse_const(p: *P, pb: bool, ext: bool, cname: str, has_cname: bool) -> ast.N
     advance(p);
     let mut nm = try expect_ident(p, "constant name");
     if !is_op(p, ":") {
-        fail(p, "constants require a type annotation");
+        fail_lh(p, ts(tok(p)), "constants require a type annotation", "expected `: Type`", format("write `const {nm.text}: i32 = ...;`"));
         throw Abort;
     }
     advance(p);
@@ -1151,7 +1205,7 @@ fn parse_let(p: *P) -> ast.Node! {
         }
     }
     if !is_op(p, "=") {
-        fail(p, format("variables must be initialized: expected `=`, found {describe(tok(p))}"));
+        fail_lh(p, ts(tok(p)), format("variables must be initialized: expected `=`, found {describe(tok(p))}"), "expected `= value`", format("write `let {nm.text} = <value>;`"));
         throw Abort;
     }
     advance(p);
@@ -1836,7 +1890,7 @@ pub fn parse(text: str, errors: *List<lexer.Diag>) -> ast.Node {
                     tb_names: List.new(), tb_vals: List.new(), undo: List.new(), undoing: false };
     lexer.lex_into(text, &p.lx);
     let m = parse_module(&p);
-    for i in 0..p.lx.errors.len { errors.push(lexer.Diag { line: p.lx.errors.at(i).line, col: p.lx.errors.at(i).col, msg: String.from(p.lx.errors.at(i).msg) }); }
+    for i in 0..p.lx.errors.len { errors.push(lexer.Diag { line: p.lx.errors.at(i).line, col: p.lx.errors.at(i).col, len: p.lx.errors.at(i).len, msg: String.from(p.lx.errors.at(i).msg), label: String.from(p.lx.errors.at(i).label), help: String.from(p.lx.errors.at(i).help) }); }
     return m;
 }
 
@@ -1862,7 +1916,7 @@ pub fn parse_default(text: str, lo: i64, hi: i64, impl_ty: *ast.Node, errors: *L
         res = try parse_fn(&p, true, false, "", false, false);
     } catch {
     }
-    for i in 0..p.lx.errors.len { errors.push(lexer.Diag { line: p.lx.errors.at(i).line, col: p.lx.errors.at(i).col, msg: String.from(p.lx.errors.at(i).msg) }); }
+    for i in 0..p.lx.errors.len { errors.push(lexer.Diag { line: p.lx.errors.at(i).line, col: p.lx.errors.at(i).col, len: p.lx.errors.at(i).len, msg: String.from(p.lx.errors.at(i).msg), label: String.from(p.lx.errors.at(i).label), help: String.from(p.lx.errors.at(i).help) }); }
     return res;
 }
 

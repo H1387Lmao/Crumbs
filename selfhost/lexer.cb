@@ -12,7 +12,7 @@ pub struct Token {
     len: i64,
 }
 
-pub struct Diag { line: i64, col: i64, msg: String }
+pub struct Diag { line: i64, col: i64, len: i64, msg: String, label: String, help: String }
 
 pub struct LexResult { toks: List<Token>, errors: List<Diag> }
 
@@ -125,9 +125,10 @@ fn chars(t: str, a: i64, b: i64) -> i64 {
     return n;
 }
 
-fn err(r: *LexResult, line: i64, col: i64, msg: str) {
-    r.errors.push(Diag { line: line, col: col, msg: String.from(msg) });
+fn err_s(r: *LexResult, line: i64, col: i64, len: i64, msg: str, label: str, help: str) {
+    r.errors.push(Diag { line: line, col: col, len: len, msg: String.from(msg), label: String.from(label), help: String.from(help) });
 }
+fn err(r: *LexResult, line: i64, col: i64, msg: str) { err_s(r, line, col, 1, msg, "", ""); }
 
 fn tok(kind: TK, text: str, line: i64, col: i64, len: i64) -> Token {
     return Token { kind: kind, text: String.from(text), ival: 0, suffix: String.empty(), line: line, col: col, len: len };
@@ -166,7 +167,7 @@ pub fn lex_into(text: str, r: *LexResult) {
                     i += 1;
                 }
             }
-            if depth != 0 { err(r, sline, chars(text, sls, start) + 1, "unterminated block comment"); }
+            if depth != 0 { err_s(r, sline, chars(text, sls, start) + 1, 2, "unterminated block comment", "comment starts here", "close it with `*/`"); }
             continue;
         }
         if is_ident_start(c) {
@@ -202,33 +203,33 @@ pub fn lex_into(text: str, r: *LexResult) {
             if prefixed {
                 let digits = cs[2..cs.len];
                 if digits.len == 0 {
-                    err(r, line, col, format("missing digits after `{body[0..2]}`"));
+                    err_s(r, line, col, slen, format("missing digits after `{body[0..2]}`"), "", "");
                     ok = false;
                 } else {
                     let p = cs[1];
                     let base = (p == 'x' || p == 'X') ? 16 as u64 : ((p == 'b' || p == 'B') ? 2 as u64 : 8 as u64);
                     let mut over = false;
                     val = parse_digits(digits, base, &over);
-                    if over { err(r, line, col, "integer literal is too large"); ok = false; }
+                    if over { err_s(r, line, col, slen, "integer literal is too large", "", "the largest supported integer is 18446744073709551615 (u64)"); ok = false; }
                 }
             } else {
                 for k in 0..cs.len { if cs[k] == '.' || cs[k] == 'e' || cs[k] == 'E' { is_float = true; } }
                 if !is_float {
                     let mut over = false;
                     val = parse_digits(cs, 10, &over);
-                    if over { err(r, line, col, "integer literal is too large"); ok = false; }
+                    if over { err_s(r, line, col, slen, "integer literal is too large", "", "the largest supported integer is 18446744073709551615 (u64)"); ok = false; }
                 }
             }
             if ok && i < n && is_digit(text[i]) {
-                err(r, line, col, format("invalid digit in numeric literal `{body}{text[i]:c}`"));
+                err_s(r, line, col, chars(text, sp_start, i + 1), format("invalid digit in numeric literal `{body}{text[i]:c}`"), "", "");
                 ok = false;
             }
             let sfl = suffix == "f32" || suffix == "f64";
             let sfi = suffix == "i8" || suffix == "i16" || suffix == "i32" || suffix == "i64"
                    || suffix == "u8" || suffix == "u16" || suffix == "u32" || suffix == "u64";
             if ok && suffix.len > 0 {
-                if is_float && !sfl { err(r, line, col, format("invalid suffix `{suffix}` for float literal")); ok = false; }
-                else if !is_float && !sfi && !sfl { err(r, line, col, format("invalid suffix `{suffix}` for integer literal")); ok = false; }
+                if is_float && !sfl { err_s(r, line, col, slen, format("invalid suffix `{suffix}` for float literal"), "", "valid suffixes are `f32` and `f64`"); ok = false; }
+                else if !is_float && !sfi && !sfl { err_s(r, line, col, slen, format("invalid suffix `{suffix}` for integer literal"), "", "valid suffixes are i8 i16 i32 i64 u8 u16 u32 u64"); ok = false; }
                 else if !is_float && sfl { is_float = true; }
             }
             if !ok { let mut t = tok(TK.Int, "", line, col, slen); r.toks.push(t); continue; }
@@ -266,11 +267,11 @@ pub fn lex_into(text: str, r: *LexResult) {
                             buf.push((hex_val(text[i + 1]) * 16 + hex_val(text[i + 2])) as u8);
                             i += 3;
                         } else {
-                            err(r, line, chars(text, ls, esc_at) + 1, "invalid `\\x` escape");
+                            err_s(r, line, chars(text, ls, esc_at) + 1, chars(text, esc_at, (n < i + 3 ? n : i + 3)), "invalid `\\x` escape", "", "`\\x` must be followed by exactly two hex digits");
                             i += 1;
                         }
                     } else {
-                        err(r, line, chars(text, ls, esc_at) + 1, format("unknown escape sequence `\\{e:c}`"));
+                        err_s(r, line, chars(text, ls, esc_at) + 1, chars(text, esc_at, i + 1), format("unknown escape sequence `\\{e:c}`"), "", "valid escapes: \\n \\t \\r \\0 \\\\ \\\" \\' \\xHH");
                         i += 1;
                     }
                     continue;
@@ -279,7 +280,7 @@ pub fn lex_into(text: str, r: *LexResult) {
                 i += 1;
             }
             let slen = chars(text, start, i) > 1 ? chars(text, start, i) : 1;
-            if !closed { err(r, sline, chars(text, sls, start) + 1, "unterminated string literal"); }
+            if !closed { err_s(r, sline, chars(text, sls, start) + 1, 1, "unterminated string literal", "string starts here", "add a closing `\"` (strings cannot span lines)"); }
             let mut t = tok(TK.Str, "", sline, chars(text, sls, start) + 1, slen);
             t.text = buf;
             r.toks.push(t);
@@ -297,7 +298,7 @@ pub fn lex_into(text: str, r: *LexResult) {
                     val = (hex_val(text[i + 1]) * 16 + hex_val(text[i + 2])) as i64;
                     i += 3;
                 } else {
-                    err(r, line, chars(text, ls, start) + 1, "unknown escape sequence in char literal");
+                    err_s(r, line, chars(text, ls, start) + 1, chars(text, start, (n < i + 1 ? n : i + 1)), "unknown escape sequence in char literal", "", "");
                     i += 1;
                     val = 0;
                 }
@@ -305,7 +306,7 @@ pub fn lex_into(text: str, r: *LexResult) {
                 let ch = text[i];
                 i += 1;
                 if ch >= 128 {
-                    err(r, line, chars(text, ls, start) + 1, "char literal must be a single byte");
+                    err_s(r, line, chars(text, ls, start) + 1, chars(text, start, i), "char literal must be a single byte", "", "use a string for non-ASCII text");
                     val = 0;
                     // skip the rest of a multi-byte character
                     while i < n && (text[i] & 0xC0) == 0x80 { i += 1; }
@@ -313,12 +314,12 @@ pub fn lex_into(text: str, r: *LexResult) {
             }
             if i < n && text[i] == '\'' && val < 0 {
                 i += 1;
-                err(r, line, chars(text, ls, start) + 1, "unterminated or empty char literal");
+                err_s(r, line, chars(text, ls, start) + 1, chars(text, start, i), "unterminated or empty char literal", "", "char literals look like 'a' or '\\n'");
                 val = 0;
             } else if i < n && text[i] == '\'' {
                 i += 1;
             } else {
-                err(r, line, chars(text, ls, start) + 1, "unterminated or empty char literal");
+                err_s(r, line, chars(text, ls, start) + 1, chars(text, start, (i > start + 1 ? i : start + 1)), "unterminated or empty char literal", "", "char literals look like 'a' or '\\n'");
                 if val < 0 { val = 0; }
             }
             let mut t = tok(TK.Char, "", line, chars(text, ls, start) + 1, chars(text, start, i) > 0 ? chars(text, start, i) : 1);

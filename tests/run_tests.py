@@ -187,6 +187,17 @@ def test_bootstrap():
         exp = open(os.path.join(HERE, "ok", "arith.out")).read() if os.path.exists(os.path.join(HERE, "ok", "arith.out")) else hello.stdout
         report("bootstrap: crumbsc compiles itself (stage 2 == stage 3 == Python), and the result runs programs",
                hello.returncode == 0 and hello.stdout == exp, hello.stderr)
+        # the self-hosted driver reports errors exactly like the Python one
+        root = os.path.join(HERE, "..")
+        bad = []
+        errs = [f for f in sorted(glob.glob(os.path.join(HERE, "err", "*.cb"))) if not os.path.basename(f).startswith(("_", "async"))]
+        for f in errs:
+            rel = os.path.relpath(f, root)
+            a = subprocess.run([exe, "check", rel], capture_output=True, text=True, cwd=root)
+            b = subprocess.run([sys.executable, os.path.join(root, "crumbs.py"), "check", rel], capture_output=True, text=True, cwd=root)
+            if a.stdout + a.stderr != b.stdout + b.stderr:
+                bad.append(os.path.basename(f))
+        report(f"bootstrap: crumbsc check prints the same diagnostics as the Python compiler on {len(errs)} error programs", not bad, ", ".join(bad))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
