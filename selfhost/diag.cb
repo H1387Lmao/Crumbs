@@ -1,5 +1,6 @@
 // Diagnostics for the stages after lexing (mirrors the part of src/crumbsc/diag.py the stages need).
-pub struct Diagnostic { level: String, file: String, line: i64, col: i64, len: i64, msg: String, label: String, help: String, note: String }
+pub struct DExtra { line: i64, col: i64, len: i64, label: String }
+pub struct Diagnostic { level: String, file: String, line: i64, col: i64, len: i64, msg: String, label: String, help: String, note: String, extra: List<DExtra> }
 
 pub struct Diags { items: List<Diagnostic>, file: String, context: String }
 
@@ -21,7 +22,7 @@ impl Diags {
         }
         self.items.push(Diagnostic { level: String.from(level), file: String.from(self.file), line: line, col: col,
                                      len: len > 1 ? len : 1, msg: String.from(msg), label: String.from(label),
-                                     help: String.from(help), note: note2 });
+                                     help: String.from(help), note: note2, extra: List.new() });
     }
     pub fn add_error(mut self, line: i64, col: i64, len: i64, msg: str, label: str, help: str) {
         self.add("error", line, col, len, msg, label, help, "");
@@ -31,6 +32,10 @@ impl Diags {
     }
     pub fn add_warn_note(mut self, line: i64, col: i64, len: i64, msg: str, label: str, help: str, note: str) {
         self.add("warning", line, col, len, msg, label, help, note);
+    }
+    pub fn add_extra(mut self, line: i64, col: i64, len: i64, label: str) {
+        let k = self.items.len - 1;
+        self.items.at(k).extra.push(DExtra { line: line, col: col, len: len > 1 ? len : 1, label: String.from(label) });
     }
     pub fn error_count(self) -> i64 {
         let mut n = 0 as i64;

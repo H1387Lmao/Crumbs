@@ -15,7 +15,8 @@ import fmtspec;
 pub struct TMeth { name: String, node: i64 }
 pub struct BoundList { tp: String, traits: List<i64> }
 
-pub struct CVal { kind: i64, i: i64, s: String }     // kind: 0 int, 1 float (value not tracked), 2 bool, 3 bytes
+pub struct CVal { kind: i64, i: i64, s: String, f: f64 }     // kind: 0 int, 1 float (value in f), 2 bool, 3 bytes
+extern fn strtod(s: *u8, end: *void) -> f64;
 pub struct SField { name: String, ty: i64, span: ast.Span }
 pub struct NameTy { name: String, ty: i64 }
 
@@ -24,7 +25,7 @@ pub struct Local {
     rdepth: i64, id: i64, captured: bool, written: bool, region_handle: bool, byref: bool, outer: i64, taint: i64, rd: i64,
 }
 pub struct SumEnt { kind: i64, idx: i64 }
-pub struct CloInfo { is_move: bool, span: ast.Span, outer: List<i64>, proxy: List<i64>, sym: i64 }
+pub struct CloInfo { is_move: bool, span: ast.Span, outer: List<i64>, proxy: List<i64>, sym: i64, body: ast.Node }
 pub struct BckEnt { sym: i64, body: ast.Node, params: List<i64>, context: String }
 pub struct MovedEnt { local: i64, line: i64 }
 pub struct Scope { names: List<String>, ids: List<i64>, clo: i64 }
@@ -191,7 +192,7 @@ pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
 
 // ---- small helpers -----------------------------------------------------------------------------------
 
-fn new_sym(ck: *Checker, kind: str, name: str, mi: i64, node: i64, is_pub: bool) -> Sym {
+pub fn new_sym(ck: *Checker, kind: str, name: str, mi: i64, node: i64, is_pub: bool) -> Sym {
     let prefix: str = ck.ld.mods.at(mi).cprefix;
     return Sym {
         kind: String.from(kind), name: String.from(name), mod_idx: mi, node: node, is_pub: is_pub,
@@ -201,37 +202,37 @@ fn new_sym(ck: *Checker, kind: str, name: str, mi: i64, node: i64, is_pub: bool)
         method_name: String.empty(), is_drop: false, code: 0, variants: List.new(), trait_methods: List.new(),
         supers: List.new(), drop_sym: -1, has_bounds: false, bounds: List.new(),
         ty: -1, params: List.new(), ret: types.VOID, fields: List.new(), base: -1, targs: List.new(), tenv: List.new(),
-        cv: CVal { kind: 0, i: 0, s: String.empty() }, evaluating: false, evaluated: false, drop_inst: -1, summary: List.new(), has_summary: false, clo: -1, param_locals: List.new(),
+        cv: CVal { kind: 0, i: 0, s: String.empty(), f: 0.0 }, evaluating: false, evaluated: false, drop_inst: -1, summary: List.new(), has_summary: false, clo: -1, param_locals: List.new(),
     };
 }
 
-fn names_of(v: *ast.Val) -> List<String> {
+pub fn names_of(v: *ast.Val) -> List<String> {
     let mut o: List<String> = List.new();
     for i in 0..v.items.len { o.push(String.from(v.items.at(i).s)); }
     return o;
 }
 
-fn path_of(n: *ast.Node) -> List<String> { return names_of(n.get("path")); }
+pub fn path_of(n: *ast.Node) -> List<String> { return names_of(n.get("path")); }
 
-fn join_path(p: *List<String>) -> String {
+pub fn join_path(p: *List<String>) -> String {
     let mut o = String.empty();
     for i in 0..p.len { if i > 0 { o.push('.'); } o.append(*p.at(i)); }
     return o;
 }
 
-fn child(v: *ast.Val, i: i64) -> *ast.Node { return v.items.at(i).node.at(0); }
+pub fn child(v: *ast.Val, i: i64) -> *ast.Node { return v.items.at(i).node.at(0); }
 
-fn has_name(l: *List<String>, s: str) -> bool {
+pub fn has_name(l: *List<String>, s: str) -> bool {
     for i in 0..l.len { if *l.at(i) == s { return true; } }
     return false;
 }
 
-fn is_prim_name(s: str) -> bool {
+pub fn is_prim_name(s: str) -> bool {
     return s == "i8" || s == "i16" || s == "i32" || s == "i64" || s == "u8" || s == "u16" || s == "u32" || s == "u64"
         || s == "f32" || s == "f64" || s == "bool" || s == "str" || s == "String" || s == "void";
 }
 
-fn is_reserved(s: str) -> bool {
+pub fn is_reserved(s: str) -> bool {
     if is_prim_name(s) || s == "error" || s == "null" { return true; }
     let names = ["print", "println", "format", "panic", "assert", "alloc", "free", "exit", "to_str", "string_new",
                  "string_from", "string_clear", "cstr", "from_cstr", "slice_of", "size_of", "drop", "drop_at", "write_at",
@@ -242,32 +243,32 @@ fn is_reserved(s: str) -> bool {
 }
 
 // reports an error in module `mi`; `notes` are joined with " ## "
-fn err(ck: *Checker, mi: i64, sp: ast.Span, msg: str, label: str, help: str, notes: str) {
+pub fn err(ck: *Checker, mi: i64, sp: ast.Span, msg: str, label: str, help: str, notes: str) {
     ck.d.file = String.from(ck.ld.mods.at(mi).shown);
     ck.d.add_error_note(sp.line, sp.col, sp.len, msg, label, help, notes);
 }
 
-fn lookup_sym(ck: *Checker, mi: i64, name: str) -> i64 {
+pub fn lookup_sym(ck: *Checker, mi: i64, name: str) -> i64 {
     let p = ck.cmods.at(mi).syms.get(name);
     if p == null { return -1; }
     return *p;
 }
 
-fn lookup_named(l: *List<NameSym>, name: str) -> i64 {
+pub fn lookup_named(l: *List<NameSym>, name: str) -> i64 {
     for i in 0..l.len { if l.at(i).name == name { return l.at(i).sym; } }
     return -1;
 }
 
-fn import_of(ck: *Checker, mi: i64, alias: str) -> i64 {
+pub fn import_of(ck: *Checker, mi: i64, alias: str) -> i64 {
     let cm = ck.cmods.at(mi);
     for i in 0..cm.imports.len { if cm.imports.at(i).alias == alias { return i; } }
     return -1;
 }
 
-fn node_line(ck: *Checker, sym: i64) -> i64 { return ck.nodes.at(ck.syms.at(sym).node).span.line; }
+pub fn node_line(ck: *Checker, sym: i64) -> i64 { return ck.nodes.at(ck.syms.at(sym).node).span.line; }
 
 // registers `s` in module `mi`; -1 (and an error) when the name is taken
-fn define(ck: *Checker, mi: i64, s: Sym, sp: ast.Span) -> i64 {
+pub fn define(ck: *Checker, mi: i64, s: Sym, sp: ast.Span) -> i64 {
     let name = String.from(s.name);
     let old = lookup_sym(ck, mi, name);
     if old >= 0 {
@@ -312,7 +313,7 @@ pub fn declare(ck: *Checker, mi: i64) {
     }
 }
 
-fn declare_item(ck: *Checker, mi: i64, id: i64) {
+pub fn declare_item(ck: *Checker, mi: i64, id: i64) {
     let kind = String.from(ck.nodes.at(id).kind);
     let sp = ck.nodes.at(id).span;
     let is_pub = param_flag(ck.nodes.at(id), "pub");
@@ -414,7 +415,7 @@ fn declare_item(ck: *Checker, mi: i64, id: i64) {
 }
 
 // the line of the first method called `fname` in trait item `id`
-fn first_line_of(ck: *Checker, id: i64, fname: str) -> i64 {
+pub fn first_line_of(ck: *Checker, id: i64, fname: str) -> i64 {
     let ms = ck.nodes.at(id).get("methods");
     for k in 0..ms.items.len {
         let f = child(ms, k);
@@ -425,11 +426,11 @@ fn first_line_of(ck: *Checker, id: i64, fname: str) -> i64 {
 
 // ---- types as written: a canonical string, and readable text -------------------------------------------------
 
-fn inner_of(tn: *ast.Node) -> *ast.Node { return tn.node_of("inner"); }
-fn ptr_prefix(tn: *ast.Node) -> str { return tn.get("ro").i != 0 ? "*const " : "*"; }
-fn q(fallback: str) -> str { return fallback; }
+pub fn inner_of(tn: *ast.Node) -> *ast.Node { return tn.node_of("inner"); }
+pub fn ptr_prefix(tn: *ast.Node) -> str { return tn.get("ro").i != 0 ? "*const " : "*"; }
+pub fn q(fallback: str) -> str { return fallback; }
 
-fn size_text(n: *ast.Node, fallback: str) -> String {
+pub fn size_text(n: *ast.Node, fallback: str) -> String {
     let sz = n.node_of("size");
     if sz.has("value") {
         let v = sz.get("value");
@@ -441,7 +442,7 @@ fn size_text(n: *ast.Node, fallback: str) -> String {
 
 // Names are replaced by their full symbol names and `Self` by `selfc` (None when `has_self` is false), so two
 // spellings of the same type (`Point` / `geom.Point`) give the same string.
-fn canon(ck: *Checker, tn: *ast.Node, mi: i64, selfc: str, has_self: bool) -> String {
+pub fn canon(ck: *Checker, tn: *ast.Node, mi: i64, selfc: str, has_self: bool) -> String {
     let k: str = tn.kind;
     if k == "TName" {
         let mut p = path_of(tn);
@@ -495,7 +496,7 @@ fn canon(ck: *Checker, tn: *ast.Node, mi: i64, selfc: str, has_self: bool) -> St
     return String.from("?");
 }
 
-fn tn_text(tn: *ast.Node) -> String {
+pub fn tn_text(tn: *ast.Node) -> String {
     let k: str = tn.kind;
     if k == "TName" {
         let mut p = path_of(tn);
@@ -533,9 +534,9 @@ fn tn_text(tn: *ast.Node) -> String {
     return String.from("?");
 }
 
-fn param_flag(p: *ast.Node, name: str) -> bool { return p.has(name) && p.get(name).i != 0; }
+pub fn param_flag(p: *ast.Node, name: str) -> bool { return p.has(name) && p.get(name).i != 0; }
 
-fn sig_text(f: *ast.Node) -> String {
+pub fn sig_text(f: *ast.Node) -> String {
     let mut ps = String.empty();
     let params = f.get("params");
     for i in 0..params.items.len {
@@ -556,20 +557,20 @@ fn sig_text(f: *ast.Node) -> String {
 
 // ---- destructors ----------------------------------------------------------------------------------------------
 
-fn plain_tname_is(a: *ast.Node, tp: str) -> bool {
+pub fn plain_tname_is(a: *ast.Node, tp: str) -> bool {
     if a.kind != "TName" { return false; }
     let p = a.get("path");
     return p.items.len == 1 && a.get("args").items.len == 0 && p.items.at(0).s == tp;
 }
 
 // does `args` (type nodes) spell exactly the names `tps`, in order?
-fn args_match(args: *ast.Val, tps: *List<String>) -> bool {
+pub fn args_match(args: *ast.Val, tps: *List<String>) -> bool {
     if args.items.len != tps.len { return false; }
     for i in 0..tps.len { if !plain_tname_is(child(args, i), *tps.at(i)) { return false; } }
     return true;
 }
 
-fn angle(tps: *List<String>) -> String {
+pub fn angle(tps: *List<String>) -> String {
     if tps.len == 0 { return String.empty(); }
     let mut o = String.from("<");
     for i in 0..tps.len { if i > 0 { o.append(", "); } o.append(*tps.at(i)); }
@@ -577,7 +578,7 @@ fn angle(tps: *List<String>) -> String {
     return o;
 }
 
-fn declare_drop(ck: *Checker, mi: i64, id: i64) {
+pub fn declare_drop(ck: *Checker, mi: i64, id: i64) {
     let dname = String.from(ck.nodes.at(id).str_of("drop_for"));
     let sp = ck.nodes.at(id).span;
     let st = lookup_sym(ck, mi, dname);
@@ -629,10 +630,10 @@ fn declare_drop(ck: *Checker, mi: i64, id: i64) {
 
 // ---- traits -------------------------------------------------------------------------------------------------------
 
-fn bound_key(mi: i64, sp: ast.Span) -> String { return format("{mi}:{sp.line}:{sp.col}"); }
+pub fn bound_key(mi: i64, sp: ast.Span) -> String { return format("{mi}:{sp.line}:{sp.col}"); }
 
 // the trait symbol a path like `Shape` / `shapes.Shape` names (an error and -1 otherwise)
-fn resolve_trait(ck: *Checker, tn: *ast.Node, mi: i64, quiet_in: bool) -> i64 {
+pub fn resolve_trait(ck: *Checker, tn: *ast.Node, mi: i64, quiet_in: bool) -> i64 {
     let mut quiet = quiet_in;
     let mut path = path_of(tn);
     let mut sym = -1 as i64;
@@ -685,7 +686,7 @@ fn resolve_trait(ck: *Checker, tn: *ast.Node, mi: i64, quiet_in: bool) -> i64 {
     return -1;
 }
 
-fn same_sig(ck: *Checker, tf: *ast.Node, f: *ast.Node, tm: i64, mi: i64, selfc: str) -> bool {
+pub fn same_sig(ck: *Checker, tf: *ast.Node, f: *ast.Node, tm: i64, mi: i64, selfc: str) -> bool {
     let tp = tf.get("params");
     let fp = f.get("params");
     if tp.items.len != fp.items.len { return false; }
@@ -702,14 +703,14 @@ fn same_sig(ck: *Checker, tf: *ast.Node, f: *ast.Node, tm: i64, mi: i64, selfc: 
     return ra == rb;
 }
 
-fn find_timpl(ck: *Checker, trait_full: str, key: str) -> i64 {
+pub fn find_timpl(ck: *Checker, trait_full: str, key: str) -> i64 {
     for i in 0..ck.trait_impls.len {
         if ck.trait_impls.at(i).trait_full == trait_full && ck.trait_impls.at(i).key == key { return i; }
     }
     return -1;
 }
 
-fn sorted_names(l: *List<String>) -> List<String> {
+pub fn sorted_names(l: *List<String>) -> List<String> {
     let mut o: List<String> = List.new();
     for i in 0..l.len { o.push(String.from(*l.at(i))); }
     for i in 0..o.len {
@@ -727,7 +728,7 @@ fn sorted_names(l: *List<String>) -> List<String> {
 }
 
 // the TraitFn node `name` of trait `tr` (its last declaration)
-fn trait_fn(ck: *Checker, tr: i64, name: str) -> *ast.Node {
+pub fn trait_fn(ck: *Checker, tr: i64, name: str) -> *ast.Node {
     let tms = &ck.syms.at(tr).trait_methods;
     for i in 0..tms.len {
         if tms.at(i).name == name { return child(ck.nodes.at(ck.syms.at(tr).node).get("methods"), tms.at(i).node); }
@@ -735,7 +736,7 @@ fn trait_fn(ck: *Checker, tr: i64, name: str) -> *ast.Node {
     panic("no such trait method");
 }
 
-fn has_trait_fn(ck: *Checker, tr: i64, name: str) -> bool {
+pub fn has_trait_fn(ck: *Checker, tr: i64, name: str) -> bool {
     let tms = &ck.syms.at(tr).trait_methods;
     for i in 0..tms.len { if tms.at(i).name == name { return true; } }
     return false;
@@ -743,7 +744,7 @@ fn has_trait_fn(ck: *Checker, tr: i64, name: str) -> bool {
 
 // Checks an `impl Trait for Type` block; returns the functions to register (the impl's own plus the trait's default
 // methods it does not override). `ok` is false after an error that stops the impl.
-fn conform(ck: *Checker, mi: i64, it_id: i64, trait: i64, key: str, tname: str, fns: List<ast.Node>, ok: *bool) -> List<ast.Node> {
+pub fn conform(ck: *Checker, mi: i64, it_id: i64, trait: i64, key: str, tname: str, fns: List<ast.Node>, ok: *bool) -> List<ast.Node> {
     let tm = ck.syms.at(trait).mod_idx;
     let trait_full = String.from(ck.syms.at(trait).full);
     let trait_name = String.from(ck.syms.at(trait).name);
@@ -826,6 +827,7 @@ fn conform(ck: *Checker, mi: i64, it_id: i64, trait: i64, key: str, tname: str, 
             for e in perrs { ck.d.add_error(e.line, e.col, 1, e.msg, "", ""); }
             let mut node2 = node;
             node2.put_str("default_of", trait_name);
+            node2.put_int("src_mod", tm);
             out.push(node2);
         }
     }
@@ -839,20 +841,20 @@ fn conform(ck: *Checker, mi: i64, it_id: i64, trait: i64, key: str, tname: str, 
 
 // ---- impls -----------------------------------------------------------------------------------------------------------
 
-fn find_table(ck: *Checker, key: str) -> i64 {
+pub fn find_table(ck: *Checker, key: str) -> i64 {
     for i in 0..ck.methods.len { if ck.methods.at(i).key == key { return i; } }
     ck.methods.push(MethTab { key: String.from(key), entries: List.new() });
     return ck.methods.len - 1;
 }
 
-fn table_get(ck: *Checker, t: i64, name: str) -> i64 {
+pub fn table_get(ck: *Checker, t: i64, name: str) -> i64 {
     let e = &ck.methods.at(t).entries;
     for i in 0..e.len { if e.at(i).name == name { return e.at(i).sym; } }
     return -1;
 }
 
 // `{**a, **b}` for two `tbounds` dict values
-fn merge_tbounds(a: *ast.Val, b: *ast.Val) -> ast.Val {
+pub fn merge_tbounds(a: *ast.Val, b: *ast.Val) -> ast.Val {
     let mut out = ast.clone_val(a);
     let mut i = 0 as i64;
     while i < b.items.len {
@@ -872,7 +874,7 @@ fn merge_tbounds(a: *ast.Val, b: *ast.Val) -> ast.Val {
     return out;
 }
 
-fn declare_impl(ck: *Checker, mi: i64, id: i64) {
+pub fn declare_impl(ck: *Checker, mi: i64, id: i64) {
     let tyn_span = ck.nodes.at(id).node_of("tyn").span;
     let mut path = path_of(ck.nodes.at(id).node_of("tyn"));
     let nargs = ck.nodes.at(id).node_of("tyn").get("args").items.len;
@@ -983,13 +985,13 @@ fn declare_impl(ck: *Checker, mi: i64, id: i64) {
     }
 }
 
-fn empty_dict() -> ast.Val {
+pub fn empty_dict() -> ast.Val {
     let mut v = ast.v_list(List.new());
     v.tag = 9;
     return v;
 }
 
-fn strs_vals(l: *List<String>) -> List<ast.Val> {
+pub fn strs_vals(l: *List<String>) -> List<ast.Val> {
     let mut o: List<ast.Val> = List.new();
     for i in 0..l.len { o.push(ast.v_str(*l.at(i))); }
     return o;
@@ -1143,8 +1145,8 @@ pub fn run_decl(ck: *Checker) {
 
 // ---- types: printing, instantiation, resolution -------------------------------------------------------------------------
 
-fn ptr_pre(ro: bool) -> str { return ro ? "*const " : "*"; }
-fn tk(ck: *Checker, t: i64) -> i64 { return ck.types.tys.at(t).kind; }
+pub fn ptr_pre(ro: bool) -> str { return ro ? "*const " : "*"; }
+pub fn tk(ck: *Checker, t: i64) -> i64 { return ck.types.tys.at(t).kind; }
 
 // the text of a type, as `Ty.__str__` prints it
 pub fn ty_str(ck: *Checker, t: i64) -> String {
@@ -1172,10 +1174,10 @@ pub fn ty_str(ck: *Checker, t: i64) -> String {
     return String.from("never");
 }
 
-fn ty_key(ck: *Checker, t: i64) -> String { return String.from(ck.types.tys.at(t).key); }
+pub fn ty_key(ck: *Checker, t: i64) -> String { return String.from(ck.types.tys.at(t).key); }
 
 // the key under which methods of `t` are registered ("" if none)
-fn type_key(ck: *Checker, t: i64) -> String {
+pub fn type_key(ck: *Checker, t: i64) -> String {
     let k = tk(ck, t);
     if k == types.K_PRIM { return String.from(ck.types.tys.at(t).name); }
     if k == types.K_STRUCT || k == types.K_ENUM {
@@ -1186,7 +1188,7 @@ fn type_key(ck: *Checker, t: i64) -> String {
     return String.empty();
 }
 
-fn lower_first(s: str) -> String {
+pub fn lower_first(s: str) -> String {
     let mut o = String.empty();
     for i in 0..s.len {
         let c = s[i];
@@ -1196,7 +1198,7 @@ fn lower_first(s: str) -> String {
 }
 
 // the trait symbols named for type parameter `tp` in the header of impl `info`
-fn bound_traits(ck: *Checker, info: i64, tp: str) -> List<i64> {
+pub fn bound_traits(ck: *Checker, info: i64, tp: str) -> List<i64> {
     let mut out: List<i64> = List.new();
     let mut i = 0 as i64;
     let mi = ck.trait_impls.at(info).mod_idx;
@@ -1215,7 +1217,7 @@ fn bound_traits(ck: *Checker, info: i64, tp: str) -> List<i64> {
 }
 
 // does `ty` implement trait `tr`? when not, `why` holds a short reason
-fn implements(ck: *Checker, ty: i64, tr: i64, why: *String) -> bool {
+pub fn implements(ck: *Checker, ty: i64, tr: i64, why: *String) -> bool {
     let key = type_key(ck, ty);
     let trfull = String.from(ck.syms.at(tr).full);
     let info = key.len > 0 ? find_timpl(ck, trfull, key) : -1;
@@ -1250,7 +1252,7 @@ fn implements(ck: *Checker, ty: i64, tr: i64, why: *String) -> bool {
 }
 
 // the type arguments chosen for `sid` must satisfy the `T: Trait` bounds on its type parameters
-fn check_bounds(ck: *Checker, sid: i64, targs: *List<i64>, smi: i64, span: ast.Span) -> bool {
+pub fn check_bounds(ck: *Checker, sid: i64, targs: *List<i64>, smi: i64, span: ast.Span) -> bool {
     if !ck.syms.at(sid).has_bounds { return true; }
     let mut ok = true;
     let ntp = ck.syms.at(sid).tparams.len;
@@ -1284,7 +1286,7 @@ fn check_bounds(ck: *Checker, sid: i64, targs: *List<i64>, smi: i64, span: ast.S
     return ok;
 }
 
-fn too_deep(ck: *Checker, key: str, smi: i64, span: ast.Span) -> bool {
+pub fn too_deep(ck: *Checker, key: str, smi: i64, span: ast.Span) -> bool {
     if key.len > 160 || ck.n_inst > 4000 {
         err(ck, smi, span, "generic instantiation recursion limit reached", "",
             "a generic type or function keeps instantiating itself with ever larger types", "");
@@ -1293,20 +1295,20 @@ fn too_deep(ck: *Checker, key: str, smi: i64, span: ast.Span) -> bool {
     return false;
 }
 
-fn inst_key(ck: *Checker, full: str, targs: *List<i64>) -> String {
+pub fn inst_key(ck: *Checker, full: str, targs: *List<i64>) -> String {
     let mut k = String.from(full);
     k.push('\x01');
     for i in 0..targs.len { if i > 0 { k.push('\x02'); } k.append(ty_key(ck, *targs.at(i))); }
     return k;
 }
 
-fn keys_joined(ck: *Checker, targs: *List<i64>) -> String {
+pub fn keys_joined(ck: *Checker, targs: *List<i64>) -> String {
     let mut k = String.empty();
     for i in 0..targs.len { k.append(ty_key(ck, *targs.at(i))); }
     return k;
 }
 
-fn tenv_of(ck: *Checker, sid: i64, targs: *List<i64>) -> List<NameTy> {
+pub fn tenv_of(ck: *Checker, sid: i64, targs: *List<i64>) -> List<NameTy> {
     let mut e: List<NameTy> = List.new();
     for i in 0..ck.syms.at(sid).tparams.len {
         if i >= targs.len { break; }
@@ -1315,13 +1317,13 @@ fn tenv_of(ck: *Checker, sid: i64, targs: *List<i64>) -> List<NameTy> {
     return e;
 }
 
-fn tenv_get(ck: *Checker, name: str) -> i64 {
+pub fn tenv_get(ck: *Checker, name: str) -> i64 {
     for i in 0..ck.tenv.len { if ck.tenv.at(i).name == name { return ck.tenv.at(i).ty; } }
     return -1;
 }
 
 // installs `env` as the type-parameter environment and returns the previous one
-fn tenv_replace(ck: *Checker, env: List<NameTy>) -> List<NameTy> {
+pub fn tenv_replace(ck: *Checker, env: List<NameTy>) -> List<NameTy> {
     let mut old: List<NameTy> = List.new();
     while ck.tenv.len > 0 { old.push(ck.tenv.pop() catch { panic("unreachable"); }); }
     old.reverse();
@@ -1329,7 +1331,7 @@ fn tenv_replace(ck: *Checker, env: List<NameTy>) -> List<NameTy> {
     return old;
 }
 
-fn find_field(ck: *Checker, sid: i64, name: str) -> i64 {
+pub fn find_field(ck: *Checker, sid: i64, name: str) -> i64 {
     for i in 0..ck.syms.at(sid).fields.len { if ck.syms.at(sid).fields.at(i).name == name { return i; } }
     return -1;
 }
@@ -1432,7 +1434,7 @@ pub fn inst_struct(ck: *Checker, sid: i64, targs: *List<i64>, smi: i64, span: as
     return t;
 }
 
-fn use_type_sym(ck: *Checker, sid: i64, args: *ast.Val, tn: *ast.Node, mi: i64) -> i64 {
+pub fn use_type_sym(ck: *Checker, sid: i64, args: *ast.Val, tn: *ast.Node, mi: i64) -> i64 {
     let ntp = ck.syms.at(sid).tparams.len;
     let name = String.from(ck.syms.at(sid).name);
     if ntp > 0 {
@@ -1458,7 +1460,7 @@ fn use_type_sym(ck: *Checker, sid: i64, args: *ast.Val, tn: *ast.Node, mi: i64) 
 }
 
 // an opaque C type used by value is an error
-fn sized(ck: *Checker, t_in: i64, mi: i64, sp: ast.Span) -> bool {
+pub fn sized(ck: *Checker, t_in: i64, mi: i64, sp: ast.Span) -> bool {
     let mut t = t_in;
     while tk(ck, t) == types.K_ARR { t = ck.types.tys.at(t).inner; }
     if tk(ck, t) == types.K_STRUCT {
@@ -1473,7 +1475,7 @@ fn sized(ck: *Checker, t_in: i64, mi: i64, sp: ast.Span) -> bool {
     return true;
 }
 
-fn need_std(ck: *Checker, mi: i64, sp: ast.Span, what: str) {
+pub fn need_std(ck: *Checker, mi: i64, sp: ast.Span, what: str) {
     err(ck, mi, sp, format("{what} needs the standard runtime, which `--no-stdruntime` removes"), "not available in this build",
         "drop --no-stdruntime, or call the C library yourself through `extern fn`", "");
 }
@@ -1633,20 +1635,22 @@ pub fn resolve_type(ck: *Checker, tn: *ast.Node, mi: i64, allow_void: bool) -> i
 
 // ---- constants --------------------------------------------------------------------------------------------------------
 
-fn nc_raise(ck: *Checker, mi: i64, sp: ast.Span, msg: str) {
+pub fn nc_raise(ck: *Checker, mi: i64, sp: ast.Span, msg: str) {
     ck.nc = true;
     ck.nc_mi = mi;
     ck.nc_span = sp;
     ck.nc_msg = String.from(msg);
 }
 
-fn cv_int(i: i64) -> CVal { return CVal { kind: 0, i: i, s: String.empty() }; }
-fn cv_bool(b: bool) -> CVal { return CVal { kind: 2, i: b ? 1 : 0, s: String.empty() }; }
-fn cv_float() -> CVal { return CVal { kind: 1, i: 0, s: String.empty() }; }
+pub fn cv_int(i: i64) -> CVal { return CVal { kind: 0, i: i, s: String.empty(), f: 0.0 }; }
+pub fn cv_bool(b: bool) -> CVal { return CVal { kind: 2, i: b ? 1 : 0, s: String.empty(), f: 0.0 }; }
+pub fn cv_float(f: f64) -> CVal { return CVal { kind: 1, i: 0, s: String.empty(), f: f }; }
+pub fn cv_asf(v: *CVal) -> f64 { return v.kind == 1 ? v.f : (v.i as f64); }
+pub fn parse_float(text: str) -> f64 { return strtod(cstr(text), 0 as *void); }
 
-fn cv_copy(v: *CVal) -> CVal { return CVal { kind: v.kind, i: v.i, s: String.from(v.s) }; }
+pub fn cv_copy(v: *CVal) -> CVal { return CVal { kind: v.kind, i: v.i, s: String.from(v.s), f: v.f }; }
 
-fn cv_truth(v: *CVal) -> bool {
+pub fn cv_truth(v: *CVal) -> bool {
     if v.kind == 3 { return v.s.len > 0; }
     if v.kind == 1 { return true; }
     return v.i != 0;
@@ -1674,7 +1678,7 @@ pub fn const_value(ck: *Checker, sid: i64) -> CVal {
     return v;
 }
 
-fn wrap_int(v: i64, t: i64) -> i64 {
+pub fn wrap_int(v: i64, t: i64) -> i64 {
     let b = types.bits(t);
     if b == 64 { return v; }
     let mask = (1 as i64 << b) - 1;
@@ -1687,12 +1691,17 @@ pub fn const_eval(ck: *Checker, e: *ast.Node, mi: i64) -> CVal {
     let k: str = e.kind;
     if k == "Int" {
         let v = e.get("value");
-        if v.s.len > 0 { return cv_int(9223372036854775807); }
+        if v.s.len > 0 {
+            let s: str = v.s;
+            let mut x: u64 = 0;
+            for i in 0..s.len { x = x * 10 + ((s[i] - 48) as u64); }
+            return cv_int(x as i64);
+        }
         return cv_int(v.i);
     }
-    if k == "Float" { return cv_float(); }
+    if k == "Float" { return cv_float(parse_float(e.get("value").s)); }
     if k == "Bool" { return cv_bool(e.get("value").i != 0); }
-    if k == "Str" { return CVal { kind: 3, i: 0, s: String.from(e.get("value").s) }; }
+    if k == "Str" { return CVal { kind: 3, i: 0, s: String.from(e.get("value").s), f: 0.0 }; }
     if k == "Ident" {
         let name = String.from(e.str_of("name"));
         let s = lookup_sym(ck, mi, name);
@@ -1718,7 +1727,7 @@ pub fn const_eval(ck: *Checker, e: *ast.Node, mi: i64) -> CVal {
         if ck.nc { return v; }
         let op: str = e.str_of("op");
         if op == "-" && v.kind != 2 && v.kind != 3 {
-            if v.kind == 1 { return cv_float(); }
+            if v.kind == 1 { return cv_float(0.0 - v.f); }
             return cv_int(0 - v.i);
         }
         if op == "!" && v.kind == 2 { return cv_bool(v.i == 0); }
@@ -1729,7 +1738,7 @@ pub fn const_eval(ck: *Checker, e: *ast.Node, mi: i64) -> CVal {
     if k == "Binary" {
         let mut a = const_eval(ck, e.node_of("l"), mi);
         if ck.nc { return a; }
-        let b = const_eval(ck, e.node_of("r"), mi);
+        let mut b = const_eval(ck, e.node_of("r"), mi);
         if ck.nc { return b; }
         let op: str = e.str_of("op");
         if op == "&&" { return cv_truth(&a) ? b : a; }
@@ -1743,11 +1752,13 @@ pub fn const_eval(ck: *Checker, e: *ast.Node, mi: i64) -> CVal {
         let fl = a.kind == 1 || b.kind == 1;
         let x = a.i;
         let y = b.i;
-        if op == "+" { return fl ? cv_float() : cv_int(x + y); }
-        if op == "-" { return fl ? cv_float() : cv_int(x - y); }
-        if op == "*" { return fl ? cv_float() : cv_int(x * y); }
+        let fa = cv_asf(&a);
+        let fb = cv_asf(&b);
+        if op == "+" { return fl ? cv_float(fa + fb) : cv_int(x + y); }
+        if op == "-" { return fl ? cv_float(fa - fb) : cv_int(x - y); }
+        if op == "*" { return fl ? cv_float(fa * fb) : cv_int(x * y); }
         if op == "/" || op == "%" {
-            if fl { return cv_float(); }
+            if fl { return cv_float(fa / fb); }
             if y == 0 {
                 nc_raise(ck, mi, e.span, "division by zero in constant expression");
                 return cv_int(0);
@@ -1776,13 +1787,13 @@ pub fn const_eval(ck: *Checker, e: *ast.Node, mi: i64) -> CVal {
         return cv_int(0);
     }
     if k == "Cast" {
-        let v = const_eval(ck, e.node_of("expr"), mi);
+        let mut v = const_eval(ck, e.node_of("expr"), mi);
         if ck.nc { return v; }
         let tn = e.node_of("tyn");
         if tn.kind == "TName" && tn.get("path").items.len == 1 && is_prim_name(tn.get("path").items.at(0).s) {
             let t = types.prim_named(tn.get("path").items.at(0).s);
             if types.is_int(t) && v.kind != 3 { return cv_int(wrap_int(v.i, t)); }
-            if types.is_float(t) && v.kind != 3 { return cv_float(); }
+            if types.is_float(t) && v.kind != 3 { return cv_float(cv_asf(&v)); }
         }
         nc_raise(ck, mi, e.span, "cast not allowed in a constant expression");
         return cv_int(0);
@@ -1863,7 +1874,7 @@ pub fn resolve_sigs(ck: *Checker, mi: i64) {
 
 // ---- C ABI ---------------------------------------------------------------------------------------------------------------
 
-fn ffi_ok(ck: *Checker, t: i64, seen: *List<String>) -> bool {
+pub fn ffi_ok(ck: *Checker, t: i64, seen: *List<String>) -> bool {
     let k = tk(ck, t);
     if k == types.K_PRIM { return types.is_numeric(t) || t == types.BOOL; }
     if k == types.K_PTR || k == types.K_FN || k == types.K_ENUM { return true; }
@@ -1883,7 +1894,7 @@ fn ffi_ok(ck: *Checker, t: i64, seen: *List<String>) -> bool {
     return false;
 }
 
-fn ffi_why(ck: *Checker, t: i64) -> String {
+pub fn ffi_why(ck: *Checker, t: i64) -> String {
     let k = tk(ck, t);
     if t == types.STR { return String.from("`str` is a Crumbs view (pointer + length); pass `cstr(s)` for a C string"); }
     if t == types.STRING { return String.from("`String` is a Crumbs type; pass `cstr(s)` or `s.ptr` instead"); }
@@ -1899,7 +1910,7 @@ fn ffi_why(ck: *Checker, t: i64) -> String {
     return String.empty();
 }
 
-fn ffi_check(ck: *Checker, mi: i64, t: i64, sp: ast.Span, what: str) {
+pub fn ffi_check(ck: *Checker, mi: i64, t: i64, sp: ast.Span, what: str) {
     if t == types.POISON || t == types.VOID { return; }
     let mut seen: List<String> = List.new();
     if !ffi_ok(ck, t, &seen) {
@@ -1948,13 +1959,13 @@ pub fn check_ffi(ck: *Checker) {
 
 // ---- recursive structs --------------------------------------------------------------------------------------------------------
 
-fn value_structs(ck: *Checker, t: i64, out: *List<i64>) {
+pub fn value_structs(ck: *Checker, t: i64, out: *List<i64>) {
     let k = tk(ck, t);
     if k == types.K_STRUCT { out.push(ck.types.tys.at(t).sym); }
     else if k == types.K_ARR { value_structs(ck, ck.types.tys.at(t).inner, out); }
 }
 
-fn cycle_visit(ck: *Checker, state: *List<i64>, sid: i64, path: *List<i64>) {
+pub fn cycle_visit(ck: *Checker, state: *List<i64>, sid: i64, path: *List<i64>) {
     let st = *state.at(sid);
     if st == 2 { return; }
     if st == 1 {
@@ -2007,47 +2018,47 @@ pub fn run_sigs(ck: *Checker) {
 
 pub struct Ent { kind: i64, idx: i64 }           // kind: 0 none, 1 module, 2 symbol, 3 bad
 
-fn warn(ck: *Checker, mi: i64, sp: ast.Span, msg: str, label: str, help: str, notes: str) {
+pub fn warn(ck: *Checker, mi: i64, sp: ast.Span, msg: str, label: str, help: str, notes: str) {
     ck.d.file = String.from(ck.ld.mods.at(mi).shown);
     ck.d.add_warn_note(sp.line, sp.col, sp.len, msg, label, help, notes);
 }
 
-fn here(ck: *Checker, sp: ast.Span, msg: str, label: str, help: str) { err(ck, ck.cur_mod, sp, msg, label, help, ""); }
-fn here_n(ck: *Checker, sp: ast.Span, msg: str, label: str, help: str, notes: str) { err(ck, ck.cur_mod, sp, msg, label, help, notes); }
-fn warn_here(ck: *Checker, sp: ast.Span, msg: str, label: str, help: str) { warn(ck, ck.cur_mod, sp, msg, label, help, ""); }
+pub fn here(ck: *Checker, sp: ast.Span, msg: str, label: str, help: str) { err(ck, ck.cur_mod, sp, msg, label, help, ""); }
+pub fn here_n(ck: *Checker, sp: ast.Span, msg: str, label: str, help: str, notes: str) { err(ck, ck.cur_mod, sp, msg, label, help, notes); }
+pub fn warn_here(ck: *Checker, sp: ast.Span, msg: str, label: str, help: str) { warn(ck, ck.cur_mod, sp, msg, label, help, ""); }
 
-fn unimpl(ck: *Checker, e: *ast.Node, what: str) -> i64 {
+pub fn unimpl(ck: *Checker, e: *ast.Node, what: str) -> i64 {
     here(ck, e.span, format("UNIMPLEMENTED in the Crumbs checker: {what}"), "", "");
     return types.POISON;
 }
 
-fn is_arith(op: str) -> bool { return op == "+" || op == "-" || op == "*" || op == "/" || op == "%"; }
-fn is_bitwise(op: str) -> bool { return op == "&" || op == "|" || op == "^"; }
-fn is_shift(op: str) -> bool { return op == "<<" || op == ">>"; }
-fn is_cmp(op: str) -> bool { return op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">="; }
+pub fn is_arith(op: str) -> bool { return op == "+" || op == "-" || op == "*" || op == "/" || op == "%"; }
+pub fn is_bitwise(op: str) -> bool { return op == "&" || op == "|" || op == "^"; }
+pub fn is_shift(op: str) -> bool { return op == "<<" || op == ">>"; }
+pub fn is_cmp(op: str) -> bool { return op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">="; }
 
 // ---- annotations on nodes ----------------------------------------------------------------------------------------
 
-fn ety(e: *ast.Node) -> i64 { return e.has("ty") ? e.get("ty").i : -2; }
-fn set_ty(e: *ast.Node, t: i64) { e.set("ty", ast.v_tag(10, t)); }
-fn set_tyn(e: *ast.Node, name: str, t: i64) { e.set(name, ast.v_tag(10, t)); }
-fn set_flag(e: *ast.Node, name: str, b: bool) { e.set(name, ast.v_bool(b)); }
-fn set_nil(e: *ast.Node, name: str) { e.set(name, ast.v_none()); }
-fn flag(e: *ast.Node, name: str) -> bool { return e.has(name) && e.get(name).i != 0 && e.get(name).tag == 1; }
-fn is_set(e: *ast.Node, name: str) -> bool { return e.has(name) && e.get(name).tag != 0; }
-fn has_suffix(e: *ast.Node) -> bool { return e.has("suffix") && e.get("suffix").tag != 0; }
+pub fn ety(e: *ast.Node) -> i64 { return e.has("ty") ? e.get("ty").i : -2; }
+pub fn set_ty(e: *ast.Node, t: i64) { e.set("ty", ast.v_tag(10, t)); }
+pub fn set_tyn(e: *ast.Node, name: str, t: i64) { e.set(name, ast.v_tag(10, t)); }
+pub fn set_flag(e: *ast.Node, name: str, b: bool) { e.set(name, ast.v_bool(b)); }
+pub fn set_nil(e: *ast.Node, name: str) { e.set(name, ast.v_none()); }
+pub fn flag(e: *ast.Node, name: str) -> bool { return e.has(name) && e.get(name).i != 0 && e.get(name).tag == 1; }
+pub fn is_set(e: *ast.Node, name: str) -> bool { return e.has(name) && e.get(name).tag != 0; }
+pub fn has_suffix(e: *ast.Node) -> bool { return e.has("suffix") && e.get("suffix").tag != 0; }
 
-fn int_text(e: *ast.Node) -> String {
+pub fn int_text(e: *ast.Node) -> String {
     let v = e.get("value");
     if v.s.len > 0 { return String.from(v.s); }
     return format("{v.i}");
 }
 
-fn int_is_zero(e: *ast.Node) -> bool { return e.kind == "Int" && e.get("value").s.len == 0 && e.get("value").i == 0; }
+pub fn int_is_zero(e: *ast.Node) -> bool { return e.kind == "Int" && e.get("value").s.len == 0 && e.get("value").i == 0; }
 
 // ---- integer ranges (as decimal text, so that u64 and i64 limits are exact) ----------------------------------------------
 
-fn lo_text(t: i64) -> str {
+pub fn lo_text(t: i64) -> str {
     if !types.signed(t) { return "0"; }
     let b = types.bits(t);
     if b == 8 { return "-128"; }
@@ -2056,7 +2067,7 @@ fn lo_text(t: i64) -> str {
     return "-9223372036854775808";
 }
 
-fn hi_text(t: i64) -> str {
+pub fn hi_text(t: i64) -> str {
     let b = types.bits(t);
     if types.signed(t) {
         if b == 8 { return "127"; }
@@ -2071,7 +2082,7 @@ fn hi_text(t: i64) -> str {
 }
 
 // magnitude comparison of two non-negative decimal strings: -1, 0, 1
-fn cmp_mag(a: str, b: str) -> i64 {
+pub fn cmp_mag(a: str, b: str) -> i64 {
     if a.len != b.len { return a.len < b.len ? -1 : 1; }
     for i in 0..a.len {
         if a[i] != b[i] { return a[i] < b[i] ? -1 : 1; }
@@ -2080,7 +2091,7 @@ fn cmp_mag(a: str, b: str) -> i64 {
 }
 
 // does the value (sign and decimal magnitude) lie in the range of integer type `t`?
-fn in_range(neg: bool, mag: str, t: i64) -> bool {
+pub fn in_range(neg: bool, mag: str, t: i64) -> bool {
     if mag == "0" { return true; }
     if neg {
         if !types.signed(t) { return false; }
@@ -2092,9 +2103,9 @@ fn in_range(neg: bool, mag: str, t: i64) -> bool {
 
 // ---- scopes and locals -----------------------------------------------------------------------------------------------
 
-fn push_scope(ck: *Checker) { ck.scopes.push(Scope { names: List.new(), ids: List.new(), clo: -1 }); }
+pub fn push_scope(ck: *Checker) { ck.scopes.push(Scope { names: List.new(), ids: List.new(), clo: -1 }); }
 
-fn pop_scope(ck: *Checker) {
+pub fn pop_scope(ck: *Checker) {
     let sc = ck.scopes.pop() catch { panic("scope underflow"); };
     for i in 0..sc.ids.len {
         let id = *sc.ids.at(i);
@@ -2106,7 +2117,7 @@ fn pop_scope(ck: *Checker) {
     }
 }
 
-fn lookup_local(ck: *Checker, name: str) -> i64 {
+pub fn lookup_local(ck: *Checker, name: str) -> i64 {
     let mut crossed: List<i64> = List.new();
     let mut i = ck.scopes.len;
     while i > 0 {
@@ -2126,7 +2137,7 @@ fn lookup_local(ck: *Checker, name: str) -> i64 {
 }
 
 // the proxy local that stands for `loc` inside closure `ci`
-fn capture(ck: *Checker, ci: i64, loc: i64) -> i64 {
+pub fn capture(ck: *Checker, ci: i64, loc: i64) -> i64 {
     for k in 0..ck.clos.at(ci).outer.len { if *ck.clos.at(ci).outer.at(k) == loc { return *ck.clos.at(ci).proxy.at(k); } }
     let idx = ck.clos.at(ci).outer.len;
     let byref = !ck.clos.at(ci).is_move;
@@ -2145,7 +2156,7 @@ fn capture(ck: *Checker, ci: i64, loc: i64) -> i64 {
     return p;
 }
 
-fn alloc_cname(ck: *Checker, name: str) -> String {
+pub fn alloc_cname(ck: *Checker, name: str) -> String {
     let mut base = String.from(name);
     if creserved.is_c_reserved(name) || name.starts_with("cb_") || name.starts_with("__") { base.push('_'); }
     let mut cand = String.from(base);
@@ -2158,14 +2169,14 @@ fn alloc_cname(ck: *Checker, name: str) -> String {
     return cand;
 }
 
-fn new_local(ck: *Checker, name: str, ty: i64, is_mut: bool, cname: String, sp: ast.Span, is_param: bool) -> i64 {
+pub fn new_local(ck: *Checker, name: str, ty: i64, is_mut: bool, cname: String, sp: ast.Span, is_param: bool) -> i64 {
     let id = ck.locals.len;
     ck.locals.push(Local { name: String.from(name), ty: ty, is_mut: is_mut, cname: cname, span: sp, used: false, is_param: is_param,
                            glue: false, rdepth: 0, id: id + 1, captured: false, written: false, region_handle: false, byref: false, outer: -1, taint: -1, rd: 0 });
     return id;
 }
 
-fn declare_local(ck: *Checker, name: str, ty: i64, is_mut: bool, sp: ast.Span, is_param: bool) -> i64 {
+pub fn declare_local(ck: *Checker, name: str, ty: i64, is_mut: bool, sp: ast.Span, is_param: bool) -> i64 {
     let top = ck.scopes.len - 1;
     if name == "null" {
         here(ck, sp, "`null` is a reserved name", "", "it is the null pointer literal");
@@ -2193,12 +2204,12 @@ fn declare_local(ck: *Checker, name: str, ty: i64, is_mut: bool, sp: ast.Span, i
 
 // ---- destructors and moves ------------------------------------------------------------------------------------------
 
-fn drop_fn_of(ck: *Checker, sid: i64) -> i64 {
+pub fn drop_fn_of(ck: *Checker, sid: i64) -> i64 {
     if ck.syms.at(sid).base >= 0 { return ck.syms.at(sid).drop_inst; }
     return ck.syms.at(sid).tparams.len == 0 ? ck.syms.at(sid).drop_sym : -1;
 }
 
-fn has_glue(ck: *Checker, t: i64) -> bool {
+pub fn has_glue(ck: *Checker, t: i64) -> bool {
     let k = tk(ck, t);
     if t == types.STRING { return true; }
     if k == types.K_ARR || k == types.K_OPT { return has_glue(ck, ck.types.tys.at(t).inner); }
@@ -2219,24 +2230,24 @@ fn has_glue(ck: *Checker, t: i64) -> bool {
     return r;
 }
 
-fn moved_at(l: *List<MovedEnt>, local: i64) -> i64 {
+pub fn moved_at(l: *List<MovedEnt>, local: i64) -> i64 {
     for i in 0..l.len { if l.at(i).local == local { return i; } }
     return -1;
 }
 
-fn copy_moved(l: *List<MovedEnt>) -> List<MovedEnt> {
+pub fn copy_moved(l: *List<MovedEnt>) -> List<MovedEnt> {
     let mut o: List<MovedEnt> = List.new();
     for i in 0..l.len { o.push(MovedEnt { local: l.at(i).local, line: l.at(i).line }); }
     return o;
 }
 
-fn set_moved(l: *List<MovedEnt>, local: i64, line: i64) {
+pub fn set_moved(l: *List<MovedEnt>, local: i64, line: i64) {
     let at = moved_at(l, local);
     if at >= 0 { l.at(at).line = line; } else { l.push(MovedEnt { local: local, line: line }); }
 }
 
 // the first state to mention a variable wins
-fn merge_moved(m0: *List<MovedEnt>, states: *List<List<MovedEnt>>) -> List<MovedEnt> {
+pub fn merge_moved(m0: *List<MovedEnt>, states: *List<List<MovedEnt>>) -> List<MovedEnt> {
     if states.len == 0 { return copy_moved(m0); }
     let mut out: List<MovedEnt> = List.new();
     for s in 0..states.len {
@@ -2248,7 +2259,7 @@ fn merge_moved(m0: *List<MovedEnt>, states: *List<List<MovedEnt>>) -> List<Moved
 }
 
 // `e` is used by value where ownership is taken: a variable is moved, anything else must be a temporary
-fn consume(ck: *Checker, e: *ast.Node) {
+pub fn consume(ck: *Checker, e: *ast.Node) {
     let t = ety(e);
     if t == -2 || t == types.POISON || !has_glue(ck, t) || flag(e, "coerce") { return; }
     let k: str = e.kind;
@@ -2281,7 +2292,7 @@ fn consume(ck: *Checker, e: *ast.Node) {
 
 // ---- control-flow analysis --------------------------------------------------------------------------------------------
 
-fn has_break_val(v: *ast.Val) -> bool {
+pub fn has_break_val(v: *ast.Val) -> bool {
     if v.tag == 4 { return has_break(v.node.at(0)); }
     if v.tag == 5 {
         for i in 0..v.items.len { if has_break_val(v.items.at(i)) { return true; } }
@@ -2289,7 +2300,7 @@ fn has_break_val(v: *ast.Val) -> bool {
     return false;
 }
 
-fn has_break(n: *ast.Node) -> bool {
+pub fn has_break(n: *ast.Node) -> bool {
     if n.kind == "Break" { return true; }
     if n.kind == "While" || n.kind == "Loop" || n.kind == "For" { return false; }
     for i in 0..n.attrs.len {
@@ -2299,7 +2310,7 @@ fn has_break(n: *ast.Node) -> bool {
     return false;
 }
 
-fn terminates(ck: *Checker, s: *ast.Node) -> bool {
+pub fn terminates(ck: *Checker, s: *ast.Node) -> bool {
     let k: str = s.kind;
     if k == "Return" || k == "Throw" || k == "Break" || k == "Continue" { return true; }
     if k == "ExprStmt" {
@@ -2333,7 +2344,7 @@ fn terminates(ck: *Checker, s: *ast.Node) -> bool {
 
 // ---- name resolution --------------------------------------------------------------------------------------------------
 
-fn syms_of_kind_names(ck: *Checker, mi: i64, a: str, b: str, out: *List<String>) {
+pub fn syms_of_kind_names(ck: *Checker, mi: i64, a: str, b: str, out: *List<String>) {
     let cm = ck.cmods.at(mi);
     for q in 0..cm.order.len {
         let s = ck.syms.at(*cm.order.at(q));
@@ -2341,7 +2352,7 @@ fn syms_of_kind_names(ck: *Checker, mi: i64, a: str, b: str, out: *List<String>)
     }
 }
 
-fn entity(ck: *Checker, e: *ast.Node) -> Ent {
+pub fn entity(ck: *Checker, e: *ast.Node) -> Ent {
     let none = Ent { kind: 0, idx: -1 };
     let mi = ck.cur_mod;
     if e.kind == "Ident" {
@@ -2390,7 +2401,7 @@ fn entity(ck: *Checker, e: *ast.Node) -> Ent {
 
 // ---- helpers for diagnostics and conversions ------------------------------------------------------------------------------
 
-fn mismatch(ck: *Checker, e: *ast.Node, exp: i64, got: i64, what: str) {
+pub fn mismatch(ck: *Checker, e: *ast.Node, exp: i64, got: i64, what: str) {
     let mut help = String.empty();
     if types.is_float(exp) && e.kind == "Int" && !has_suffix(e) {
         help = format("write the literal as a float, e.g. `{int_text(e)}.0`");
@@ -2406,7 +2417,7 @@ fn mismatch(ck: *Checker, e: *ast.Node, exp: i64, got: i64, what: str) {
     here(ck, e.span, what, format("expected `{es}`, found `{gs}`"), help);
 }
 
-fn ro_violation(ck: *Checker, e: *ast.Node, t: i64, exp: i64) -> bool {
+pub fn ro_violation(ck: *Checker, e: *ast.Node, t: i64, exp: i64) -> bool {
     if tk(ck, t) == types.K_PTR && tk(ck, exp) == types.K_PTR && ck.types.tys.at(t).ro && !ck.types.tys.at(exp).ro
         && types.same(&ck.types, t, exp) && !flag(e, "recv_ok") {
         let es = ty_str(ck, exp);
@@ -2420,11 +2431,11 @@ fn ro_violation(ck: *Checker, e: *ast.Node, t: i64, exp: i64) -> bool {
 }
 
 // `*T` converts implicitly to `*void` (as in C), never the other way round
-fn ptr_ok(ck: *Checker, exp: i64, t: i64) -> bool {
+pub fn ptr_ok(ck: *Checker, exp: i64, t: i64) -> bool {
     return tk(ck, exp) == types.K_PTR && ck.types.tys.at(exp).inner == types.VOID && tk(ck, t) == types.K_PTR;
 }
 
-fn lint(ck: *Checker, sp: ast.Span, msg: str, label: str, help: str) {
+pub fn lint(ck: *Checker, sp: ast.Span, msg: str, label: str, help: str) {
     if ck.strict {
         let h = help.len > 0 ? format("{help} (error because of --strict-casts)") : String.from("error because of --strict-casts");
         here(ck, sp, msg, label, h);
@@ -2434,7 +2445,7 @@ fn lint(ck: *Checker, sp: ast.Span, msg: str, label: str, help: str) {
 }
 
 // the type both numeric operands are converted to (-1 if there is no lossless choice)
-fn common_type(a: i64, b: i64) -> i64 {
+pub fn common_type(a: i64, b: i64) -> i64 {
     if types.is_float(a) || types.is_float(b) {
         if types.is_float(a) && types.is_float(b) { return types.F64; }
         return types.is_float(a) ? a : b;
@@ -2451,7 +2462,7 @@ fn common_type(a: i64, b: i64) -> i64 {
 }
 
 // 0 none, 1 widen, 2 checked, 3 lossy, 4 fnarrow, 5 bad
-fn conv_kind(src: i64, dst: i64) -> i64 {
+pub fn conv_kind(src: i64, dst: i64) -> i64 {
     if src == dst { return 0; }
     if types.is_int(src) && types.is_int(dst) {
         let widen = types.signed(src) == types.signed(dst) ? types.bits(dst) >= types.bits(src)
@@ -2465,7 +2476,7 @@ fn conv_kind(src: i64, dst: i64) -> i64 {
     return 5;
 }
 
-fn kind_name(k: i64) -> str {
+pub fn kind_name(k: i64) -> str {
     if k == 1 { return "widen"; }
     if k == 2 { return "checked"; }
     if k == 3 { return "lossy"; }
@@ -2473,7 +2484,7 @@ fn kind_name(k: i64) -> str {
 }
 
 // records an implicit conversion on `node` (src -> dst); false after reporting an error
-fn apply_conv(ck: *Checker, node: *ast.Node, src: i64, dst: i64) -> bool {
+pub fn apply_conv(ck: *Checker, node: *ast.Node, src: i64, dst: i64) -> bool {
     set_nil(node, "conv");
     let mut kind = conv_kind(src, dst);
     if kind == 0 { return true; }
@@ -2526,7 +2537,7 @@ fn apply_conv(ck: *Checker, node: *ast.Node, src: i64, dst: i64) -> bool {
 }
 
 // both operands of a binary operation converted to a common numeric type (-1 on error)
-fn binary_conv(ck: *Checker, e: *ast.Node, lt: i64, rt: i64) -> i64 {
+pub fn binary_conv(ck: *Checker, e: *ast.Node, lt: i64, rt: i64) -> i64 {
     let op: str = e.str_of("op");
     let ct = common_type(lt, rt);
     let opsp = e.get("op_span").span;
@@ -2558,7 +2569,7 @@ fn binary_conv(ck: *Checker, e: *ast.Node, lt: i64, rt: i64) -> i64 {
 }
 
 // converts the checked expression `e` (of type `t`) implicitly to `exp`, or reports a mismatch
-fn coerce(ck: *Checker, e: *ast.Node, t: i64, exp: i64) -> i64 {
+pub fn coerce(ck: *Checker, e: *ast.Node, t: i64, exp: i64) -> i64 {
     set_nil(e, "conv");
     set_nil(e, "wrap_opt");
     if tk(ck, exp) == types.K_OPT && !types.same(&ck.types, t, exp) {
@@ -2587,16 +2598,16 @@ fn coerce(ck: *Checker, e: *ast.Node, t: i64, exp: i64) -> i64 {
     return t;
 }
 
-fn expect(ck: *Checker, e: *ast.Node, exp: i64, eu_ok: bool) -> i64 {
+pub fn expect(ck: *Checker, e: *ast.Node, exp: i64, eu_ok: bool) -> i64 {
     let t = check(ck, e, exp, eu_ok);
     return coerce(ck, e, t, exp);
 }
 
-fn is_null(ck: *Checker, e: *ast.Node) -> bool {
+pub fn is_null(ck: *Checker, e: *ast.Node) -> bool {
     return e.kind == "Ident" && e.str_of("name") == "null" && lookup_local(ck, "null") < 0;
 }
 
-fn untyped(ck: *Checker, e: *ast.Node) -> bool {
+pub fn untyped(ck: *Checker, e: *ast.Node) -> bool {
     let k: str = e.kind;
     if k == "Ident" && e.str_of("name") == "null" && lookup_local(ck, "null") < 0 { return true; }
     if k == "Int" || k == "Float" { return !has_suffix(e); }
@@ -2607,7 +2618,7 @@ fn untyped(ck: *Checker, e: *ast.Node) -> bool {
     return false;
 }
 
-fn lit_is_float(e: *ast.Node) -> bool {
+pub fn lit_is_float(e: *ast.Node) -> bool {
     if e.kind == "Float" { return true; }
     if e.kind == "Unary" { return lit_is_float(e.node_of("expr")); }
     if e.kind == "Binary" { return lit_is_float(e.node_of("l")) || lit_is_float(e.node_of("r")); }
@@ -2665,13 +2676,13 @@ pub fn check(ck: *Checker, e: *ast.Node, exp: i64, eu: bool) -> i64 {
 
 // ---- literals -------------------------------------------------------------------------------------------------------------
 
-fn suffix_type(s: str) -> i64 {
+pub fn suffix_type(s: str) -> i64 {
     if s == "f32" { return types.F32; }
     if s == "f64" { return types.F64; }
     return types.prim_named(s);
 }
 
-fn ex_int(ck: *Checker, e: *ast.Node, exp: i64, neg: bool) -> i64 {
+pub fn ex_int(ck: *Checker, e: *ast.Node, exp: i64, neg: bool) -> i64 {
     let mag = int_text(e);
     let mut ty = types.I32;
     if has_suffix(e) { ty = suffix_type(e.str_of("suffix")); }
@@ -2697,7 +2708,7 @@ fn ex_int(ck: *Checker, e: *ast.Node, exp: i64, neg: bool) -> i64 {
     return ty;
 }
 
-fn ex_float(e: *ast.Node, exp: i64, ck: *Checker) -> i64 {
+pub fn ex_float(e: *ast.Node, exp: i64, ck: *Checker) -> i64 {
     if has_suffix(e) { return suffix_type(e.str_of("suffix")); }
     if exp >= 0 && types.is_float(exp) { return exp; }
     return types.F64;
@@ -2705,7 +2716,7 @@ fn ex_float(e: *ast.Node, exp: i64, ck: *Checker) -> i64 {
 
 // ---- names ------------------------------------------------------------------------------------------------------------------
 
-fn fn_value(ck: *Checker, e: *ast.Node, sid: i64) -> i64 {
+pub fn fn_value(ck: *Checker, e: *ast.Node, sid: i64) -> i64 {
     let name = String.from(ck.syms.at(sid).name);
     if ck.syms.at(sid).tparams.len > 0 {
         here(ck, e.span, format("generic function `{name}` cannot be used as a value"), "",
@@ -2726,18 +2737,18 @@ fn fn_value(ck: *Checker, e: *ast.Node, sid: i64) -> i64 {
     return types.fnty(&ck.types, &ps, rt);
 }
 
-fn has_id(l: *List<i64>, x: i64) -> bool {
+pub fn has_id(l: *List<i64>, x: i64) -> bool {
     for i in 0..l.len { if *l.at(i) == x { return true; } }
     return false;
 }
 
-fn copy_ids(l: *List<i64>) -> List<i64> {
+pub fn copy_ids(l: *List<i64>) -> List<i64> {
     let mut o: List<i64> = List.new();
     for i in 0..l.len { o.push(*l.at(i)); }
     return o;
 }
 
-fn ex_ident(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+pub fn ex_ident(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     let name = String.from(e.str_of("name"));
     let mi = ck.cur_mod;
     if name == "null" && lookup_local(ck, "null") < 0 {
@@ -2794,12 +2805,12 @@ fn ex_ident(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     return types.POISON;
 }
 
-fn variant_index(ck: *Checker, sid: i64, name: str) -> i64 {
+pub fn variant_index(ck: *Checker, sid: i64, name: str) -> i64 {
     for i in 0..ck.syms.at(sid).variants.len { if *ck.syms.at(sid).variants.at(i) == name { return i; } }
     return -1;
 }
 
-fn ex_field(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+pub fn ex_field(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     let ent = entity(ck, e);
     let name = String.from(e.str_of("name"));
     let nsp = e.get("name_span").span;
@@ -2905,7 +2916,7 @@ fn ex_field(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
 
 // ---- places ----------------------------------------------------------------------------------------------------------------
 
-fn is_place(e: *ast.Node) -> bool {
+pub fn is_place(e: *ast.Node) -> bool {
     let k: str = e.kind;
     if k == "Ident" { return e.has("local") && e.get("local").tag == 12; }
     if k == "Field" { return e.has("mode") && (e.str_of("mode") == "field" || e.str_of("mode") == "ptrfield"); }
@@ -2915,7 +2926,7 @@ fn is_place(e: *ast.Node) -> bool {
 }
 
 // is `e` the `self` of the method being checked, declared with plain `self` (not `mut self`)?
-fn readonly_self(ck: *Checker, e: *ast.Node) -> bool {
+pub fn readonly_self(ck: *Checker, e: *ast.Node) -> bool {
     if e.kind != "Ident" { return false; }
     if !(e.has("local") && e.get("local").tag == 12) { return false; }
     let loc = e.get("local").i;
@@ -2923,10 +2934,10 @@ fn readonly_self(ck: *Checker, e: *ast.Node) -> bool {
         && ck.syms.at(ck.fn_sym).has_self && !ck.syms.at(ck.fn_sym).self_mut;
 }
 
-fn ptr_ro_of(ck: *Checker, t: i64) -> bool { return tk(ck, t) == types.K_PTR && ck.types.tys.at(t).ro; }
+pub fn ptr_ro_of(ck: *Checker, t: i64) -> bool { return tk(ck, t) == types.K_PTR && ck.types.tys.at(t).ro; }
 
 // true when `e` is not a mutable place; `label` and `help` then explain why
-fn place_mut(ck: *Checker, e: *ast.Node, label: *String, help: *String) -> bool {
+pub fn place_mut(ck: *Checker, e: *ast.Node, label: *String, help: *String) -> bool {
     let k: str = e.kind;
     if k == "Ident" {
         let loc = e.get("local").i;
@@ -2985,7 +2996,7 @@ fn place_mut(ck: *Checker, e: *ast.Node, label: *String, help: *String) -> bool 
 }
 
 // does the place `e` lie behind a `*const` pointer?
-fn through_ro(ck: *Checker, e: *ast.Node) -> bool {
+pub fn through_ro(ck: *Checker, e: *ast.Node) -> bool {
     let k: str = e.kind;
     if k == "Field" {
         if e.str_of("mode") == "ptrfield" { return ptr_ro_of(ck, ety(e.node_of("obj"))) || readonly_self(ck, e.node_of("obj")); }
@@ -3000,7 +3011,7 @@ fn through_ro(ck: *Checker, e: *ast.Node) -> bool {
 
 // ---- operators ----------------------------------------------------------------------------------------------------------------
 
-fn ex_unary(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+pub fn ex_unary(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     let op: str = e.str_of("op");
     let inner = e.node_of("expr");
     if op == "-" {
@@ -3088,7 +3099,7 @@ fn ex_unary(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     return types.ptr(&ck.types, t, false);
 }
 
-fn ex_binary(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+pub fn ex_binary(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     let op: str = e.str_of("op");
     let l = e.node_of("l");
     let r = e.node_of("r");
@@ -3223,7 +3234,7 @@ fn ex_binary(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     return types.BOOL;
 }
 
-fn ex_cast(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+pub fn ex_cast(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     let target = resolve_type(ck, e.node_of("tyn"), ck.cur_mod, false);
     let inner = e.node_of("expr");
     let mut hint = -1 as i64;
@@ -3261,7 +3272,7 @@ fn ex_cast(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     return target;
 }
 
-fn ex_incdec(ck: *Checker, e: *ast.Node) -> i64 {
+pub fn ex_incdec(ck: *Checker, e: *ast.Node) -> i64 {
     let inner = e.node_of("expr");
     let t = check(ck, inner, -1, false);
     if t == types.POISON { return types.POISON; }
@@ -3285,7 +3296,7 @@ fn ex_incdec(ck: *Checker, e: *ast.Node) -> i64 {
 
 // ---- calls ---------------------------------------------------------------------------------------------------------------------
 
-fn is_builtin_name(s: str) -> bool {
+pub fn is_builtin_name(s: str) -> bool {
     let names = ["print", "println", "format", "panic", "assert", "alloc", "free", "exit", "to_str", "string_new", "string_from",
                  "string_clear", "cstr", "from_cstr", "slice_of", "size_of", "drop", "drop_at", "write_at", "read_at", "gc_collect",
                  "gc_bytes", "gc_collections", "alloc_in", "gc_collect_gen", "gc_gen_bytes", "gc_gen_collections"];
@@ -3293,7 +3304,7 @@ fn is_builtin_name(s: str) -> bool {
     return false;
 }
 
-fn callee_is_value(ck: *Checker, c: *ast.Node, ent: Ent) -> bool {
+pub fn callee_is_value(ck: *Checker, c: *ast.Node, ent: Ent) -> bool {
     if c.kind != "Ident" && c.kind != "Field" { return true; }
     if ent.kind != 0 { return false; }
     let mut root = c;
@@ -3302,16 +3313,16 @@ fn callee_is_value(ck: *Checker, c: *ast.Node, ent: Ent) -> bool {
     return lookup_local(ck, root.str_of("name")) >= 0;
 }
 
-fn default_ok(d: *ast.Node) -> bool {
+pub fn default_ok(d: *ast.Node) -> bool {
     if d.kind == "Int" || d.kind == "Float" || d.kind == "Bool" || d.kind == "Str" { return true; }
     if d.kind == "Ident" && d.str_of("name") == "null" { return true; }
     return d.kind == "Unary" && d.str_of("op") == "-" && (d.node_of("expr").kind == "Int" || d.node_of("expr").kind == "Float");
 }
 
-fn param_has_default(p: *ast.Node) -> bool { return p.has("default") && p.get("default").tag != 0; }
+pub fn param_has_default(p: *ast.Node) -> bool { return p.has("default") && p.get("default").tag != 0; }
 
 // matches the written arguments to the parameters: positional first, then `name = value`, then defaults
-fn normalize_args(ck: *Checker, e: *ast.Node, sid: i64) -> bool {
+pub fn normalize_args(ck: *Checker, e: *ast.Node, sid: i64) -> bool {
     let nid = ck.syms.at(sid).node;
     if !ck.nodes.at(nid).has("params") { return true; }
     let pv = ck.nodes.at(nid).get("params");
@@ -3447,7 +3458,7 @@ fn normalize_args(ck: *Checker, e: *ast.Node, sid: i64) -> bool {
     return true;
 }
 
-fn vararg(ck: *Checker, a: *ast.Node) {
+pub fn vararg(ck: *Checker, a: *ast.Node) {
     let t = check(ck, a, -1, false);
     set_nil(a, "conv");
     let k = tk(ck, t);
@@ -3457,7 +3468,7 @@ fn vararg(ck: *Checker, a: *ast.Node) {
          "pass `cstr(s)` for a C string, or an integer, float, bool or pointer");
 }
 
-fn check_args(ck: *Checker, e: *ast.Node, params: *List<i64>, name: str, sig: str, variadic: bool) {
+pub fn check_args(ck: *Checker, e: *ast.Node, params: *List<i64>, name: str, sig: str, variadic: bool) {
     let n = params.len;
     let na = e.get("args").items.len;
     let bad = na < n || (na > n && !variadic);
@@ -3479,11 +3490,11 @@ fn check_args(ck: *Checker, e: *ast.Node, params: *List<i64>, name: str, sig: st
     }
 }
 
-fn check_all_args(ck: *Checker, e: *ast.Node) {
+pub fn check_all_args(ck: *Checker, e: *ast.Node) {
     for i in 0..e.get("args").items.len { check(ck, e.get("args").items.at(i).node.at(0), -1, false); }
 }
 
-fn indirect_call(ck: *Checker, e: *ast.Node) -> i64 {
+pub fn indirect_call(ck: *Checker, e: *ast.Node) -> i64 {
     let c = e.node_of("callee");
     let t = check(ck, c, -1, false);
     if t == types.POISON {
@@ -3504,7 +3515,7 @@ fn indirect_call(ck: *Checker, e: *ast.Node) -> i64 {
     return ck.types.tys.at(t).inner;
 }
 
-fn ex_call(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+pub fn ex_call(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     let r = ex_call_inner(ck, e, exp);
     if e.has("orig_args") {
         let off = flag(e, "method_recv") ? 1 : 0;
@@ -3515,7 +3526,7 @@ fn ex_call(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     return r;
 }
 
-fn ex_call_inner(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+pub fn ex_call_inner(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     let c = e.node_of("callee");
     let mi = ck.cur_mod;
     if c.kind == "Ident" && is_builtin_name(c.str_of("name")) && lookup_local(ck, c.str_of("name")) < 0 {
@@ -3608,23 +3619,23 @@ fn ex_call_inner(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
 
 // ---- generic calls -----------------------------------------------------------------------------------------------------------
 
-fn b_has(b: *List<NameTy>, n: str) -> bool {
+pub fn b_has(b: *List<NameTy>, n: str) -> bool {
     for i in 0..b.len { if b.at(i).name == n { return true; } }
     return false;
 }
 
-fn b_get(b: *List<NameTy>, n: str) -> i64 {
+pub fn b_get(b: *List<NameTy>, n: str) -> i64 {
     for i in 0..b.len { if b.at(i).name == n { return b.at(i).ty; } }
     return -1;
 }
 
-fn is_tparam(ck: *Checker, sid: i64, name: str) -> bool {
+pub fn is_tparam(ck: *Checker, sid: i64, name: str) -> bool {
     for i in 0..ck.syms.at(sid).tparams.len { if *ck.syms.at(sid).tparams.at(i) == name { return true; } }
     return false;
 }
 
 // binds type parameters of `sid` by matching the type AST `tn` against the concrete type `ty`
-fn unify(ck: *Checker, tn: *ast.Node, ty: i64, sid: i64, b: *List<NameTy>) {
+pub fn unify(ck: *Checker, tn: *ast.Node, ty: i64, sid: i64, b: *List<NameTy>) {
     if ty < 0 || ty == types.POISON { return; }
     let k: str = tn.kind;
     let tkd = tk(ck, ty);
@@ -3656,7 +3667,7 @@ fn unify(ck: *Checker, tn: *ast.Node, ty: i64, sid: i64, b: *List<NameTy>) {
     }
 }
 
-fn tn_known(ck: *Checker, x: *ast.Node, sid: i64, b: *List<NameTy>) -> bool {
+pub fn tn_known(ck: *Checker, x: *ast.Node, sid: i64, b: *List<NameTy>) -> bool {
     if x.kind == "TName" {
         if x.get("path").items.len == 1 && is_tparam(ck, sid, x.get("path").items.at(0).s) && !b_has(b, x.get("path").items.at(0).s)
             && x.get("args").items.len == 0 { return false; }
@@ -3668,7 +3679,7 @@ fn tn_known(ck: *Checker, x: *ast.Node, sid: i64, b: *List<NameTy>) -> bool {
 }
 
 // the closure type a closure argument is checked against: the parameter types known so far (the rest unknown)
-fn clo_hint(ck: *Checker, tn: *ast.Node, sid: i64, b: *List<NameTy>) -> i64 {
+pub fn clo_hint(ck: *Checker, tn: *ast.Node, sid: i64, b: *List<NameTy>) -> i64 {
     let smi = ck.syms.at(sid).mod_idx;
     let saved_mod = ck.cur_mod;
     let mut env: List<NameTy> = List.new();
@@ -3691,12 +3702,12 @@ fn clo_hint(ck: *Checker, tn: *ast.Node, sid: i64, b: *List<NameTy>) -> i64 {
     return types.clo(&ck.types, &ps, ret);
 }
 
-fn is_bare_param(ck: *Checker, tn: *ast.Node, sid: i64, b: *List<NameTy>) -> bool {
+pub fn is_bare_param(ck: *Checker, tn: *ast.Node, sid: i64, b: *List<NameTy>) -> bool {
     return tn.kind == "TName" && tn.get("path").items.len == 1 && is_tparam(ck, sid, tn.get("path").items.at(0).s)
         && b_has(b, tn.get("path").items.at(0).s);
 }
 
-fn report_uninferred(ck: *Checker, sp: ast.Span, sid: i64, b: *List<NameTy>, is_fn: bool) {
+pub fn report_uninferred(ck: *Checker, sp: ast.Span, sid: i64, b: *List<NameTy>, is_fn: bool) {
     let mut names = String.empty();
     let mut all = String.empty();
     let mut n = 0;
@@ -3717,7 +3728,7 @@ fn report_uninferred(ck: *Checker, sp: ast.Span, sid: i64, b: *List<NameTy>, is_
 }
 
 // checks an argument only to learn its type: the moves it makes are undone, since the real check comes later
-fn probe(ck: *Checker, a: *ast.Node) -> i64 {
+pub fn probe(ck: *Checker, a: *ast.Node) -> i64 {
     let saved = copy_moved(&ck.moved);
     let t = check(ck, a, -1, false);
     ck.moved = saved;
@@ -3725,7 +3736,7 @@ fn probe(ck: *Checker, a: *ast.Node) -> i64 {
 }
 
 // returns the instance symbol, or -1
-fn instantiate_call(ck: *Checker, e: *ast.Node, sid: i64, exp: i64) -> i64 {
+pub fn instantiate_call(ck: *Checker, e: *ast.Node, sid: i64, exp: i64) -> i64 {
     let nid = ck.syms.at(sid).node;
     let ntp = ck.syms.at(sid).tparams.len;
     let nparams = ck.nodes.at(nid).get("params").items.len;
@@ -3804,7 +3815,7 @@ fn instantiate_call(ck: *Checker, e: *ast.Node, sid: i64, exp: i64) -> i64 {
 }
 
 // the receiver node is shared between `callee.obj` and the first argument in the Python tree: copy the checked one back
-fn sync_receiver(ck: *Checker, e: *ast.Node, wrapped: bool) {
+pub fn sync_receiver(ck: *Checker, e: *ast.Node, wrapped: bool) {
     let first = e.get("args").items.at(0).node.at(0);
     let orig = e.node_of("callee").node_of("obj");
     let mut recv = ast.clone_node(first);
@@ -3818,7 +3829,7 @@ fn sync_receiver(ck: *Checker, e: *ast.Node, wrapped: bool) {
 
 // ---- statements ----------------------------------------------------------------------------------------------------------------
 
-fn check_block(ck: *Checker, b: *ast.Node, scope: bool) {
+pub fn check_block(ck: *Checker, b: *ast.Node, scope: bool) {
     if scope { push_scope(ck); }
     let mut warned = false;
     let mut dead = false;
@@ -3835,7 +3846,7 @@ fn check_block(ck: *Checker, b: *ast.Node, scope: bool) {
     if scope { pop_scope(ck); }
 }
 
-fn check_stmt(ck: *Checker, s: *ast.Node) {
+pub fn check_stmt(ck: *Checker, s: *ast.Node) {
     let k: str = s.kind;
     if k == "Block" { check_block(ck, s, true); }
     else if k == "Let" { st_let(ck, s); }
@@ -3855,7 +3866,7 @@ fn check_stmt(ck: *Checker, s: *ast.Node) {
     else { here(ck, s.span, format("UNIMPLEMENTED in the Crumbs checker: statement {k}"), "", ""); }
 }
 
-fn st_let(ck: *Checker, s: *ast.Node) {
+pub fn st_let(ck: *Checker, s: *ast.Node) {
     let has_ann = !s.is_none("tyn");
     let ann = has_ann ? resolve_type(ck, s.node_of("tyn"), ck.cur_mod, false) : -1;
     let init = s.node_of("init");
@@ -3896,12 +3907,12 @@ fn st_let(ck: *Checker, s: *ast.Node) {
     if ty != types.POISON && holds_ptr(ck, ty) { ck.locals.at(loc).taint = taint(ck, s.node_of("init")); }
 }
 
-fn cond(ck: *Checker, c: *ast.Node) {
+pub fn cond(ck: *Checker, c: *ast.Node) {
     let t = check(ck, c, types.BOOL, false);
     if !types.same(&ck.types, t, types.BOOL) { mismatch(ck, c, types.BOOL, t, "condition must be a `bool`"); }
 }
 
-fn st_if(ck: *Checker, s: *ast.Node) {
+pub fn st_if(ck: *Checker, s: *ast.Node) {
     cond(ck, s.node_of("cond"));
     let mut m0 = copy_moved(&ck.moved);
     check_block(ck, s.node_of("then"), true);
@@ -3918,7 +3929,7 @@ fn st_if(ck: *Checker, s: *ast.Node) {
     ck.moved = merge_moved(&m0, &states);
 }
 
-fn loop_body(ck: *Checker, s: *ast.Node, mode: i64, vt: i64) {
+pub fn loop_body(ck: *Checker, s: *ast.Node, mode: i64, vt: i64) {
     if mode == 1 { cond(ck, s.node_of("cond")); }
     if mode == 2 {
         push_scope(ck);
@@ -3936,9 +3947,9 @@ fn loop_body(ck: *Checker, s: *ast.Node, mode: i64, vt: i64) {
 }
 
 // checks a loop body (twice if it moves an outer variable) and computes the moved-set after the loop
-fn in_loop(ck: *Checker, s: *ast.Node, is_while: bool) { in_loop_m(ck, s, is_while ? 1 : 0, is_while, -1); }
+pub fn in_loop(ck: *Checker, s: *ast.Node, is_while: bool) { in_loop_m(ck, s, is_while ? 1 : 0, is_while, -1); }
 
-fn in_loop_m(ck: *Checker, s: *ast.Node, mode: i64, is_while: bool, vt: i64) {
+pub fn in_loop_m(ck: *Checker, s: *ast.Node, mode: i64, is_while: bool, vt: i64) {
     let mut m0 = copy_moved(&ck.moved);
     let start_id = ck.locals.len;
     ck.loop_stack.push(LoopFrame { breaks: List.new(), conts: List.new() });
@@ -3978,7 +3989,7 @@ fn in_loop_m(ck: *Checker, s: *ast.Node, mode: i64, is_while: bool, vt: i64) {
 }
 
 // how `for x in e` iterates a value of type `ot`: 1 = `next` (it is an iterator), 2 = it has `iter()`, 0 = neither
-fn iter_protocol(ck: *Checker, ot: i64) -> i64 {
+pub fn iter_protocol(ck: *Checker, ot: i64) -> i64 {
     if ot == types.POISON || tk(ck, ot) != types.K_STRUCT { return 0; }
     let key = type_key(ck, ot);
     let nx = meth_find(ck, key, "next");
@@ -3988,13 +3999,13 @@ fn iter_protocol(ck: *Checker, ot: i64) -> i64 {
     return 0;
 }
 
-fn mk_ident(sp: ast.Span, name: str) -> ast.Node {
+pub fn mk_ident(sp: ast.Span, name: str) -> ast.Node {
     let mut n = ast.new_node("Ident", sp);
     n.set("name", ast.v_str(name));
     return n;
 }
 
-fn mk_mcall(sp: ast.Span, obj: ast.Node, name: str) -> ast.Node {
+pub fn mk_mcall(sp: ast.Span, obj: ast.Node, name: str) -> ast.Node {
     let mut f = ast.new_node("Field", sp);
     f.set("obj", ast.v_node(obj));
     f.set("name", ast.v_str(name));
@@ -4004,7 +4015,7 @@ fn mk_mcall(sp: ast.Span, obj: ast.Node, name: str) -> ast.Node {
     return c;
 }
 
-fn mk_let(sp: ast.Span, name: str, is_mut: bool, init: ast.Node, nsp: ast.Span) -> ast.Node {
+pub fn mk_let(sp: ast.Span, name: str, is_mut: bool, init: ast.Node, nsp: ast.Span) -> ast.Node {
     let mut n = ast.new_node("Let", sp);
     n.set("name", ast.v_str(name));
     n.set("mut", ast.v_bool(is_mut));
@@ -4014,14 +4025,14 @@ fn mk_let(sp: ast.Span, name: str, is_mut: bool, init: ast.Node, nsp: ast.Span) 
     return n;
 }
 
-fn mk_block(sp: ast.Span, stmts: List<ast.Node>) -> ast.Node {
+pub fn mk_block(sp: ast.Span, stmts: List<ast.Node>) -> ast.Node {
     let mut b = ast.new_node("Block", sp);
     b.set("stmts", ast.v_list(ast.vals_of(stmts)));
     b.set("end_span", ast.v_span(sp));
     return b;
 }
 
-fn desugar_for(ck: *Checker, s: *ast.Node, proto: i64) {
+pub fn desugar_for(ck: *Checker, s: *ast.Node, proto: i64) {
     let sp = s.span;
     let it = ast.clone_node(s.node_of("iter"));
     let src = proto == 1 ? it : mk_mcall(sp, it, "iter");
@@ -4055,7 +4066,7 @@ fn desugar_for(ck: *Checker, s: *ast.Node, proto: i64) {
     s.set("desugared", ast.v_node(outer));
 }
 
-fn st_for(ck: *Checker, s: *ast.Node) {
+pub fn st_for(ck: *Checker, s: *ast.Node) {
     let it = s.node_of("iter");
     let mut vt = types.POISON;
     if it.kind == "Range" {
@@ -4119,7 +4130,7 @@ fn st_for(ck: *Checker, s: *ast.Node) {
 // ---- error handling, optionals, match ----------------------------------------------------------------------------------------
 
 // inside `try { }` a failing call needs no `try`: its error goes to the block's handler
-fn auto_try(ck: *Checker, e: *ast.Node, t: i64) -> i64 {
+pub fn auto_try(ck: *Checker, e: *ast.Node, t: i64) -> i64 {
     set_flag(e, "auto_try", true);
     set_tyn(e, "eu_ty", t);
     let top = ck.try_stack.len - 1;
@@ -4129,9 +4140,9 @@ fn auto_try(ck: *Checker, e: *ast.Node, t: i64) -> i64 {
     return inner;
 }
 
-fn fn_ret_str(ck: *Checker) -> String { return ty_str(ck, ck.fn_ret); }
+pub fn fn_ret_str(ck: *Checker) -> String { return ty_str(ck, ck.fn_ret); }
 
-fn ex_try(ck: *Checker, e: *ast.Node) -> i64 {
+pub fn ex_try(ck: *Checker, e: *ast.Node) -> i64 {
     let t = check(ck, e.node_of("expr"), -1, true);
     if t == types.POISON { return types.POISON; }
     if tk(ck, t) != types.K_EU {
@@ -4151,7 +4162,7 @@ fn ex_try(ck: *Checker, e: *ast.Node) -> i64 {
     return ck.types.tys.at(t).inner;
 }
 
-fn bind_err(ck: *Checker, e: *ast.Node) {
+pub fn bind_err(ck: *Checker, e: *ast.Node) {
     if !e.is_none("binder") {
         let loc = declare_local(ck, e.str_of("binder"), types.ERR, false, e.get("binder_span").span, false);
         ck.locals.at(loc).used = true;
@@ -4159,7 +4170,7 @@ fn bind_err(ck: *Checker, e: *ast.Node) {
     } else { set_nil(e, "binder_local"); }
 }
 
-fn check_handler_loosely(ck: *Checker, e: *ast.Node) {
+pub fn check_handler_loosely(ck: *Checker, e: *ast.Node) {
     let h = e.node_of("handler");
     if h.kind == "Block" {
         push_scope(ck);
@@ -4169,7 +4180,7 @@ fn check_handler_loosely(ck: *Checker, e: *ast.Node) {
     } else { check(ck, h, -1, false); }
 }
 
-fn ex_catch(ck: *Checker, e: *ast.Node) -> i64 {
+pub fn ex_catch(ck: *Checker, e: *ast.Node) -> i64 {
     let t = check(ck, e.node_of("expr"), -1, true);
     let h = e.node_of("handler");
     if t == types.POISON {
@@ -4209,7 +4220,7 @@ fn ex_catch(ck: *Checker, e: *ast.Node) -> i64 {
     return tt;
 }
 
-fn st_throw(ck: *Checker, s: *ast.Node) {
+pub fn st_throw(ck: *Checker, s: *ast.Node) {
     if ck.try_stack.len > 0 {
         let top = ck.try_stack.len - 1;
         ck.try_stack.at(top).push(copy_moved(&ck.moved));
@@ -4226,7 +4237,7 @@ fn st_throw(ck: *Checker, s: *ast.Node) {
     }
 }
 
-fn st_tryblock(ck: *Checker, s: *ast.Node) {
+pub fn st_tryblock(ck: *Checker, s: *ast.Node) {
     let fr0: List<List<MovedEnt>> = List.new();
     ck.try_stack.push(fr0);
     let mut m0 = copy_moved(&ck.moved);
@@ -4251,7 +4262,7 @@ fn st_tryblock(ck: *Checker, s: *ast.Node) {
     ck.moved = merge_moved(&m0, &states);
 }
 
-fn ex_coalesce(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+pub fn ex_coalesce(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     let l = e.node_of("l");
     let r = e.node_of("r");
     let lt = check(ck, l, -1, false);
@@ -4282,7 +4293,7 @@ fn ex_coalesce(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     return tt;
 }
 
-fn ex_optchain(ck: *Checker, e: *ast.Node) -> i64 {
+pub fn ex_optchain(ck: *Checker, e: *ast.Node) -> i64 {
     let obj = e.node_of("obj");
     let ot = check(ck, obj, -1, false);
     let has_args = !e.is_none("args");
@@ -4337,12 +4348,12 @@ fn ex_optchain(ck: *Checker, e: *ast.Node) -> i64 {
     return flat ? it : types.opt(&ck.types, it);
 }
 
-fn has_i64(l: *List<i64>, k: i64) -> bool {
+pub fn has_i64(l: *List<i64>, k: i64) -> bool {
     for i in 0..l.len { if *l.at(i) == k { return true; } }
     return false;
 }
 
-fn st_match(ck: *Checker, s: *ast.Node) {
+pub fn st_match(ck: *Checker, s: *ast.Node) {
     let scrut = s.node_of("scrut");
     let mut st = check(ck, scrut, -1, false);
     let ok_t = st == types.POISON || types.is_int(st) || st == types.BOOL || tk(ck, st) == types.K_ENUM;
@@ -4428,14 +4439,14 @@ fn st_match(ck: *Checker, s: *ast.Node) {
     set_tyn(s, "scrut_ty", st);
 }
 
-fn raw_val(s: str) -> ast.Val { let mut v = ast.v_tag(14, 0); v.s = String.from(s); return v; }
+pub fn raw_val(s: str) -> ast.Val { let mut v = ast.v_tag(14, 0); v.s = String.from(s); return v; }
 
-fn ex_closure(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+pub fn ex_closure(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     if e.has("clo_type") && !e.is_none("clo_type") { return e.get("clo_type").i; }
     let np = e.get("params").items.len;
     let has_hint = exp >= 0 && tk(ck, exp) == types.K_CLO && ck.types.tys.at(exp).params.len == np;
     let ci = ck.clos.len;
-    ck.clos.push(CloInfo { is_move: flag(e, "move"), span: e.span, outer: List.new(), proxy: List.new(), sym: -1 });
+    ck.clos.push(CloInfo { is_move: flag(e, "move"), span: e.span, outer: List.new(), proxy: List.new(), sym: -1, body: ast.new_node("Block", e.span) });
     let mut ptys: List<i64> = List.new();
     for i in 0..np {
         let p = e.get("params").items.at(i).node.at(0);
@@ -4571,6 +4582,7 @@ fn ex_closure(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     e.set("captures", ast.v_list(caps));
     if expr_body { e.set("body", ast.v_node(ast.clone_node(body.get("stmts").items.at(0).node.at(0).node_of("expr")))); }
     else { e.set("body", ast.v_node(ast.clone_node(&body))); }
+    ck.clos.at(ci).body = ast.clone_node(&body);
     e.set("local_body", ast.v_node(body));
     if ck.syms.at(sid).ret == types.POISON { return types.POISON; }
     for i in 0..ptys.len { if *ptys.at(i) == types.POISON { return types.POISON; } }
@@ -4581,7 +4593,7 @@ fn ex_closure(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
 
 // ---- regions (lifetimes) -----------------------------------------------------------------------------------------------------
 
-fn st_region(ck: *Checker, s: *ast.Node) {
+pub fn st_region(ck: *Checker, s: *ast.Node) {
     ck.fn_rdepth += 1;
     push_scope(ck);
     let loc = declare_local(ck, s.str_of("name"), types.REGION, false, s.get("name_span").span, false);
@@ -4596,7 +4608,7 @@ fn st_region(ck: *Checker, s: *ast.Node) {
 }
 
 // can a value of type `t` contain a pointer into region memory?
-fn holds_ptr(ck: *Checker, t: i64) -> bool {
+pub fn holds_ptr(ck: *Checker, t: i64) -> bool {
     let k = tk(ck, t);
     if k == types.K_PRIM { return false; }
     if k == types.K_ENUM || k == types.K_ERR || k == types.K_POISON { return false; }
@@ -4609,13 +4621,13 @@ fn holds_ptr(ck: *Checker, t: i64) -> bool {
     return true;
 }
 
-fn ty_of(e: *ast.Node) -> i64 {
+pub fn ty_of(e: *ast.Node) -> i64 {
     if e.has("ty") && e.get("ty").tag == 10 { return e.get("ty").i; }
     return -1;
 }
 
 // the innermost region whose memory the value of `e` may refer to (a handle local), or -1
-fn taint(ck: *Checker, e: *ast.Node) -> i64 {
+pub fn taint(ck: *Checker, e: *ast.Node) -> i64 {
     let t = ty_of(e);
     if t < 0 || t == types.POISON || !holds_ptr(ck, t) { return -1; }
     if e.kind == "Call" && e.has("builtin") && !e.is_none("builtin") && e.str_of("builtin") == "alloc_in" { return e.get("region_local").i; }
@@ -4649,11 +4661,11 @@ fn taint(ck: *Checker, e: *ast.Node) -> i64 {
     return best;
 }
 
-fn is_view(ck: *Checker, t: i64) -> bool {
+pub fn is_view(ck: *Checker, t: i64) -> bool {
     return tk(ck, t) == types.K_PTR || tk(ck, t) == types.K_SLICE || t == types.STR || t == types.STRING;
 }
 
-fn place_taint(ck: *Checker, t0: *ast.Node) -> i64 {
+pub fn place_taint(ck: *Checker, t0: *ast.Node) -> i64 {
     let mut t = t0;
     while t.kind == "Field" || t.kind == "Index" {
         let bt = ty_of(t.node_of("obj"));
@@ -4665,7 +4677,7 @@ fn place_taint(ck: *Checker, t0: *ast.Node) -> i64 {
 }
 
 // region nesting depth of the storage that assignment target `t0` lives in (0 = outside every region)
-fn place_depth(ck: *Checker, t0: *ast.Node) -> i64 {
+pub fn place_depth(ck: *Checker, t0: *ast.Node) -> i64 {
     let mut t = t0;
     while true {
         let k: str = t.kind;
@@ -4692,13 +4704,13 @@ fn place_depth(ck: *Checker, t0: *ast.Node) -> i64 {
     return 0;
 }
 
-fn escape_error(ck: *Checker, sp: ast.Span, region: i64, what: str) {
+pub fn escape_error(ck: *Checker, sp: ast.Span, region: i64, what: str) {
     let rn = String.from(ck.locals.at(region).name);
     here(ck, sp, format("memory from region `{rn}` {what}"), format("allocated with `alloc_in(.., {rn})`, which is freed when the region ends"),
          "copy what you need out of the region before it ends, or allocate it outside with `alloc`");
 }
 
-fn check_escape_store(ck: *Checker, target: *ast.Node, value: *ast.Node) {
+pub fn check_escape_store(ck: *Checker, target: *ast.Node, value: *ast.Node) {
     let tv = taint(ck, value);
     if tv < 0 { return; }
     if ck.locals.at(tv).rd > place_depth(ck, target) { escape_error(ck, value.span, tv, "would outlive the region if stored here"); }
@@ -4712,7 +4724,7 @@ fn check_escape_store(ck: *Checker, target: *ast.Node, value: *ast.Node) {
     }
 }
 
-fn st_break(ck: *Checker, s: *ast.Node, is_break: bool) {
+pub fn st_break(ck: *Checker, s: *ast.Node, is_break: bool) {
     if ck.fn_loops == 0 {
         here(ck, s.span, is_break ? "`break` outside of a loop" : "`continue` outside of a loop", "", "");
     } else if ck.loop_stack.len > 0 {
@@ -4722,7 +4734,7 @@ fn st_break(ck: *Checker, s: *ast.Node, is_break: bool) {
     }
 }
 
-fn st_return(ck: *Checker, s: *ast.Node) {
+pub fn st_return(ck: *Checker, s: *ast.Node) {
     let ret = ck.fn_ret;
     let tt = tk(ck, ret) == types.K_EU ? ck.types.tys.at(ret).inner : ret;
     if s.is_none("expr") {
@@ -4750,7 +4762,7 @@ fn st_return(ck: *Checker, s: *ast.Node) {
     }
 }
 
-fn st_exprstmt(ck: *Checker, s: *ast.Node) {
+pub fn st_exprstmt(ck: *Checker, s: *ast.Node) {
     let e = s.node_of("expr");
     let mut t = check(ck, e, -1, e.kind == "Call");
     if e.kind == "Call" && tk(ck, t) == types.K_EU && ck.try_stack.len > 0 { t = auto_try(ck, e, t); }
@@ -4768,7 +4780,7 @@ fn st_exprstmt(ck: *Checker, s: *ast.Node) {
     }
 }
 
-fn st_assign(ck: *Checker, s: *ast.Node) {
+pub fn st_assign(ck: *Checker, s: *ast.Node) {
     let t = s.node_of("target");
     let op = String.from(s.str_of("op"));
     let mut was_used = false;
@@ -4840,7 +4852,7 @@ fn st_assign(ck: *Checker, s: *ast.Node) {
 
 // ---- function bodies and the driver ------------------------------------------------------------------------------------------
 
-fn check_fn_body(ck: *Checker, sid: i64) {
+pub fn check_fn_body(ck: *Checker, sid: i64) {
     let nid = ck.syms.at(sid).node;
     if ck.nodes.at(nid).is_none("body") { return; }
     let mi = ck.syms.at(sid).mod_idx;
@@ -4909,7 +4921,7 @@ fn check_fn_body(ck: *Checker, sid: i64) {
     ck.fn_ret = saved_ret;
 }
 
-fn copy_tenv(l: *List<NameTy>) -> List<NameTy> {
+pub fn copy_tenv(l: *List<NameTy>) -> List<NameTy> {
     let mut o: List<NameTy> = List.new();
     for i in 0..l.len { o.push(NameTy { name: String.from(l.at(i).name), ty: l.at(i).ty }); }
     return o;
@@ -4973,8 +4985,13 @@ pub fn check_consts(ck: *Checker, mi: i64) {
                 here(ck, init.span, format("constant `{sn}` is out of range for `{ts}`"), format("evaluates to {v.i}"), "");
                 ck.syms.at(sid).cv = cv_int(0);
             } else {
-                let neg = v.i < 0;
-                let mag = neg ? format("{0 - v.i}") : format("{v.i}");
+                let big = cty == types.U64 && v.i < 0;     // above i64::MAX: the bits are kept in an i64
+                let neg = v.i < 0 && !big;
+                let uv = v.i as u64;
+                let mut mag = format("{v.i}");
+                if big { mag = format("{uv}"); }
+                else if neg && v.i == -9223372036854775807 - 1 { mag = String.from("9223372036854775808"); }
+                else if neg { mag = format("{0 - v.i}"); }
                 if !in_range(neg, mag, cty) {
                     here(ck, init.span, format("constant `{sn}` is out of range for `{ts}`"), format("evaluates to {v.i}"), "");
                     ck.syms.at(sid).cv = cv_int(0);
@@ -4984,7 +5001,7 @@ pub fn check_consts(ck: *Checker, mi: i64) {
     }
 }
 
-fn check_main(ck: *Checker) {
+pub fn check_main(ck: *Checker) {
     let mi = ck.entry_mod;
     let nm = String.from(ck.entry_name);
     if ck.ld.order.len == 0 || nm.len == 0 { return; }
@@ -5035,7 +5052,7 @@ pub fn run_bodies(ck: *Checker) {
 
 // ---- indexing, aggregates, ternary ------------------------------------------------------------------------------------------
 
-fn check_index_value(ck: *Checker, x: *ast.Node) -> i64 {
+pub fn check_index_value(ck: *Checker, x: *ast.Node) -> i64 {
     let t = check(ck, x, -1, false);
     if t != types.POISON && !types.is_int(t) {
         let ts = ty_str(ck, t);
@@ -5045,7 +5062,7 @@ fn check_index_value(ck: *Checker, x: *ast.Node) -> i64 {
     return t;
 }
 
-fn ex_index(ck: *Checker, e: *ast.Node) -> i64 {
+pub fn ex_index(ck: *Checker, e: *ast.Node) -> i64 {
     let ot = check(ck, e.node_of("obj"), -1, false);
     let idx = e.node_of("idx");
     check_index_value(ck, idx);
@@ -5065,7 +5082,7 @@ fn ex_index(ck: *Checker, e: *ast.Node) -> i64 {
     return types.POISON;
 }
 
-fn ex_slice(ck: *Checker, e: *ast.Node) -> i64 {
+pub fn ex_slice(ck: *Checker, e: *ast.Node) -> i64 {
     let obj = e.node_of("obj");
     let ot = check(ck, obj, -1, false);
     if !e.is_none("lo") { check_index_value(ck, e.node_of("lo")); }
@@ -5086,7 +5103,7 @@ fn ex_slice(ck: *Checker, e: *ast.Node) -> i64 {
     return types.POISON;
 }
 
-fn field_names_joined(ck: *Checker, sid: i64) -> String {
+pub fn field_names_joined(ck: *Checker, sid: i64) -> String {
     let mut all = String.empty();
     for i in 0..ck.syms.at(sid).fields.len {
         if i > 0 { all.append(", "); }
@@ -5095,17 +5112,17 @@ fn field_names_joined(ck: *Checker, sid: i64) -> String {
     return all;
 }
 
-fn field_names(ck: *Checker, sid: i64) -> List<String> {
+pub fn field_names(ck: *Checker, sid: i64) -> List<String> {
     let mut o: List<String> = List.new();
     for i in 0..ck.syms.at(sid).fields.len { o.push(String.from(ck.syms.at(sid).fields.at(i).name)); }
     return o;
 }
 
-fn check_lit_fields(ck: *Checker, e: *ast.Node) {
+pub fn check_lit_fields(ck: *Checker, e: *ast.Node) {
     for i in 0..e.get("fields").items.len { check(ck, e.get("fields").items.at(i).items.at(2).node.at(0), -1, false); }
 }
 
-fn ex_structlit(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+pub fn ex_structlit(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     let path = e.node_of("path");
     let ent = entity(ck, path);
     if ent.kind != 2 || ck.syms.at(ent.idx).kind != "struct" {
@@ -5198,7 +5215,7 @@ fn ex_structlit(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     return ck.syms.at(sid).ty;
 }
 
-fn ex_arraylit(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+pub fn ex_arraylit(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     let elem_exp = (exp >= 0 && tk(ck, exp) == types.K_ARR) ? ck.types.tys.at(exp).inner : -1;
     let n = e.get("elems").items.len;
     if n == 0 {
@@ -5220,7 +5237,7 @@ fn ex_arraylit(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     return types.arr(&ck.types, first, n);
 }
 
-fn ex_arrayrepeat(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+pub fn ex_arrayrepeat(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     let elem_exp = (exp >= 0 && tk(ck, exp) == types.K_ARR) ? ck.types.tys.at(exp).inner : -1;
     let t = check(ck, e.node_of("elem"), elem_exp, false);
     let cnt = e.node_of("count");
@@ -5245,7 +5262,7 @@ fn ex_arrayrepeat(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     return types.arr(&ck.types, t, v.i);
 }
 
-fn ternary_arms(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+pub fn ternary_arms(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     let a = e.node_of("a");
     let b = e.node_of("b");
     if exp >= 0 && tk(ck, exp) == types.K_OPT {
@@ -5273,7 +5290,7 @@ fn ternary_arms(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     return ta;
 }
 
-fn ex_ternary(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
+pub fn ex_ternary(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     expect(ck, e.node_of("cond"), types.BOOL, false);
     let r = ternary_arms(ck, e, exp);
     if r != types.POISON {
@@ -5285,7 +5302,7 @@ fn ex_ternary(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
 
 // ---- methods ------------------------------------------------------------------------------------------------------------------
 
-fn meth_find(ck: *Checker, key: str, name: str) -> i64 {
+pub fn meth_find(ck: *Checker, key: str, name: str) -> i64 {
     for i in 0..ck.methods.len {
         if ck.methods.at(i).key == key {
             for q in 0..ck.methods.at(i).entries.len { if ck.methods.at(i).entries.at(q).name == name { return ck.methods.at(i).entries.at(q).sym; } }
@@ -5294,7 +5311,7 @@ fn meth_find(ck: *Checker, key: str, name: str) -> i64 {
     return -1;
 }
 
-fn meth_names(ck: *Checker, key: str, only_self: bool) -> List<String> {
+pub fn meth_names(ck: *Checker, key: str, only_self: bool) -> List<String> {
     let mut o: List<String> = List.new();
     for i in 0..ck.methods.len {
         if ck.methods.at(i).key == key {
@@ -5307,7 +5324,7 @@ fn meth_names(ck: *Checker, key: str, only_self: bool) -> List<String> {
     return sorted_names(&o);
 }
 
-fn method_visible(ck: *Checker, meth: i64, c: *ast.Node) -> bool {
+pub fn method_visible(ck: *Checker, meth: i64, c: *ast.Node) -> bool {
     if ck.syms.at(meth).is_pub || ck.syms.at(meth).mod_idx == ck.cur_mod { return true; }
     let mn = String.from(ck.syms.at(meth).method_name);
     let md = String.from(ck.ld.mods.at(ck.syms.at(meth).mod_idx).name);
@@ -5315,9 +5332,9 @@ fn method_visible(ck: *Checker, meth: i64, c: *ast.Node) -> bool {
     return false;
 }
 
-fn is_opt_method(n: str) -> bool { return n == "is_some" || n == "is_none" || n == "unwrap" || n == "unwrap_or"; }
+pub fn is_opt_method(n: str) -> bool { return n == "is_some" || n == "is_none" || n == "unwrap" || n == "unwrap_or"; }
 
-fn unary_node(sp: ast.Span, op: str, inner: *ast.Node) -> ast.Node {
+pub fn unary_node(sp: ast.Span, op: str, inner: *ast.Node) -> ast.Node {
     let mut n = ast.new_node("Unary", sp);
     n.set("op", ast.v_str(op));
     n.set("expr", ast.v_node(ast.clone_node(inner)));
@@ -5325,7 +5342,7 @@ fn unary_node(sp: ast.Span, op: str, inner: *ast.Node) -> ast.Node {
 }
 
 // adapts the receiver expression to the method's first parameter (auto-borrow / auto-deref); false after an error
-fn receiver_arg(ck: *Checker, obj: *ast.Node, ot: i64, cand: i64, meth: i64, base: i64, out: *ast.Node) -> bool {
+pub fn receiver_arg(ck: *Checker, obj: *ast.Node, ot: i64, cand: i64, meth: i64, base: i64, out: *ast.Node) -> bool {
     let nid = ck.syms.at(meth).node;
     let p0 = ck.nodes.at(nid).get("params").items.at(0).node.at(0);
     let by_ptr = p0.node_of("tyn").kind == "TPtr";
@@ -5367,7 +5384,7 @@ fn receiver_arg(ck: *Checker, obj: *ast.Node, ot: i64, cand: i64, meth: i64, bas
 }
 
 // `Type.f(args)` / `value.f(args)`: -1 not a method call, -2 error reported, -3 optional method, else the method symbol
-fn find_method(ck: *Checker, e: *ast.Node) -> i64 {
+pub fn find_method(ck: *Checker, e: *ast.Node) -> i64 {
     let c = e.node_of("callee");
     let mut obj = c.node_of("obj");
     let name = String.from(c.str_of("name"));
@@ -5454,7 +5471,7 @@ fn find_method(ck: *Checker, e: *ast.Node) -> i64 {
     return -1;
 }
 
-fn opt_method(ck: *Checker, e: *ast.Node) -> i64 {
+pub fn opt_method(ck: *Checker, e: *ast.Node) -> i64 {
     let c = e.node_of("callee");
     let t = ck.types.tys.at(ety(c.node_of("obj"))).inner;
     let n = String.from(c.str_of("name"));
@@ -5494,7 +5511,7 @@ pub fn finalize_impls(ck: *Checker) {
 
 // ---- builtins and format strings --------------------------------------------------------------------------------------------------
 
-fn display_help(ck: *Checker, t: i64) -> String {
+pub fn display_help(ck: *Checker, t: i64) -> String {
     let k = tk(ck, t);
     if k == types.K_OPT { return String.from("unwrap it first (`x ?? default`, `x.unwrap()`), or show it with `{x:?}`"); }
     if k == types.K_STRUCT || k == types.K_ENUM || k == types.K_ARR || k == types.K_SLICE {
@@ -5504,7 +5521,7 @@ fn display_help(ck: *Checker, t: i64) -> String {
 }
 
 // can the automatic `{:?}` representation show a value of type `t`? Returns the offending type (-1 for none)
-fn debuggable(ck: *Checker, t: i64, seen: *List<String>) -> i64 {
+pub fn debuggable(ck: *Checker, t: i64, seen: *List<String>) -> i64 {
     let k = tk(ck, t);
     if t == types.POISON || types.is_numeric(t) || t == types.BOOL || t == types.STR || t == types.STRING || t == types.ERR
         || k == types.K_ENUM || k == types.K_PTR || k == types.K_FN { return -1; }
@@ -5524,7 +5541,7 @@ fn debuggable(ck: *Checker, t: i64, seen: *List<String>) -> i64 {
 }
 
 // the `to_string` method of `impl Display for T` (-1 if none)
-fn display_impl(ck: *Checker, t: i64) -> i64 {
+pub fn display_impl(ck: *Checker, t: i64) -> i64 {
     let tr = lookup_named(&ck.prelude_traits, "Display");
     let k = tk(ck, t);
     if tr < 0 || (k != types.K_STRUCT && k != types.K_ENUM) { return -1; }
@@ -5533,7 +5550,7 @@ fn display_impl(ck: *Checker, t: i64) -> i64 {
     return meth_find(ck, key, "to_string");
 }
 
-fn new_call_node(sp: ast.Span, callee: ast.Node) -> ast.Node {
+pub fn new_call_node(sp: ast.Span, callee: ast.Node) -> ast.Node {
     let mut c = ast.new_node("Call", sp);
     c.set("callee", ast.v_node(callee));
     c.set("args", ast.v_list(List.new()));
@@ -5543,7 +5560,7 @@ fn new_call_node(sp: ast.Span, callee: ast.Node) -> ast.Node {
 }
 
 // `e.to_string()` as a checked call node when the type of `e` implements Display
-fn display_call(ck: *Checker, e: *ast.Node, t: i64, out: *ast.Node) -> bool {
+pub fn display_call(ck: *Checker, e: *ast.Node, t: i64, out: *ast.Node) -> bool {
     if display_impl(ck, t) < 0 { return false; }
     let mut f = ast.new_node("Field", e.span);
     f.set("obj", ast.v_node(ast.clone_node(e)));
@@ -5557,14 +5574,14 @@ fn display_call(ck: *Checker, e: *ast.Node, t: i64, out: *ast.Node) -> bool {
     return true;
 }
 
-fn is_simple_arg(k: str) -> bool { return k == "Ident" || k == "Int" || k == "Float" || k == "Str" || k == "Bool" || k == "Field"; }
+pub fn is_simple_arg(k: str) -> bool { return k == "Ident" || k == "Int" || k == "Float" || k == "Str" || k == "Bool" || k == "Field"; }
 
-fn fix_spans_val(v: *ast.Val, sp: ast.Span) {
+pub fn fix_spans_val(v: *ast.Val, sp: ast.Span) {
     if v.tag == 4 { fix_spans(v.node.at(0), sp); }
     else if v.tag == 5 || v.tag == 9 { for i in 0..v.items.len { fix_spans_val(v.items.at(i), sp); } }
 }
 
-fn fix_spans(n: *ast.Node, sp: ast.Span) {
+pub fn fix_spans(n: *ast.Node, sp: ast.Span) {
     n.span = sp;
     for i in 0..n.attrs.len {
         let nm: str = n.attrs.at(i).name;
@@ -5574,7 +5591,7 @@ fn fix_spans(n: *ast.Node, sp: ast.Span) {
 }
 
 // parses the expression written inside `{...}`; false after an error
-fn parse_fmt_expr(ck: *Checker, text: str, at: *ast.Node, out: *ast.Node) -> bool {
+pub fn parse_fmt_expr(ck: *Checker, text: str, at: *ast.Node, out: *ast.Node) -> bool {
     let mut ex = ast.new_node("tmp", at.span);
     let mut msg = String.empty();
     if !parser.parse_expr_text(text, &ex, &msg) {
@@ -5587,10 +5604,10 @@ fn parse_fmt_expr(ck: *Checker, text: str, at: *ast.Node, out: *ast.Node) -> boo
     return true;
 }
 
-fn arg_expr(a: *ast.Node) -> *ast.Node { return a.kind == "NamedArg" ? a.node_of("expr") : a; }
+pub fn arg_expr(a: *ast.Node) -> *ast.Node { return a.kind == "NamedArg" ? a.node_of("expr") : a; }
 
 // the template literal becomes an FStr node; false after an error
-fn fmt_args(ck: *Checker, e: *ast.Node, name: str) -> bool {
+pub fn fmt_args(ck: *Checker, e: *ast.Node, name: str) -> bool {
     let tidx = name == "assert" ? 1 : 0;
     let nargs = e.get("args").items.len;
     if nargs <= tidx { return true; }
@@ -5738,7 +5755,7 @@ fn fmt_args(ck: *Checker, e: *ast.Node, name: str) -> bool {
     return true;
 }
 
-fn split_dots(s: str) -> List<String> {
+pub fn split_dots(s: str) -> List<String> {
     let mut o: List<String> = List.new();
     let mut cur = String.empty();
     for i in 0..s.len {
@@ -5748,18 +5765,18 @@ fn split_dots(s: str) -> List<String> {
     return o;
 }
 
-fn se_help(se: *fmtspec.SpecError) -> String { return se.has_help ? String.from(se.help) : String.empty(); }
-fn ck_help(c: *fmtspec.Checked) -> String { return c.has_help ? String.from(c.help) : String.empty(); }
+pub fn se_help(se: *fmtspec.SpecError) -> String { return se.has_help ? String.from(se.help) : String.empty(); }
+pub fn ck_help(c: *fmtspec.Checked) -> String { return c.has_help ? String.from(c.help) : String.empty(); }
 
-fn spec_text(s: *fmtspec.Spec) -> String {
+pub fn spec_text(s: *fmtspec.Spec) -> String {
     let alt = s.alt ? 1 : 0;
     let zero = s.zero ? 1 : 0;
     return format("Spec({s.fill},{s.align},{s.sign},{alt},{zero},{s.width},{s.group},{s.prec},{s.ty})");
 }
 
-fn ann_raw(s: String) -> ast.Val { let mut v = ast.v_str(""); v.tag = 14; v.s = s; return v; }
+pub fn ann_raw(s: String) -> ast.Val { let mut v = ast.v_str(""); v.tag = 14; v.s = s; return v; }
 
-fn fpart(ck: *Checker, part: *ast.Node) {
+pub fn fpart(ck: *Checker, part: *ast.Node) {
     set_nil(part, "pspec");
     set_nil(part, "mode");
     let expr = part.node_of("expr");
@@ -5786,7 +5803,17 @@ fn fpart(ck: *Checker, part: *ast.Node) {
         return;
     }
     if !have_spec { spec = fmtspec.new_spec(); }
-    part.set("pspec", ann_raw(spec_text(&spec)));
+    let mut psv = ann_raw(spec_text(&spec));
+    psv.items.push(ast.v_str(spec.fill));
+    psv.items.push(ast.v_str(spec.align));
+    psv.items.push(ast.v_str(spec.sign));
+    psv.items.push(ast.v_int(spec.alt ? 1 : 0));
+    psv.items.push(ast.v_int(spec.zero ? 1 : 0));
+    psv.items.push(ast.v_int(spec.width));
+    psv.items.push(ast.v_str(spec.group));
+    psv.items.push(ast.v_int(spec.prec));
+    psv.items.push(ast.v_str(spec.ty));
+    part.set("pspec", psv);
     let debug = spec.ty == "?";
     let mut kind = "other";
     let mut mode = "";
@@ -5833,7 +5860,7 @@ fn fpart(ck: *Checker, part: *ast.Node) {
     }
 }
 
-fn ex_fstr(ck: *Checker, e: *ast.Node) -> i64 {
+pub fn ex_fstr(ck: *Checker, e: *ast.Node) -> i64 {
     if ck.nostd { need_std(ck, ck.cur_mod, e.span, "string interpolation"); }
     let n = e.get("parts").items.len;
     for i in 0..n {
@@ -5846,9 +5873,9 @@ fn ex_fstr(ck: *Checker, e: *ast.Node) -> i64 {
     return types.STR;
 }
 
-fn replace_arg(e: *ast.Node, i: i64, n: ast.Node) { *e.get("args").items.at(i) = ast.v_node(n); }
+pub fn replace_arg(e: *ast.Node, i: i64, n: ast.Node) { *e.get("args").items.at(i) = ast.v_node(n); }
 
-fn arity(ck: *Checker, e: *ast.Node, name: str, nmin: i64, nmax: i64) -> bool {
+pub fn arity(ck: *Checker, e: *ast.Node, name: str, nmin: i64, nmax: i64) -> bool {
     let n = e.get("args").items.len;
     if n < nmin || n > nmax {
         let want = nmin == nmax ? format("{nmin}") : format("{nmin} to {nmax}");
@@ -5859,20 +5886,20 @@ fn arity(ck: *Checker, e: *ast.Node, name: str, nmin: i64, nmax: i64) -> bool {
     return true;
 }
 
-fn is_printable(ck: *Checker, t: i64) -> bool {
+pub fn is_printable(ck: *Checker, t: i64) -> bool {
     let k = tk(ck, t);
     return types.is_numeric(t) || t == types.BOOL || t == types.STR || t == types.STRING || t == types.ERR
         || k == types.K_ENUM || k == types.K_PTR || k == types.K_FN;
 }
 
-fn nostd_banned(n: str) -> bool {
+pub fn nostd_banned(n: str) -> bool {
     let names = ["print", "println", "alloc", "free", "exit", "to_str", "string_new", "string_from", "string_clear", "cstr", "format",
                  "gc_collect", "gc_bytes", "gc_collections", "alloc_in", "gc_collect_gen", "gc_gen_bytes", "gc_gen_collections"];
     for i in 0..18 { if names[i] == n { return true; } }
     return false;
 }
 
-fn builtin(ck: *Checker, e: *ast.Node, name: String) -> i64 {
+pub fn builtin(ck: *Checker, e: *ast.Node, name: String) -> i64 {
     e.set("builtin", ast.v_str(name));
     let mi = ck.cur_mod;
     if ck.nostd && nostd_banned(name) {
@@ -6146,7 +6173,7 @@ fn builtin(ck: *Checker, e: *ast.Node, name: String) -> i64 {
 
 pub struct Loan { owner: i64, path: List<String>, excl: bool, span: ast.Span, via_own: bool, closure: bool, kind: i64 }
 pub struct Root { ok: bool, loc: i64, path: List<String> }
-struct UseEnt { tick: i64, span: ast.Span }
+pub struct UseEnt { tick: i64, span: ast.Span }
 
 pub struct Bck {
     report: bool,
@@ -6168,25 +6195,25 @@ pub struct Bck {
     pnames: List<String>,
 }
 
-fn clone_loan(l: *Loan) -> Loan {
+pub fn clone_loan(l: *Loan) -> Loan {
     let mut p: List<String> = List.new();
     for i in 0..l.path.len { p.push(String.from(*l.path.at(i))); }
     return Loan { owner: l.owner, path: p, excl: l.excl, span: l.span, via_own: l.via_own, closure: l.closure, kind: l.kind };
 }
 
-fn extend_loans(dst: *List<Loan>, src: *List<Loan>) { for i in 0..src.len { dst.push(clone_loan(src.at(i))); } }
+pub fn extend_loans(dst: *List<Loan>, src: *List<Loan>) { for i in 0..src.len { dst.push(clone_loan(src.at(i))); } }
 
-fn copy_loans(src: *List<Loan>) -> List<Loan> {
+pub fn copy_loans(src: *List<Loan>) -> List<Loan> {
     let mut o: List<Loan> = List.new();
     extend_loans(&o, src);
     return o;
 }
 
-fn b_touch(b: *Bck, loc: i64) {
+pub fn b_touch(b: *Bck, loc: i64) {
     if !*b.tmark.at(loc) { *b.tmark.at(loc) = true; b.touched.push(loc); }
 }
 
-fn b_prepare(ck: *Checker, b: *Bck) {
+pub fn b_prepare(ck: *Checker, b: *Bck) {
     while b.last.len < ck.locals.len {
         b.last.push(-1);
         b.decl.push(-1);
@@ -6198,7 +6225,7 @@ fn b_prepare(ck: *Checker, b: *Bck) {
     }
 }
 
-fn b_reset(b: *Bck) {
+pub fn b_reset(b: *Bck) {
     for i in 0..b.touched.len {
         let l = *b.touched.at(i);
         *b.last.at(l) = -1;
@@ -6215,27 +6242,27 @@ fn b_reset(b: *Bck) {
     b.loop_e.clear();
 }
 
-fn b_last0(b: *Bck, l: i64) -> i64 { let v = *b.last.at(l); return v < 0 ? 0 : v; }
-fn b_decl0(b: *Bck, l: i64) -> i64 { let v = *b.decl.at(l); return v < 0 ? 0 : v; }
-fn b_set_decl(b: *Bck, l: i64, v: i64) { b_touch(b, l); *b.decl.at(l) = v; }
-fn b_decl_default(b: *Bck, l: i64, v: i64) { b_touch(b, l); if *b.decl.at(l) < 0 { *b.decl.at(l) = v; } }
-fn b_last_default(b: *Bck, l: i64, v: i64) { b_touch(b, l); if *b.last.at(l) < 0 { *b.last.at(l) = v; } }
+pub fn b_last0(b: *Bck, l: i64) -> i64 { let v = *b.last.at(l); return v < 0 ? 0 : v; }
+pub fn b_decl0(b: *Bck, l: i64) -> i64 { let v = *b.decl.at(l); return v < 0 ? 0 : v; }
+pub fn b_set_decl(b: *Bck, l: i64, v: i64) { b_touch(b, l); *b.decl.at(l) = v; }
+pub fn b_decl_default(b: *Bck, l: i64, v: i64) { b_touch(b, l); if *b.decl.at(l) < 0 { *b.decl.at(l) = v; } }
+pub fn b_last_default(b: *Bck, l: i64, v: i64) { b_touch(b, l); if *b.last.at(l) < 0 { *b.last.at(l) = v; } }
 
-fn mark_use(b: *Bck, loc: i64, sp: ast.Span) {
+pub fn mark_use(b: *Bck, loc: i64, sp: ast.Span) {
     b_touch(b, loc);
     *b.last.at(loc) = b.tick;
     b.uses.at(loc).push(UseEnt { tick: b.tick, span: sp });
 }
 
-fn live_after(b: *Bck, h: i64) -> bool { return b_last0(b, h) > b.tick; }
+pub fn live_after(b: *Bck, h: i64) -> bool { return b_last0(b, h) > b.tick; }
 
-fn holds_get(b: *Bck, l: i64) -> List<Loan> {
+pub fn holds_get(b: *Bck, l: i64) -> List<Loan> {
     let ix = *b.hix.at(l);
     if ix < 0 { let mut e: List<Loan> = List.new(); return e; }
     return copy_loans(b.h_vals.at(ix));
 }
 
-fn holds_set(b: *Bck, l: i64, v: List<Loan>) {
+pub fn holds_set(b: *Bck, l: i64, v: List<Loan>) {
     b_touch(b, l);
     let ix = *b.hix.at(l);
     if ix >= 0 { *b.h_vals.at(ix) = v; return; }
@@ -6244,7 +6271,7 @@ fn holds_set(b: *Bck, l: i64, v: List<Loan>) {
     b.h_vals.push(v);
 }
 
-fn holds_extend(b: *Bck, l: i64, v: *List<Loan>) {
+pub fn holds_extend(b: *Bck, l: i64, v: *List<Loan>) {
     b_touch(b, l);
     let ix = *b.hix.at(l);
     if ix < 0 {
@@ -6256,22 +6283,22 @@ fn holds_extend(b: *Bck, l: i64, v: *List<Loan>) {
     extend_loans(b.h_vals.at(ix), v);
 }
 
-fn owner_name(ck: *Checker, b: *Bck, o: i64) -> String {
+pub fn owner_name(ck: *Checker, b: *Bck, o: i64) -> String {
     if o >= 0 { return String.from(ck.locals.at(o).name); }
     return String.from(*b.pnames.at(-o - 1));
 }
 
-fn overlap(a: *List<String>, c: *List<String>) -> bool {
+pub fn overlap(a: *List<String>, c: *List<String>) -> bool {
     let n = a.len < c.len ? a.len : c.len;
     for i in 0..n { if *a.at(i) != *c.at(i) { return false; } }
     return true;
 }
 
-fn b_err(ck: *Checker, b: *Bck, sp: ast.Span, msg: str, label: str, help: str) {
+pub fn b_err(ck: *Checker, b: *Bck, sp: ast.Span, msg: str, label: str, help: str) {
     if b.report { here(ck, sp, msg, label, help); }
 }
 
-fn truthy(e: *ast.Node, name: str) -> bool {
+pub fn truthy(e: *ast.Node, name: str) -> bool {
     if !e.has(name) { return false; }
     let v = e.get(name);
     if v.tag == 0 { return false; }
@@ -6279,14 +6306,14 @@ fn truthy(e: *ast.Node, name: str) -> bool {
     return true;
 }
 
-fn b_holds_ptr(ck: *Checker, t: i64) -> bool { return t >= 0 && t != types.POISON && holds_ptr(ck, t); }
+pub fn b_holds_ptr(ck: *Checker, t: i64) -> bool { return t >= 0 && t != types.POISON && holds_ptr(ck, t); }
 
-fn next_use(b: *Bck, loc: i64) -> i32 {
+pub fn next_use(b: *Bck, loc: i64) -> i32 {
     for i in 0..b.uses.at(loc).len { if b.uses.at(loc).at(i).tick > b.tick { return i as i32; } }
     return -1;
 }
 
-fn b_kids(n: *ast.Node) -> List<*ast.Node> {
+pub fn b_kids(n: *ast.Node) -> List<*ast.Node> {
     let mut out: List<*ast.Node> = List.new();
     for ai in 0..n.attrs.len {
         let an: str = n.attrs.at(ai).name;
@@ -6307,7 +6334,7 @@ fn b_kids(n: *ast.Node) -> List<*ast.Node> {
     return out;
 }
 
-fn place_root(ck: *Checker, e0: *ast.Node) -> Root {
+pub fn place_root(ck: *Checker, e0: *ast.Node) -> Root {
     let mut path: List<String> = List.new();
     let mut e = e0;
     while true {
@@ -6339,19 +6366,19 @@ fn place_root(ck: *Checker, e0: *ast.Node) -> Root {
     return Root { ok: false, loc: -1, path: List.new() };
 }
 
-fn is_own_ty(ck: *Checker, t: i64) -> bool {
+pub fn is_own_ty(ck: *Checker, t: i64) -> bool {
     if t < 0 || tk(ck, t) != types.K_STRUCT { return false; }
     let sy = ck.types.tys.at(t).sym;
     return ck.syms.at(sy).name.starts_with("Own") && ck.syms.at(sy).full.contains("own");
 }
 
-fn is_checked_ty(ck: *Checker, t: i64) -> bool {
+pub fn is_checked_ty(ck: *Checker, t: i64) -> bool {
     if t < 0 || tk(ck, t) != types.K_STRUCT { return false; }
     let sy = ck.types.tys.at(t).sym;
     return (ck.syms.at(sy).name.starts_with("Ref") || ck.syms.at(sy).name.starts_with("Weak")) && ck.syms.at(sy).full.contains("own");
 }
 
-fn b_access(ck: *Checker, b: *Bck, loc: i64, path: *List<String>, kind: str, sp: ast.Span) {
+pub fn b_access(ck: *Checker, b: *Bck, loc: i64, path: *List<String>, kind: str, sp: ast.Span) {
     if b.phase != 2 { return; }
     for hi in 0..b.h_keys.len {
         let h = *b.h_keys.at(hi);
@@ -6367,7 +6394,7 @@ fn b_access(ck: *Checker, b: *Bck, loc: i64, path: *List<String>, kind: str, sp:
     }
 }
 
-fn b_conflict(ck: *Checker, b: *Bck, loc: i64, kind: str, ln: *Loan, holder: i64, sp: ast.Span) {
+pub fn b_conflict(ck: *Checker, b: *Bck, loc: i64, kind: str, ln: *Loan, holder: i64, sp: ast.Span) {
     let ln_name = String.from(ck.locals.at(loc).name);
     let hn = String.from(ck.locals.at(holder).name);
     let what = kind == "read" ? "use" : (kind == "write" ? "assign to" : (kind == "move" ? "move out of" : (kind == "excl" ? "borrow mutably" : "borrow")));
@@ -6377,11 +6404,21 @@ fn b_conflict(ck: *Checker, b: *Bck, loc: i64, kind: str, ln: *Loan, holder: i64
         : (kind == "write" ? format("`{ln_name}` is assigned here")
         : (kind == "move" ? format("`{ln_name}` is moved here")
         : (kind == "excl" ? format("`{ln_name}` is borrowed mutably here") : format("`{ln_name}` is borrowed here"))));
+    let n0 = ck.d.items.len;
     b_err(ck, b, sp, format("cannot {what} `{ln_name}` because it is {state}"), format("{lab} while the {how} borrow is alive"),
           format("finish using `{hn}` before this, or make a copy of what you need"));
+    if b.report && ck.d.items.len > n0 {
+        let how2 = ln.closure ? String.from(", held by the closure") : format(", and is kept in `{hn}`");
+        ck.d.add_extra(ln.span.line, ln.span.col, ln.span.len, format("{how} borrow of `{ln_name}` starts here{how2}"));
+        let nu = next_use(b, holder);
+        if nu >= 0 {
+            let us = b.uses.at(holder).at(nu as i64).span;
+            ck.d.add_extra(us.line, us.col, us.len, format("`{hn}` is used here, so the borrow is still alive"));
+        }
+    }
 }
 
-fn walk_index_parts(ck: *Checker, b: *Bck, e0: *ast.Node) {
+pub fn walk_index_parts(ck: *Checker, b: *Bck, e0: *ast.Node) {
     let mut e = e0;
     while e.kind == "Field" || e.kind == "Index" {
         if e.kind == "Index" { walk(ck, b, e.node_of("idx")); }
@@ -6389,7 +6426,7 @@ fn walk_index_parts(ck: *Checker, b: *Bck, e0: *ast.Node) {
     }
 }
 
-fn read_through(ck: *Checker, b: *Bck, loans: *List<Loan>) -> List<Loan> {
+pub fn read_through(ck: *Checker, b: *Bck, loans: *List<Loan>) -> List<Loan> {
     let mut out: List<Loan> = List.new();
     for i in 0..loans.len {
         let ln = loans.at(i);
@@ -6403,7 +6440,7 @@ fn read_through(ck: *Checker, b: *Bck, loans: *List<Loan>) -> List<Loan> {
     return out;
 }
 
-fn place_loans(ck: *Checker, b: *Bck, e: *ast.Node) -> List<Loan> {
+pub fn place_loans(ck: *Checker, b: *Bck, e: *ast.Node) -> List<Loan> {
     if e.kind == "Field" || e.kind == "Index" {
         if e.kind == "Index" { walk(ck, b, e.node_of("idx")); }
         return place_loans(ck, b, e.node_of("obj"));
@@ -6412,7 +6449,7 @@ fn place_loans(ck: *Checker, b: *Bck, e: *ast.Node) -> List<Loan> {
     return walk(ck, b, e);
 }
 
-fn walk_kids(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+pub fn walk_kids(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     let mut carried: List<Loan> = List.new();
     let mut ks = b_kids(n);
     for i in 0..ks.len {
@@ -6422,7 +6459,7 @@ fn walk_kids(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     return carried;
 }
 
-fn walk(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+pub fn walk(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     let k: str = n.kind;
     if k == "Ident" { return w_ident(ck, b, n); }
     if k == "Field" || k == "Index" { return w_place_read(ck, b, n); }
@@ -6446,7 +6483,7 @@ fn walk(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     return e;
 }
 
-fn w_ident(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+pub fn w_ident(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     let mut out: List<Loan> = List.new();
     if !(n.has("local") && n.get("local").tag == 12) { return out; }
     let loc = n.get("local").i;
@@ -6465,7 +6502,7 @@ fn w_ident(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     return out;
 }
 
-fn w_place_read(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+pub fn w_place_read(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     let mut root = place_root(ck, n);
     if root.ok {
         walk_index_parts(ck, b, n);
@@ -6487,7 +6524,7 @@ fn w_place_read(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     return read_through(ck, b, &carried);
 }
 
-fn w_unary(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+pub fn w_unary(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     let op = String.from(n.str_of("op"));
     if op == "&" {
         let mut root = place_root(ck, n.node_of("expr"));
@@ -6514,13 +6551,13 @@ fn w_unary(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     return carried;
 }
 
-fn copy_strs(l: *List<String>) -> List<String> {
+pub fn copy_strs(l: *List<String>) -> List<String> {
     let mut o: List<String> = List.new();
     for i in 0..l.len { o.push(String.from(*l.at(i))); }
     return o;
 }
 
-fn w_call(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+pub fn w_call(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     let c = n.node_of("callee");
     let indirect = truthy(n, "indirect");
     let mut callee_loans: List<Loan> = List.new();
@@ -6570,7 +6607,7 @@ fn w_call(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     return carried;
 }
 
-fn w_assign(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+pub fn w_assign(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     let t = n.node_of("target");
     let mut carried = walk(ck, b, n.node_of("value"));
     let mut root = place_root(ck, t);
@@ -6592,7 +6629,7 @@ fn w_assign(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     return e;
 }
 
-fn w_incdec(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+pub fn w_incdec(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     let x = n.node_of("expr");
     let mut root = place_root(ck, x);
     let mut e: List<Loan> = List.new();
@@ -6611,7 +6648,7 @@ fn w_incdec(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     return e;
 }
 
-fn w_let(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+pub fn w_let(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     let mut carried = (n.has("init") && !n.is_none("init")) ? walk(ck, b, n.node_of("init")) : List.new();
     let mut e: List<Loan> = List.new();
     if n.has("local") && n.get("local").tag == 12 {
@@ -6624,7 +6661,7 @@ fn w_let(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     return e;
 }
 
-fn w_block(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+pub fn w_block(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     let start = b.tick;
     let mut owners: List<i64> = List.new();
     for i in 0..n.get("stmts").items.len {
@@ -6660,12 +6697,12 @@ fn w_block(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     return e;
 }
 
-fn sum_add(l: *List<SumEnt>, kind: i64, idx: i64) {
+pub fn sum_add(l: *List<SumEnt>, kind: i64, idx: i64) {
     for i in 0..l.len { if l.at(i).kind == kind && l.at(i).idx == idx { return; } }
     l.push(SumEnt { kind: kind, idx: idx });
 }
 
-fn w_return(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+pub fn w_return(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     let mut e: List<Loan> = List.new();
     if !n.has("expr") || n.is_none("expr") { return e; }
     let mut carried = walk(ck, b, n.node_of("expr"));
@@ -6692,7 +6729,7 @@ fn w_return(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     return e;
 }
 
-fn b_loop(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+pub fn b_loop(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     let start = b.tick;
     if n.has("local") && n.get("local").tag == 12 && b.phase == 1 { b_set_decl(b, n.get("local").i, b.tick); }
     let mut ks = b_kids(n);
@@ -6702,7 +6739,7 @@ fn b_loop(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     return e;
 }
 
-fn w_closure(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
+pub fn w_closure(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     let mut carried: List<Loan> = List.new();
     let mut none: List<String> = List.new();
     for i in 0..n.get("captures").items.len {
@@ -6730,13 +6767,13 @@ fn w_closure(ck: *Checker, b: *Bck, n: *ast.Node) -> List<Loan> {
     return carried;
 }
 
-fn sums_equal(a: *List<SumEnt>, c: *List<SumEnt>) -> bool {
+pub fn sums_equal(a: *List<SumEnt>, c: *List<SumEnt>) -> bool {
     if a.len != c.len { return false; }
     for i in 0..a.len { let mut f = false; for j in 0..c.len { if a.at(i).kind == c.at(j).kind && a.at(i).idx == c.at(j).idx { f = true; } } if !f { return false; } }
     return true;
 }
 
-fn b_analyze(ck: *Checker, b: *Bck, ei: i64, report: bool) -> List<SumEnt> {
+pub fn b_analyze(ck: *Checker, b: *Bck, ei: i64, report: bool) -> List<SumEnt> {
     b.report = report;
     b.summary = List.new();
     b_prepare(ck, b);
@@ -6785,7 +6822,7 @@ fn b_analyze(ck: *Checker, b: *Bck, ei: i64, report: bool) -> List<SumEnt> {
     return out;
 }
 
-fn run_borrowck(ck: *Checker) {
+pub fn run_borrowck(ck: *Checker) {
     let mut b = Bck { report: false, phase: 1, tick: 0, addr: 0, summary: List.new(), last: List.new(), decl: List.new(), uses: List.new(),
         loop_s: List.new(), loop_e: List.new(), touched: List.new(), tmark: List.new(), hix: List.new(), h_keys: List.new(), h_vals: List.new(),
         moved: List.new(), pnames: List.new() };
@@ -6809,7 +6846,7 @@ fn run_borrowck(ck: *Checker) {
     ck.d.context = String.empty();
 }
 
-fn copy_sums(l: *List<SumEnt>) -> List<SumEnt> {
+pub fn copy_sums(l: *List<SumEnt>) -> List<SumEnt> {
     let mut o: List<SumEnt> = List.new();
     for i in 0..l.len { o.push(SumEnt { kind: l.at(i).kind, idx: l.at(i).idx }); }
     return o;

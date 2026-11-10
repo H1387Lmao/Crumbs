@@ -162,6 +162,35 @@ def test_selfhost(stage, tool_cb, py_tool, patterns, skip_async=False, extra=())
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_bootstrap():
+    """The compiler written in Crumbs compiles itself, and the result is a fixed point: Python -> stage 2 -> stage 3 emit the same C."""
+    import tempfile, shutil
+    tmp = tempfile.mkdtemp(prefix="bootstrap-")
+    src = os.path.join(HERE, "..", "selfhost", "crumbsc.cb")
+    try:
+        s1 = os.path.join(tmp, "stage1")
+        r = run(["build", src, "-o", s1, "--no-warn"])
+        if r.returncode != 0:
+            return report("bootstrap: stage 1 (built by the Python compiler)", False, r.stdout + r.stderr)
+        want = subprocess.run([sys.executable, os.path.join(HERE, "..", "crumbs.py"), "emit", src], capture_output=True, text=True).stdout
+        exe = s1
+        for n in (2, 3):
+            c_path = os.path.join(tmp, f"stage{n}.c")
+            out = os.path.join(tmp, f"stage{n}")
+            r = subprocess.run([exe, "build", src, "-o", out, "--keep-c", c_path, "--no-warn"], capture_output=True, text=True, cwd=os.path.join(HERE, ".."))
+            if r.returncode != 0:
+                return report(f"bootstrap: stage {n}", False, r.stdout + r.stderr)
+            if open(c_path).read() != want:
+                return report(f"bootstrap: stage {n} emits different C than the Python compiler", False)
+            exe = out
+        hello = subprocess.run([exe, "run", os.path.join(HERE, "ok", "arith.cb")], capture_output=True, text=True, cwd=os.path.join(HERE, ".."))
+        exp = open(os.path.join(HERE, "ok", "arith.out")).read() if os.path.exists(os.path.join(HERE, "ok", "arith.out")) else hello.stdout
+        report("bootstrap: crumbsc compiles itself (stage 2 == stage 3 == Python), and the result runs programs",
+               hello.returncode == 0 and hello.stdout == exp, hello.stderr)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     only = sys.argv[1:]
     build_fixtures()
@@ -207,6 +236,11 @@ def main():
                       ["tests/ok/closures.cb", "tests/ok/collections2.cb", "tests/ok/iterators.cb", "tests/ok/regions.cb", "tests/ok/traits.cb",
                        "tests/err/borrow_*.cb", "tests/err/closure_leak.cb", "tests/err/own_dangling*.cb", "selfhost/ckdump.cb"], skip_async=True,
                       extra=("--all", "--std=" + os.path.join(HERE, "..", "src", "std")))
+        ok_progs = [os.path.relpath(f, os.path.join(HERE, "..")) for f in sorted(glob.glob(os.path.join(HERE, "ok", "*.cb")))
+                    if not os.path.basename(f).startswith(("_", "gc_"))]
+        test_selfhost("codegen", "emitdump.cb", "emitdump.py", ok_progs + ["examples/*.cb", "tests/panic/*.cb", "selfhost/ckdump.cb", "selfhost/emitdump.cb"],
+                      skip_async=True, extra=("--std=" + os.path.join(HERE, "..", "src", "std"),))
+        test_bootstrap()
         test_selfhost("preprocessor", "ppdump.cb", "ppdump.py", pats + ["tests/selfhost_pp/*.cb"], extra=("-DMODE=2", "-DFEATURE"))
     if not only or "cookie" in " ".join(only):
         print("== cookie build tool")

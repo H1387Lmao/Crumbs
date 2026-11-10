@@ -1722,7 +1722,7 @@ fn parse_primary(p: *P) -> ast.Node! {
     if k == lexer.TK.Float {
         advance(p);
         let mut n = ast.new_node("Float", ts(&t));
-        n.put("value", ast.v_float());
+        n.put("value", ast.v_float_text(t.text));
         n.put("suffix", suffix_val(&t));
         return n;
     }

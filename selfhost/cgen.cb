@@ -1,0 +1,2370 @@
+// C code generation written in Crumbs: a port of src/crumbsc/codegen.py. It reads the annotated syntax trees the
+// checker (sema.cb) leaves behind and produces the same C text, byte for byte.
+import std.map;
+import ast;
+import types;
+import loader;
+import sema;
+import creserved;
+
+extern fn snprintf(buf: *u8, n: u64, fmt: *u8, ...) -> i32;
+
+pub struct DEnt { kind: i64, cname: String, ty: i64 }     // kind: 0 local/temporary with glue, 1 auto-freed `alloc`, 2 region
+struct TryEnt { var: String, label: String, base: i64 }
+struct Comp { name: String, ty: i64, inner: String, has_inner: bool }   // an array / slice / error union type
+struct Todo { name: String, ty: i64 }
+
+pub struct Cg {
+    ck: *sema.Checker,
+    gc: bool,
+    gc_mode: String,
+    gc_interval: i64,
+    polls: bool,
+    nostd: bool,
+    overflow_panic: bool,
+    bufs: List<List<String>>,
+    ind: i64,
+    n: i64,
+    reg: map.HashMap<i64>,
+    reg_n: i64,
+    arrs: List<Comp>,
+    slices: List<Comp>,
+    eus: List<Comp>,
+    opts: List<Todo>,
+    fnts: List<String>,
+    dbg_done: map.HashMap<i64>,
+    dbg_n: i64,
+    dbg_todo: List<Todo>,
+    glue_done: map.HashMap<i64>,
+    glue_n: i64,
+    glue_todo: List<Todo>,
+    cur_ret: i64,
+    cur_file: String,
+    dscopes: List<List<DEnt>>,
+    loop_bases: List<i64>,
+    try_stack: List<TryEnt>,
+    has_st: bool,
+    st_stack: List<List<DEnt>>,
+    st_saved: List<bool>,
+    autofree: List<bool>,      // per local index
+    reg_names: List<String>,
+}
+
+pub fn new_cg(ck: *sema.Checker, gc: bool, nostd: bool, overflow_panic: bool, gc_mode: str, gc_interval: i64) -> Cg {
+    let g = gc && !nostd;
+    let mut cg = Cg { ck: ck, gc: g, gc_mode: String.from(g ? gc_mode : "auto"), gc_interval: gc_interval, polls: false, nostd: nostd,
+        overflow_panic: overflow_panic, bufs: List.new(), ind: 1, n: 0, reg: map.HashMap.new(), reg_n: 0, arrs: List.new(), slices: List.new(),
+        eus: List.new(), opts: List.new(), fnts: List.new(), dbg_done: map.HashMap.new(), dbg_n: 0, dbg_todo: List.new(),
+        glue_done: map.HashMap.new(), glue_n: 0, glue_todo: List.new(), cur_ret: types.VOID, cur_file: String.empty(),
+        dscopes: List.new(), loop_bases: List.new(), try_stack: List.new(), has_st: false, st_stack: List.new(), st_saved: List.new(), autofree: List.new(),
+        reg_names: List.new() };
+    cg.polls = cg.gc_mode == "thread";
+    let first: List<String> = List.new();
+    cg.bufs.push(first);
+    return cg;
+}
+
+// ---- utilities ---------------------------------------------------------------------------------------------------------------
+
+fn tmp(cg: *Cg, base: str) -> String {
+    cg.n += 1;
+    return format("{base}{cg.n}");
+}
+
+fn t0(cg: *Cg) -> String { return tmp(cg, "cb_t"); }
+
+fn emit(cg: *Cg, line: str) {
+    let mut s = String.empty();
+    for i in 0..cg.ind { s.append("    "); }
+    s.append(line);
+    cg.bufs.at(cg.bufs.len - 1).push(s);
+}
+
+fn poll(cg: *Cg) { if cg.polls { emit(cg, "cb_gc_poll();"); } }
+
+fn push_buf(cg: *Cg) { let b: List<String> = List.new(); cg.bufs.push(b); }
+
+fn pop_buf(cg: *Cg) -> List<String> { return cg.bufs.pop() catch { panic("buffer underflow"); }; }
+
+fn join_lines(l: *List<String>, sep: str) -> String {
+    let mut s = String.empty();
+    for i in 0..l.len {
+        if i > 0 { s.append(sep); }
+        s.append(*l.at(i));
+    }
+    return s;
+}
+
+fn c_string(b: str) -> String {
+    let mut o = String.empty();
+    o.push('"');
+    for i in 0..b.len {
+        let ch = b[i];
+        if ch == 34 { o.append("\\\""); }
+        else if ch == 92 { o.append("\\\\"); }
+        else if ch == 63 { o.append("\\?"); }
+        else if ch >= 32 && ch < 127 { o.push(ch); }
+        else {
+            o.push('\\');
+            o.push(48 + ((ch >> 6) & 7));
+            o.push(48 + ((ch >> 3) & 7));
+            o.push(48 + (ch & 7));
+        }
+    }
+    o.push('"');
+    return o;
+}
+
+fn loc(cg: *Cg, sp: ast.Span) -> String {
+    let t = format("{cg.cur_file}:{sp.line}:{sp.col}");
+    return c_string(t);
+}
+
+fn fld(name: str) -> String {
+    if creserved.is_c_reserved(name) || name.starts_with("cb_") { return format("{name}_"); }
+    return String.from(name);
+}
+
+fn tyk(cg: *Cg, t: i64) -> i64 { return cg.ck.types.tys.at(t).kind; }
+fn inner_of(cg: *Cg, t: i64) -> i64 { return cg.ck.types.tys.at(t).inner; }
+fn key_of(cg: *Cg, t: i64) -> String { return String.from(cg.ck.types.tys.at(t).key); }
+fn sym_of(cg: *Cg, t: i64) -> i64 { return cg.ck.types.tys.at(t).sym; }
+fn tname(cg: *Cg, t: i64) -> String { return String.from(cg.ck.types.tys.at(t).name); }
+fn scname(cg: *Cg, sid: i64) -> String { return String.from(cg.ck.syms.at(sid).cname); }
+
+fn prim_c(name: str) -> String {
+    if name == "i8" { return String.from("int8_t"); }
+    if name == "i16" { return String.from("int16_t"); }
+    if name == "i32" { return String.from("int32_t"); }
+    if name == "i64" { return String.from("int64_t"); }
+    if name == "u8" { return String.from("uint8_t"); }
+    if name == "u16" { return String.from("uint16_t"); }
+    if name == "u32" { return String.from("uint32_t"); }
+    if name == "u64" { return String.from("uint64_t"); }
+    if name == "f32" { return String.from("float"); }
+    if name == "f64" { return String.from("double"); }
+    if name == "bool" { return String.from("bool"); }
+    if name == "str" { return String.from("cb_str"); }
+    if name == "String" { return String.from("cb_String"); }
+    if name == "void" { return String.from("void"); }
+    return String.from("cb_Region *");
+}
+
+fn reg_get(cg: *Cg, key: str) -> i64 {
+    let p = cg.reg.get(key);
+    if p == null { return -1; }
+    return *p;
+}
+
+fn reg_add(cg: *Cg, key: str, name: str) {
+    cg.reg.set(key, cg.reg_n);
+    cg.reg_names.push(String.from(name));
+    cg.reg_n += 1;
+}
+
+// ---- types -------------------------------------------------------------------------------------------------------------------
+
+pub fn ctype(cg: *Cg, t: i64) -> String {
+    let k = tyk(cg, t);
+    if k == types.K_PRIM { return prim_c(tname(cg, t)); }
+    if k == types.K_ERR { return String.from("int32_t"); }
+    if k == types.K_STRUCT || k == types.K_ENUM { return scname(cg, sym_of(cg, t)); }
+    if k == types.K_PTR { let i = ctype(cg, inner_of(cg, t)); return format("{i}*"); }
+    if k == types.K_CLO {
+        for i in 0..cg.ck.types.tys.at(t).params.len { ctype(cg, *cg.ck.types.tys.at(t).params.at(i)); }
+        if inner_of(cg, t) != types.VOID { ctype(cg, inner_of(cg, t)); }
+        return String.from("cb_Clo");
+    }
+    let key = key_of(cg, t);
+    if k == types.K_FN {
+        let r = reg_get(cg, key);
+        if r >= 0 { return String.from(*cg.reg_names.at(r)); }
+        let mut ps: List<String> = List.new();
+        for i in 0..cg.ck.types.tys.at(t).params.len { ps.push(ctype(cg, *cg.ck.types.tys.at(t).params.at(i))); }
+        let ret = inner_of(cg, t) != types.VOID ? ctype(cg, inner_of(cg, t)) : String.from("void");
+        let name = format("cb_fn_{cg.reg_n + 1}");
+        reg_add(cg, key, name);
+        let pj = ps.len == 0 ? String.from("void") : join_lines(&ps, ", ");
+        cg.fnts.push(format("typedef {ret} (*{name})({pj});"));
+        return name;
+    }
+    if k == types.K_OPT {
+        let r = reg_get(cg, key);
+        if r >= 0 { return String.from(*cg.reg_names.at(r)); }
+        ctype(cg, inner_of(cg, t));
+        let name = format("cb_opt_{cg.reg_n + 1}");
+        reg_add(cg, key, name);
+        cg.opts.push(Todo { name: String.from(name), ty: t });
+        return name;
+    }
+    if k == types.K_ARR || k == types.K_SLICE || k == types.K_EU {
+        let r = reg_get(cg, key);
+        if r >= 0 { return String.from(*cg.reg_names.at(r)); }
+        let has_inner = !(k == types.K_EU && inner_of(cg, t) == types.VOID);
+        let inner = has_inner ? ctype(cg, inner_of(cg, t)) : String.empty();
+        let prefix = k == types.K_ARR ? "cb_arr" : (k == types.K_SLICE ? "cb_slice" : "cb_eu");
+        let name = format("{prefix}_{cg.reg_n + 1}");
+        reg_add(cg, key, name);
+        let c = Comp { name: String.from(name), ty: t, inner: inner, has_inner: has_inner };
+        if k == types.K_ARR { cg.arrs.push(c); } else if k == types.K_SLICE { cg.slices.push(c); } else { cg.eus.push(c); }
+        return name;
+    }
+    panic("no C type");
+    return String.empty();
+}
+
+fn lo_of(cg: *Cg, t: i64) -> i64 {
+    if !types.signed(t) { return 0; }
+    let b = types.bits(t);
+    if b == 64 { return -9223372036854775807 - 1; }
+    return 0 - (1 << (b - 1));
+}
+
+fn int_lit(cg: *Cg, v: i64, t: i64) -> String {
+    let nm = tname(cg, t);
+    if nm == "i64" {
+        if v == -9223372036854775807 - 1 { return String.from("(-INT64_C(9223372036854775807)-1)"); }
+        return format("INT64_C({v})");
+    }
+    if nm == "u64" { let u = v as u64; return format("UINT64_C({u})"); }
+    let ct = prim_c(nm);
+    let lo = lo_of(cg, t);
+    if v < 0 && v == lo { let w = v + 1; return format("(({ct})({w}-1))"); }
+    return format("(({ct}){v})");
+}
+
+// Python's repr() of a float
+pub fn py_repr(x: f64) -> String {
+    if x != x { return String.from("nan"); }
+    if x > 1.7976931348623157e308 { return String.from("inf"); }
+    if x < -1.7976931348623157e308 { return String.from("-inf"); }
+    let mut buf: [64]u8 = [0; 64];
+    let mut digits = String.empty();
+    let mut exp10 = 0;
+    let mut neg = false;
+    let mut found = false;
+    for p in 0..17 {
+        let n = snprintf(&buf[0], 64, cstr("%.*e"), p as i32, x);
+        let s: str = from_cstr(&buf[0]);
+        let back = sema.parse_float(s);
+        if back == x || p == 16 {
+            // d.ddddde[+-]XX
+            let mut i = 0;
+            if s[0] == 45 { neg = true; i = 1; }
+            digits = String.empty();
+            while i < s.len && s[i] != 101 {
+                if s[i] != 46 { digits.push(s[i]); }
+                i += 1;
+            }
+            i += 1;
+            let mut eneg = false;
+            if s[i] == 45 { eneg = true; i += 1; } else if s[i] == 43 { i += 1; }
+            let mut e = 0;
+            while i < s.len { e = e * 10 + (s[i] - 48) as i64; i += 1; }
+            exp10 = eneg ? 0 - e : e;
+            found = true;
+            break;
+        }
+    }
+    // strip trailing zeros of the digit string (keep at least one)
+    let dv: str = digits;
+    let mut nd = dv.len;
+    while nd > 1 && dv[nd - 1] == 48 { nd -= 1; }
+    let ds = String.from(dv[0..nd]);
+    let mut o = String.empty();
+    if neg { o.push('-'); }
+    if exp10 >= -4 && exp10 < 16 {
+        if exp10 >= 0 {
+            let dd: str = ds;
+            if nd as i64 <= exp10 + 1 {
+                o.append(dd);
+                for i in 0..(exp10 + 1 - nd as i64) { o.push('0'); }
+                o.append(".0");
+            } else {
+                o.append(dd[0..(exp10 + 1) as i64]);
+                o.push('.');
+                o.append(dd[(exp10 + 1) as i64..nd as i64]);
+            }
+        } else {
+            o.append("0.");
+            for i in 0..(0 - exp10 - 1) { o.push('0'); }
+            o.append(ds);
+        }
+    } else {
+        let dd: str = ds;
+        o.push(dd[0]);
+        if nd > 1 { o.push('.'); o.append(dd[1..nd as i64]); }
+        o.push('e');
+        let ae = exp10 < 0 ? 0 - exp10 : exp10;
+        o.push(exp10 < 0 ? '-' : '+');
+        if ae < 10 { o.push('0'); }
+        o.append(format("{ae}"));
+    }
+    return o;
+}
+
+fn float_lit(cg: *Cg, x: f64, t: i64) -> String {
+    let mut r = py_repr(x);
+    let rv: str = r;
+    let mut has_dot = false;
+    let mut has_e = false;
+    let mut has_n = false;
+    for i in 0..rv.len {
+        if rv[i] == 46 { has_dot = true; }
+        if rv[i] == 101 { has_e = true; }
+        if rv[i] == 110 { has_n = true; }
+    }
+    if !has_dot && !has_e && !has_n { r.append(".0"); }
+    if tname(cg, t) == "f32" { r.push('f'); }
+    return r;
+}
+
+fn kind_of(e: *ast.Node) -> str { return e.kind; }
+
+fn ety(e: *ast.Node) -> i64 { return sema.ty_of(e); }
+
+fn is_simple(cg: *Cg, e: *ast.Node) -> bool {
+    let k: str = e.kind;
+    if k == "Ident" || k == "Int" { return true; }
+    if k == "Field" {
+        if !(e.has("mode") && e.get("mode").tag == 3) { return false; }
+        let m: str = e.str_of("mode");
+        if !(m == "field" || m == "ptrfield" || m == "sym" || m == "variant") { return false; }
+        return m == "sym" || m == "variant" || is_simple(cg, e.node_of("obj"));
+    }
+    if k == "Unary" && e.str_of("op") == "*" { return is_simple(cg, e.node_of("expr")); }
+    if k == "Index" { return is_simple(cg, e.node_of("obj")) && is_simple(cg, e.node_of("idx")); }
+    return false;
+}
+
+fn is_place(e: *ast.Node) -> bool {
+    let k: str = e.kind;
+    if k == "Ident" { return e.has("local") && e.get("local").tag == 12; }
+    if k == "Field" { return e.has("mode") && e.get("mode").tag == 3 && (e.str_of("mode") == "field" || e.str_of("mode") == "ptrfield"); }
+    return k == "Index" || (k == "Unary" && e.str_of("op") == "*");
+}
+
+// removes one redundant pair of outer parentheses
+fn strip(x: str) -> String {
+    if !(x.len >= 2 && x[0] == 40 && x[x.len - 1] == 41) { return String.from(x); }
+    let mut depth = 0;
+    let mut i: i64 = 0;
+    let mut in_str = false;
+    while i < x.len {
+        let c = x[i];
+        if in_str {
+            if c == 92 { i += 1; } else if c == 34 { in_str = false; }
+        } else if c == 34 { in_str = true; }
+        else if c == 40 { depth += 1; }
+        else if c == 41 {
+            depth -= 1;
+            if depth == 0 && i != x.len - 1 { return String.from(x); }
+        }
+        i += 1;
+    }
+    return String.from(x[1..x.len - 1]);
+}
+
+// ---- expressions -------------------------------------------------------------------------------------------------------------
+
+fn flag(e: *ast.Node, name: str) -> bool { return sema.flag(e, name); }
+// the value of an `Int` node as 64 bits (a literal above i64::MAX keeps its decimal text in `s`)
+fn int_of(e: *ast.Node) -> i64 {
+    let v = e.get("value");
+    if v.s.len == 0 { return v.i; }
+    let s: str = v.s;
+    let mut x: u64 = 0;
+    for i in 0..s.len { x = x * 10 + ((s[i] - 48) as u64); }
+    return x as i64;
+}
+fn present(e: *ast.Node, name: str) -> bool { return e.has(name) && !e.is_none(name); }
+fn arg(e: *ast.Node, i: i64) -> *ast.Node { return e.get("args").items.at(i).node.at(0); }
+fn nargs(e: *ast.Node) -> i64 { return e.get("args").items.len; }
+fn at_ty(e: *ast.Node, name: str) -> i64 { return e.get("ty").i; }
+fn ann(e: *ast.Node, name: str) -> i64 { return e.get(name).i; }
+fn local_of(e: *ast.Node) -> i64 { return e.get("local").i; }
+fn has_local(e: *ast.Node) -> bool { return e.has("local") && e.get("local").tag == 12; }
+fn sym_attr(e: *ast.Node) -> i64 { return e.get("sym").i; }
+
+pub fn ex(cg: *Cg, e: *ast.Node) -> String {
+    let mut c = g_expr(cg, e);
+    if present(e, "conv") {
+        let cv = e.get("conv");
+        let dst = cv.items.at(1).i;
+        if cv.items.at(2).s == "checked" {
+            let dn = tname(cg, dst);
+            let l = loc(cg, e.span);
+            c = format("cb_cvt_{dn}((__int128)({c}), {l})");
+        } else {
+            let ct = ctype(cg, dst);
+            c = format("(({ct})({c}))");
+        }
+    }
+    let k: str = e.kind;
+    let et = ety(e);
+    if cg.has_st && (k == "Call" || k == "StructLit" || k == "ArrayLit" || k == "Binary" || k == "Try" || k == "Catch" || k == "Ternary")
+        && !flag(e, "owned") && et >= 0 && et != types.POISON && tyk(cg, et) != types.K_EU && sema.has_glue(cg.ck, et) {
+        let name = tmp(cg, "cb_tmp");
+        let d = DEnt { kind: 0, cname: String.from(name), ty: et };
+        let ts = cg.st_stack.len - 1;
+        cg.st_stack.at(ts).push(DEnt { kind: 0, cname: String.from(name), ty: et });
+        if cg.dscopes.len > 0 { let top = cg.dscopes.len - 1; cg.dscopes.at(top).push(d); }
+        c = format("({name} = {c}, {name}__live = 1, {name})");
+    }
+    if flag(e, "auto_try") { c = try_wrap(cg, c, e.get("eu_ty").i); }
+    if flag(e, "coerce") { c = format("cb_string_view({c})"); }
+    if present(e, "wrap_opt") {
+        let wt = ctype(cg, e.get("wrap_opt").i);
+        c = format("(({wt}){{1, {c}}})");
+    }
+    return c;
+}
+
+fn g_expr(cg: *Cg, e: *ast.Node) -> String {
+    let k: str = e.kind;
+    if k == "Int" { return int_lit(cg, int_of(e), ety(e)); }
+    if k == "Float" { return float_lit(cg, sema.parse_float(e.get("value").s), ety(e)); }
+    if k == "Bool" { return String.from(e.get("value").i != 0 ? "true" : "false"); }
+    if k == "FStr" { return g_fstr(cg, e); }
+    if k == "Str" { let v: str = e.get("value").s; let cs = c_string(v); return format("((cb_str){{(const uint8_t *){cs}, {v.len}}})"); }
+    if k == "Closure" { return g_closure(cg, e); }
+    if k == "Ident" { return g_ident(cg, e); }
+    if k == "Field" { return g_field(cg, e); }
+    if k == "Unary" { return g_unary(cg, e); }
+    if k == "Binary" { return g_binary(cg, e); }
+    if k == "IncDec" { return g_incdec(cg, e); }
+    if k == "Cast" { return g_cast(cg, e); }
+    if k == "Index" { return g_index(cg, e); }
+    if k == "SliceExpr" { return g_sliceexpr(cg, e); }
+    if k == "StructLit" { return g_structlit(cg, e); }
+    if k == "ArrayLit" { return g_arraylit(cg, e); }
+    if k == "ArrayRepeat" { return g_arrayrepeat(cg, e); }
+    if k == "Call" { return g_call(cg, e); }
+    if k == "Try" { let x = ex(cg, e.node_of("expr")); return try_wrap(cg, x, ety(e.node_of("expr"))); }
+    if k == "Catch" { return g_catch(cg, e); }
+    if k == "Ternary" {
+        let c = ex(cg, e.node_of("cond"));
+        let a = ex(cg, e.node_of("a"));
+        let b = ex(cg, e.node_of("b"));
+        return format("(({c}) ? ({a}) : ({b}))");
+    }
+    if k == "OptChain" { return g_optchain(cg, e); }
+    panic("no code generator for this expression");
+    return String.empty();
+}
+
+fn nn(cg: *Cg, x: str, ptr_ty: i64, sp: ast.Span) -> String {
+    let ct = ctype(cg, ptr_ty);
+    let l = loc(cg, sp);
+    return format("(({ct})cb_nn((void *)({x}), {l}))");
+}
+
+// ---- interpolation
+
+fn dbg_fn(cg: *Cg, t: i64) -> String {
+    let key = key_of(cg, t);
+    let p = cg.dbg_done.get(key);
+    if p != null { return format("cb_dbg_{*p}"); }
+    cg.dbg_n += 1;
+    cg.dbg_done.set(key, cg.dbg_n);
+    cg.dbg_todo.push(Todo { name: format("cb_dbg_{cg.dbg_n}"), ty: t });
+    return format("cb_dbg_{cg.dbg_n}");
+}
+
+fn gen_dbg(cg: *Cg, name: str, t: i64) -> String {
+    let ct = ctype(cg, t);
+    let mut L: List<String> = List.new();
+    L.push(format("static void {name}(cb_fb *b, const {ct} *p) {{"));
+    let k = tyk(cg, t);
+    if types.is_int(t) {
+        L.push(String.from(types.signed(t) ? "    cb_fb_i(b, (long long)*p);" : "    cb_fb_u(b, (unsigned long long)*p);"));
+    } else if types.is_float(t) {
+        let f32 = tname(cg, t) == "f32" ? 1 : 0;
+        L.push(format("    cb_fb_f(b, (double)*p, {f32});"));
+    } else if t == types.BOOL { L.push(String.from("    cb_fb_cstr(b, *p ? \"true\" : \"false\");")); }
+    else if t == types.STR { L.push(String.from("    cb_fb_q(b, *p);")); }
+    else if t == types.STRING { L.push(String.from("    cb_fb_q(b, cb_string_view(*p));")); }
+    else if t == types.ERR { L.push(String.from("    cb_fb_cstr(b, cb_err_names[*p]);")); }
+    else if k == types.K_ENUM { let sc = scname(cg, sym_of(cg, t)); L.push(format("    cb_fb_cstr(b, {sc}__names[*p]);")); }
+    else if k == types.K_PTR || k == types.K_FN { L.push(String.from("    cb_fb_ptr(b, (const void *)*p);")); }
+    else if k == types.K_OPT {
+        let d = dbg_fn(cg, inner_of(cg, t));
+        L.push(format("    if (p->has) {d}(b, &p->v); else cb_fb_cstr(b, \"null\");"));
+    } else if k == types.K_ARR || k == types.K_SLICE {
+        let inner = dbg_fn(cg, inner_of(cg, t));
+        let n = k == types.K_ARR ? format("{cg.ck.types.tys.at(t).n}") : String.from("p->len");
+        let el = k == types.K_ARR ? "p->v[i]" : "p->ptr[i]";
+        L.push(String.from("    cb_fb_cstr(b, \"[\");"));
+        L.push(format("    for (int64_t i = 0; i < {n}; i++) {{"));
+        L.push(String.from("        if (i) cb_fb_cstr(b, \", \");"));
+        L.push(format("        {inner}(b, &{el});"));
+        L.push(String.from("    }"));
+        L.push(String.from("    cb_fb_cstr(b, \"]\");"));
+    } else if k == types.K_STRUCT {
+        let sy = sym_of(cg, t);
+        let nm = c_string(cg.ck.syms.at(sy).name);
+        L.push(format("    cb_fb_cstr(b, {nm});"));
+        let nf = cg.ck.syms.at(sy).fields.len;
+        if nf > 0 {
+            L.push(String.from("    cb_fb_cstr(b, \" { \");"));
+            for i in 0..nf {
+                let sep = i > 0 ? ", " : "";
+                let fname = String.from(cg.ck.syms.at(sy).fields.at(i).name);
+                let fty = cg.ck.syms.at(sy).fields.at(i).ty;
+                L.push(format("    cb_fb_cstr(b, \"{sep}{fname}: \");"));
+                let d = dbg_fn(cg, fty);
+                let fl = fld(fname);
+                L.push(format("    {d}(b, &p->{fl});"));
+            }
+            L.push(String.from("    cb_fb_cstr(b, \" }\");"));
+        }
+    } else { panic("no debug representation"); }
+    L.push(String.from("}"));
+    return join_lines(&L, "\n");
+}
+
+fn ch_code(s: str) -> String {
+    if s.len == 0 { return String.from("0"); }
+    return format("{s[0]}");
+}
+
+fn spec_lit(cg: *Cg, sp: *ast.Val, over: str, has_over: bool) -> String {
+    let fill = String.from(sp.items.at(0).s);
+    let align = String.from(sp.items.at(1).s);
+    let sign = String.from(sp.items.at(2).s);
+    let alt = sp.items.at(3).i;
+    let zero = sp.items.at(4).i;
+    let width = sp.items.at(5).i;
+    let group = String.from(sp.items.at(6).s);
+    let prec = sp.items.at(7).i;
+    let ty = has_over ? String.from(over) : String.from(sp.items.at(8).s);
+    let grp = group == "," ? 1 : (group == "_" ? 2 : 0);
+    let a = ch_code(fill);
+    let b = ch_code(align);
+    let c = ch_code(sign);
+    let d = ch_code(ty);
+    return format("(&(const cb_fspec){{{a}, {b}, {c}, {d}, {alt}, {zero}, {grp}, {width}, {prec}}})");
+}
+
+fn default_spec() -> ast.Val {
+    let mut v = ast.v_str("");
+    v.items.push(ast.v_str(""));
+    v.items.push(ast.v_str(""));
+    v.items.push(ast.v_str(""));
+    v.items.push(ast.v_int(0));
+    v.items.push(ast.v_int(0));
+    v.items.push(ast.v_int(0));
+    v.items.push(ast.v_str(""));
+    v.items.push(ast.v_int(-1));
+    v.items.push(ast.v_str(""));
+    return v;
+}
+
+fn g_fstr(cg: *Cg, e: *ast.Node) -> String {
+    let b = tmp(cg, "cb_fb");
+    let mut out: List<String> = List.new();
+    out.push(format("cb_fb {b}; cb_fb_init(&{b});"));
+    for pi in 0..e.get("parts").items.len {
+        let part = e.get("parts").items.at(pi).node.at(0);
+        if present(part, "lit") {
+            let lit: str = part.get("lit").s;
+            if lit.len > 0 {
+                let cs = c_string(lit);
+                out.push(format("cb_fb_put(&{b}, {cs}, {lit.len});"));
+            }
+            continue;
+        }
+        let mut sp = default_spec();
+        if present(part, "pspec") { sp = ast.clone_val(part.get("pspec")); }
+        let pe = part.node_of("expr");
+        let t = ety(pe);
+        let x = ex(cg, pe);
+        let mode: str = part.str_of("mode");
+        let lit = spec_lit(cg, &sp, "", false);
+        if mode == "int" {
+            let sg = types.signed(t) ? 1 : 0;
+            out.push(format("cb_fmt_int(&{b}, (long long)({x}), {sg}, {lit});"));
+        } else if mode == "float" {
+            let f32 = tname(cg, t) == "f32" ? 1 : 0;
+            out.push(format("cb_fmt_float(&{b}, (double)({x}), {f32}, {lit});"));
+        } else if mode == "bool" {
+            out.push(format("cb_fmt_str(&{b}, cb_str_view_c(({x}) ? \"true\" : \"false\"), {lit});"));
+        } else if mode == "text" {
+            let mut v = String.empty();
+            if t == types.STR { v = String.from(x); }
+            else if t == types.STRING { v = format("cb_string_view({x})"); }
+            else { v = format("cb_str_view_c(cb_err_names[{x}])"); }
+            out.push(format("cb_fmt_str(&{b}, {v}, {lit});"));
+        } else if mode == "enum" {
+            if sp.items.at(8).s == "d" {
+                let l2 = spec_lit(cg, &sp, "", true);
+                out.push(format("cb_fmt_int(&{b}, (long long)({x}), 1, {l2});"));
+            } else {
+                let sc = scname(cg, sym_of(cg, t));
+                let l2 = spec_lit(cg, &sp, "s", true);
+                out.push(format("cb_fmt_str(&{b}, cb_str_view_c({sc}__names[{x}]), {l2});"));
+            }
+        } else if mode == "ptr" {
+            out.push(format("cb_fmt_ptr(&{b}, (const void *)({x}), {lit});"));
+        } else if mode == "debug" {
+            let v = t0(cg);
+            let tb = tmp(cg, "cb_fb");
+            let ct = ctype(cg, t);
+            let df = dbg_fn(cg, t);
+            let l2 = spec_lit(cg, &sp, "s", true);
+            out.push(format("{{ {ct} {v} = {x}; cb_fb {tb}; cb_fb_init(&{tb}); {df}(&{tb}, &{v}); cb_fmt_str(&{b}, (cb_str){{(const uint8_t *){tb}.p, (int64_t){tb}.len}}, {l2}); cb_fb_free(&{tb}); }}"));
+        } else { panic("unknown format mode"); }
+    }
+    let l = loc(cg, e.span);
+    out.push(format("cb_fb_finish(&{b}, {l});"));
+    let body = join_lines(&out, " ");
+    return format("({{ {body} }})");
+}
+
+fn sym_ref(cg: *Cg, sid: i64) -> String {
+    if cg.ck.syms.at(sid).kind == "const" && cg.ck.syms.at(sid).is_extern {
+        let ct = ctype(cg, cg.ck.syms.at(sid).ty);
+        let cs = String.from(cg.ck.syms.at(sid).csym);
+        return format("(({ct})({cs}))");
+    }
+    return scname(cg, sid);
+}
+
+fn lcname(cg: *Cg, l: i64) -> String { return String.from(cg.ck.locals.at(l).cname); }
+
+fn g_closure(cg: *Cg, e: *ast.Node) -> String {
+    let sid = sym_attr(e);
+    let sn = scname(cg, sid);
+    if e.get("captures").items.len == 0 { return format("((cb_Clo){{(void *){sn}, 0, 0}})"); }
+    let en = tmp(cg, "cb_en");
+    let mut parts: List<String> = List.new();
+    parts.push(format("struct {sn}_env *{en} = (struct {sn}_env *)cb_own_alloc(sizeof *{en});"));
+    for i in 0..e.get("captures").items.len {
+        let outer = e.get("captures").items.at(i).items.at(0).i;
+        let proxy = e.get("captures").items.at(i).items.at(1).i;
+        let oc = lcname(cg, outer);
+        if cg.ck.locals.at(proxy).byref { parts.push(format("{en}->c{i} = &{oc};")); }
+        else if cg.ck.locals.at(outer).glue { parts.push(format("{en}->c{i} = ({oc}__live = 0, {oc});")); }
+        else { parts.push(format("{en}->c{i} = {oc};")); }
+    }
+    parts.push(format("(cb_Clo){{(void *){sn}, {en}, {sn}_drop}};"));
+    let body = join_lines(&parts, " ");
+    return format("({{ {body} }})");
+}
+
+fn g_ident(cg: *Cg, e: *ast.Node) -> String {
+    if flag(e, "is_null") {
+        let t = ety(e);
+        let ct = ctype(cg, t);
+        if tyk(cg, t) == types.K_OPT { return format("(({ct}){{0}})"); }
+        return format("(({ct})0)");
+    }
+    if has_local(e) {
+        let l = local_of(e);
+        let cn = lcname(cg, l);
+        if flag(e, "move") && cg.ck.locals.at(l).glue { return format("({cn}__live = 0, {cn})"); }
+        return cn;
+    }
+    return sym_ref(cg, sym_attr(e));
+}
+
+fn g_field(cg: *Cg, e: *ast.Node) -> String {
+    let m: str = e.str_of("mode");
+    if m == "sym" { return sym_ref(cg, sym_attr(e)); }
+    let obj = e.node_of("obj");
+    if m == "slice_ptr" {
+        let ot = ety(obj);
+        let mut x = String.empty();
+        if tyk(cg, ot) == types.K_PTR { let o = ex(cg, obj); let n = nn(cg, o, ot, e.span); x = format("{n}->ptr"); }
+        else { let o = ex(cg, obj); x = format("({o}).ptr"); }
+        let base = tyk(cg, ot) == types.K_PTR ? inner_of(cg, ot) : ot;
+        if base == types.STR { return format("((uint8_t *)({x}))"); }
+        return format("({x})");
+    }
+    if m == "variant" { let sc = scname(cg, sym_attr(e)); let n = e.str_of("name"); return format("{sc}__{n}"); }
+    if m == "field" { let o = ex(cg, obj); let f = fld(e.str_of("name")); return format("{o}.{f}"); }
+    if m == "ptrfield" { let o = ex(cg, obj); let n = nn(cg, o, ety(obj), e.span); let f = fld(e.str_of("name")); return format("{n}->{f}"); }
+    let ot = ety(obj);
+    if m == "cap" {
+        if tyk(cg, ot) == types.K_PTR { let o = ex(cg, obj); let n = nn(cg, o, ot, e.span); return format("({n}->cap)"); }
+        let o = ex(cg, obj);
+        return format("({o}).cap");
+    }
+    if m == "len_arr" {
+        let base = tyk(cg, ot) == types.K_PTR ? inner_of(cg, ot) : ot;
+        let bn = cg.ck.types.tys.at(base).n;
+        if tyk(cg, ot) != types.K_PTR && !is_simple(cg, obj) { let o = ex(cg, obj); return format("((void)({o}), INT64_C({bn}))"); }
+        return format("INT64_C({bn})");
+    }
+    if m == "len_slice" {
+        if tyk(cg, ot) == types.K_PTR { let o = ex(cg, obj); let n = nn(cg, o, ot, e.span); return format("({n}->len)"); }
+        let o = ex(cg, obj);
+        return format("({o}).len");
+    }
+    panic("unknown field mode");
+    return String.empty();
+}
+
+fn g_unary(cg: *Cg, e: *ast.Node) -> String {
+    let op: str = e.str_of("op");
+    let t = ety(e);
+    let x0 = e.node_of("expr");
+    if op == "-" {
+        if x0.kind == "Int" && !sema.has_suffix(x0) && !flag(x0, "parenthesized") { return int_lit(cg, 0 - int_of(x0), t); }
+        let x = ex(cg, x0);
+        if types.is_float(t) { return format("(-{x})"); }
+        let tn = tname(cg, t);
+        let l = loc(cg, e.span);
+        return format("cb_neg_{tn}({x}, {l})");
+    }
+    if op == "!" { let x = ex(cg, x0); return format("(!{x})"); }
+    if op == "~" { let ct = ctype(cg, t); let x = ex(cg, x0); return format("(({ct})~{x})"); }
+    if op == "*" { let x = ex(cg, x0); let n = nn(cg, x, ety(x0), e.span); return format("(*{n})"); }
+    if op == "&" {
+        if flag(e, "temp") {
+            let ct = ctype(cg, ety(x0));
+            let x = ex(cg, x0);
+            return format("(&(({ct}[]){{{x}}})[0])");
+        }
+        let x = ex(cg, x0);
+        return format("(&{x})");
+    }
+    panic("unknown unary operator");
+    return String.empty();
+}
+
+fn opname(op: str) -> str {
+    if op == "+" { return "add"; }
+    if op == "-" { return "sub"; }
+    if op == "*" { return "mul"; }
+    if op == "/" { return "div"; }
+    if op == "%" { return "rem"; }
+    return "";
+}
+
+fn binop(cg: *Cg, op: str, t: i64, l: str, r: str, sp: ast.Span) -> String {
+    if op == "&&" || op == "||" { return format("({l} {op} {r})"); }
+    if op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">=" {
+        if t == types.STR { return op == "==" ? format("(cb_str_eq({l}, {r}))") : format("(!cb_str_eq({l}, {r}))"); }
+        return format("({l} {op} {r})");
+    }
+    let lc = loc(cg, sp);
+    if op == "+" && t == types.STR { return format("cb_str_catv((cb_str[]){{{l}, {r}}}, 2, {lc})"); }
+    let on = opname(op);
+    if on.len > 0 {
+        if types.is_float(t) { return format("({l} {op} {r})"); }
+        let tn = tname(cg, t);
+        return format("cb_{on}_{tn}({l}, {r}, {lc})");
+    }
+    if op == "&" || op == "|" || op == "^" { let ct = ctype(cg, t); return format("(({ct})({l} {op} {r}))"); }
+    if op == "<<" { let tn = tname(cg, t); return format("cb_shl_{tn}({l}, (int64_t)({r}), {lc})"); }
+    if op == ">>" { let tn = tname(cg, t); return format("cb_shr_{tn}({l}, (int64_t)({r}), {lc})"); }
+    panic("unknown binary operator");
+    return String.empty();
+}
+
+fn sv(cg: *Cg, e: *ast.Node) -> String {
+    let c = ex(cg, e);
+    if ety(e) == types.STRING && !flag(e, "coerce") { return format("cb_string_view({c})"); }
+    return c;
+}
+
+fn collect_str(cg: *Cg, n: *ast.Node, parts: *List<String>) {
+    if n.kind == "Binary" && n.str_of("op") == "+" && present(n, "strk") && !flag(n, "coerce") {
+        collect_str(cg, n.node_of("l"), parts);
+        collect_str(cg, n.node_of("r"), parts);
+    } else { parts.push(sv(cg, n)); }
+}
+
+fn g_binary(cg: *Cg, e: *ast.Node) -> String {
+    let op: str = e.str_of("op");
+    if op == "??" { return g_coalesce(cg, e); }
+    if flag(e, "opt_null") {
+        let x = ex(cg, e.str_of("opt_side") == "l" ? e.node_of("l") : e.node_of("r"));
+        return op == "!=" ? format("(({x}).has)") : format("(!({x}).has)");
+    }
+    if op == "+" && present(e, "strk") {
+        let mut parts: List<String> = List.new();
+        collect_str(cg, e.node_of("l"), &parts);
+        collect_str(cg, e.node_of("r"), &parts);
+        let fnn = e.str_of("strk") == "String" ? "cb_string_catv" : "cb_str_catv";
+        let pj = join_lines(&parts, ", ");
+        let l = loc(cg, e.get("op_span").span);
+        return format("{fnn}((cb_str[]){{{pj}}}, {parts.len}, {l})");
+    }
+    let opty = e.get("opty").i;
+    if opty == types.STR && (op == "==" || op == "!=") {
+        let l = sv(cg, e.node_of("l"));
+        let r = sv(cg, e.node_of("r"));
+        return binop(cg, op, types.STR, l, r, e.get("op_span").span);
+    }
+    let l = ex(cg, e.node_of("l"));
+    let r = ex(cg, e.node_of("r"));
+    return binop(cg, op, opty, l, r, e.get("op_span").span);
+}
+
+fn incdec_value(cg: *Cg, t: i64, x: str, op: str, sp: ast.Span) -> String {
+    if types.is_float(t) {
+        let o = String.from(op[0..1]);
+        let one = float_lit(cg, 1.0, t);
+        return format("({x} {o} {one})");
+    }
+    let name = op == "++" ? "add" : "sub";
+    let tn = tname(cg, t);
+    let one = int_lit(cg, 1, t);
+    let l = loc(cg, sp);
+    return format("cb_{name}_{tn}({x}, {one}, {l})");
+}
+
+fn g_incdec(cg: *Cg, e: *ast.Node) -> String {
+    let t = ety(e);
+    let op: str = e.str_of("op");
+    let o = tmp(cg, "cb_o");
+    let x0 = e.node_of("expr");
+    if is_simple(cg, x0) {
+        let x = ex(cg, x0);
+        let nw = incdec_value(cg, t, x, op, e.span);
+        if flag(e, "prefix") { return format("({{ {x} = {nw}; {x}; }})"); }
+        let ct = ctype(cg, t);
+        return format("({{ {ct} {o} = {x}; {x} = {nw}; {o}; }})");
+    }
+    let p = tmp(cg, "cb_p");
+    let ct = ctype(cg, t);
+    let nw = incdec_value(cg, t, o, op, e.span);
+    let res = flag(e, "prefix") ? format("*{p}") : String.from(o);
+    let x = ex(cg, x0);
+    return format("({{ {ct} *{p} = &{x}; {ct} {o} = *{p}; *{p} = {nw}; {res}; }})");
+}
+
+fn g_cast(cg: *Cg, e: *ast.Node) -> String {
+    let src = ety(e.node_of("expr"));
+    let dst = ety(e);
+    let x = ex(cg, e.node_of("expr"));
+    if types.eq(&cg.ck.types, src, dst) { return x; }
+    if types.is_int(dst) && types.is_float(src) { let dn = tname(cg, dst); return format("cb_f2i_{dn}((double){x})"); }
+    if tyk(cg, src) == types.K_PTR && types.is_int(dst) { let ct = ctype(cg, dst); return format("(({ct})(uintptr_t)({x}))"); }
+    if types.is_int(src) && tyk(cg, dst) == types.K_PTR { let ct = ctype(cg, dst); return format("(({ct})(uintptr_t)({x}))"); }
+    let ct = ctype(cg, dst);
+    return format("(({ct}){x})");
+}
+
+fn idx(cg: *Cg, x: *ast.Node) -> String { let c = ex(cg, x); return format("(int64_t)({c})"); }
+
+fn g_index(cg: *Cg, e: *ast.Node) -> String {
+    let obj = e.node_of("obj");
+    let ot = ety(obj);
+    let l = loc(cg, e.span);
+    let i = idx(cg, e.node_of("idx"));
+    if tyk(cg, ot) == types.K_ARR {
+        let o = ex(cg, obj);
+        let n = cg.ck.types.tys.at(ot).n;
+        return format("({o}).v[cb_idx({i}, {n}, {l})]");
+    }
+    if is_simple(cg, obj) {
+        let o = ex(cg, obj);
+        return format("({o}).ptr[cb_idx({i}, ({o}).len, {l})]");
+    }
+    let t = t0(cg);
+    let ct = ctype(cg, ot);
+    let o = ex(cg, obj);
+    return format("(*({{ {ct} {t} = {o}; &{t}.ptr[cb_idx({i}, {t}.len, {l})]; }}))");
+}
+
+fn g_sliceexpr(cg: *Cg, e: *ast.Node) -> String {
+    let obj = e.node_of("obj");
+    let ot = ety(obj);
+    let l = loc(cg, e.span);
+    let t = t0(cg);
+    let lo = tmp(cg, "cb_lo");
+    let hi = tmp(cg, "cb_hi");
+    let lo_x = present(e, "lo") ? idx(cg, e.node_of("lo")) : String.from("0");
+    let cot = ctype(cg, ot);
+    if tyk(cg, ot) == types.K_ARR {
+        let n = cg.ck.types.tys.at(ot).n;
+        let hi_x = present(e, "hi") ? idx(cg, e.node_of("hi")) : format("{n}");
+        let o = ex(cg, obj);
+        let cet = ctype(cg, ety(e));
+        return format("({{ {cot} *{t} = &({o}); int64_t {lo} = {lo_x}; int64_t {hi} = {hi_x}; cb_chk_rng({lo}, {hi}, {n}, {l}); ({cet}){{ {t}->v + {lo}, {hi} - {lo} }}; }})");
+    }
+    let hi_x = present(e, "hi") ? idx(cg, e.node_of("hi")) : format("{t}.len");
+    let o = ex(cg, obj);
+    let cet = ctype(cg, ety(e));
+    return format("({{ {cot} {t} = {o}; int64_t {lo} = {lo_x}; int64_t {hi} = {hi_x}; cb_chk_rng({lo}, {hi}, {t}.len, {l}); ({cet}){{ {t}.ptr + {lo}, {hi} - {lo} }}; }})");
+}
+
+fn g_structlit(cg: *Cg, e: *ast.Node) -> String {
+    let mut parts: List<String> = List.new();
+    for i in 0..e.get("fields").items.len {
+        let fe = e.get("fields").items.at(i);
+        let f = fld(fe.items.at(0).s);
+        let v = ex(cg, fe.items.at(2).node.at(0));
+        parts.push(format(".{f} = {v}"));
+    }
+    let inits = join_lines(&parts, ", ");
+    let sc = scname(cg, sym_attr(e));
+    return format("(({sc}){{{inits}}})");
+}
+
+fn g_arraylit(cg: *Cg, e: *ast.Node) -> String {
+    let ct = ctype(cg, ety(e));
+    let mut parts: List<String> = List.new();
+    for i in 0..e.get("elems").items.len { parts.push(ex(cg, e.get("elems").items.at(i).node.at(0))); }
+    let pj = join_lines(&parts, ", ");
+    return format("(({ct}){{{{{pj}}}}})");
+}
+
+fn g_arrayrepeat(cg: *Cg, e: *ast.Node) -> String {
+    let ct = ctype(cg, ety(e));
+    let el = e.node_of("elem");
+    let ek: str = el.kind;
+    let zero = ((ek == "Int" || ek == "Float") && el_is_zero(el)) || (ek == "Bool" && el.get("value").i == 0);
+    if zero { return format("(({ct}){{{{0}}}})"); }
+    let t = t0(cg);
+    let i = tmp(cg, "cb_i");
+    let ict = ctype(cg, inner_of(cg, ety(e)));
+    let x = ex(cg, el);
+    let n = e.get("n").i;
+    return format("({{ {ict} {t}e = {x}; {ct} {t}; for (int64_t {i} = 0; {i} < {n}; {i}++) {t}.v[{i}] = {t}e; {t}; }})");
+}
+
+fn el_is_zero(el: *ast.Node) -> bool {
+    if el.kind == "Int" { return int_of(el) == 0; }
+    return sema.parse_float(el.get("value").s) == 0.0;
+}
+
+// ---- calls and builtins ------------------------------------------------------------------------------------------------------
+
+fn nodes_of(v: *ast.Val, i: i64) -> *ast.Node { return v.items.at(i).node.at(0); }
+
+fn args_text(cg: *Cg, e: *ast.Node) -> String {
+    let mut parts: List<String> = List.new();
+    for i in 0..nargs(e) { parts.push(ex(cg, arg(e, i))); }
+    return join_lines(&parts, ", ");
+}
+
+fn g_call(cg: *Cg, e: *ast.Node) -> String {
+    if present(e, "builtin") { return builtin(cg, e, e.str_of("builtin")); }
+    if present(e, "opt_method") {
+        let om: str = e.str_of("opt_method");
+        let obj = e.node_of("callee").node_of("obj");
+        let x = ex(cg, obj);
+        if om == "is_some" { return format("(({x}).has)"); }
+        if om == "is_none" { return format("(!({x}).has)"); }
+        let t = t0(cg);
+        let ct = ctype(cg, ety(obj));
+        if om == "unwrap" {
+            let l = loc(cg, e.span);
+            return format("({{ {ct} {t} = {x}; if (CB_UNLIKELY(!{t}.has)) cb_panic({l}, \"`unwrap` on an empty optional\"); {t}.v; }})");
+        }
+        let d = ex(cg, arg(e, 0));
+        return format("({{ {ct} {t} = {x}; {t}.has ? {t}.v : ({d}); }})");
+    }
+    let args = args_text(cg, e);
+    let ind = e.has("indirect") ? e.get("indirect") : null;
+    if ind != null && ind.tag == 3 && ind.s == "clo" {
+        let f = tmp(cg, "cb_cl");
+        let callee = e.node_of("callee");
+        let ct = ety(callee);
+        let ret = inner_of(cg, ct) != types.VOID ? ctype(cg, inner_of(cg, ct)) : String.from("void");
+        let mut pts = String.empty();
+        let np = cg.ck.types.tys.at(ct).params.len;
+        for i in 0..np { let pc = ctype(cg, *cg.ck.types.tys.at(ct).params.at(i)); pts.append(", "); pts.append(pc); }
+        let cx = ex(cg, callee);
+        let mut more = String.empty();
+        for i in 0..nargs(e) { let a = ex(cg, arg(e, i)); more.append(", "); more.append(a); }
+        return format("(({{ cb_Clo {f} = {cx}; (({ret} (*)(void *{pts})){f}.fn)({f}.env{more}); }}))");
+    }
+    if ind != null && ind.tag != 0 && !(ind.tag == 1 && ind.i == 0) {
+        let callee = e.node_of("callee");
+        let cx = ex(cg, callee);
+        let n = nn(cg, cx, ety(callee), e.span);
+        return format("{n}({args})");
+    }
+    let cn = scname(cg, sym_attr(e));
+    return format("{cn}({args})");
+}
+
+fn print_one(cg: *Cg, a: *ast.Node) -> String {
+    let t = ety(a);
+    let x = ex(cg, a);
+    if types.is_int(t) {
+        if types.signed(t) { return format("cb_print_i((long long)({x}))"); }
+        return format("cb_print_u((unsigned long long)({x}))");
+    }
+    if types.is_float(t) { let n = tname(cg, t); return format("cb_print_{n}({x})"); }
+    if t == types.BOOL { return format("cb_print_bool({x})"); }
+    if t == types.STR { return format("cb_print_str({x})"); }
+    if t == types.STRING { return format("cb_print_str(cb_string_view({x}))"); }
+    if t == types.ERR { return format("cb_print_cstr(cb_err_names[{x}])"); }
+    if tyk(cg, t) == types.K_ENUM { let sc = scname(cg, sym_of(cg, t)); return format("cb_print_cstr({sc}__names[{x}])"); }
+    if tyk(cg, t) == types.K_PTR || tyk(cg, t) == types.K_FN { return format("cb_print_ptr((const void *)({x}))"); }
+    panic("cannot print this type");
+    return String.empty();
+}
+
+fn b_print(cg: *Cg, e: *ast.Node, nl: bool) -> String {
+    let mut parts: List<String> = List.new();
+    for i in 0..nargs(e) { parts.push(print_one(cg, arg(e, i))); }
+    if nl { parts.push(String.from("putchar('\\n')")); }
+    parts.push(String.from("(void)0"));
+    let pj = join_lines(&parts, ", ");
+    return format("({pj})");
+}
+
+fn b_to_str(cg: *Cg, e: *ast.Node) -> String {
+    let a = arg(e, 0);
+    let t = ety(a);
+    let x = ex(cg, a);
+    let l = loc(cg, e.span);
+    if types.is_int(t) {
+        if types.signed(t) { return format("cb_str_from_i((long long)({x}), {l})"); }
+        return format("cb_str_from_u((unsigned long long)({x}), {l})");
+    }
+    if types.is_float(t) { let f32 = tname(cg, t) == "f32" ? 1 : 0; return format("cb_str_from_f((double)({x}), {f32}, {l})"); }
+    if t == types.BOOL { return format("cb_str_view_c(({x}) ? \"true\" : \"false\")"); }
+    if t == types.STR { return x; }
+    if t == types.STRING { return format("cb_string_view({x})"); }
+    if t == types.ERR { return format("cb_str_view_c(cb_err_names[{x}])"); }
+    let sc = scname(cg, sym_of(cg, t));
+    return format("cb_str_view_c({sc}__names[{x}])");
+}
+
+pub fn pointer_free(cg: *Cg, t: i64) -> bool {
+    let k = tyk(cg, t);
+    if k == types.K_PRIM { return types.is_numeric(t) || t == types.BOOL; }
+    if k == types.K_ENUM || k == types.K_ERR { return true; }
+    if k == types.K_ARR { return pointer_free(cg, inner_of(cg, t)); }
+    if k == types.K_STRUCT {
+        let sy = sym_of(cg, t);
+        if cg.ck.syms.at(sy).opaque { return false; }
+        let nf = cg.ck.syms.at(sy).fields.len;
+        for i in 0..nf { if !pointer_free(cg, cg.ck.syms.at(sy).fields.at(i).ty) { return false; } }
+        return true;
+    }
+    return false;
+}
+
+fn builtin(cg: *Cg, e: *ast.Node, b: str) -> String {
+    if b == "print" { return b_print(cg, e, false); }
+    if b == "println" { return b_print(cg, e, true); }
+    if b == "to_str" { return b_to_str(cg, e); }
+    if b == "panic" { let l = loc(cg, e.span); let x = ex(cg, arg(e, 0)); return format("cb_panic_str({l}, {x})"); }
+    if b == "assert" {
+        let l = loc(cg, e.span);
+        let cond = ex(cg, arg(e, 0));
+        if nargs(e) == 2 { let m = ex(cg, arg(e, 1)); return format("(CB_LIKELY({cond}) ? (void)0 : cb_panic_str({l}, {m}))"); }
+        return format("(CB_LIKELY({cond}) ? (void)0 : cb_panic({l}, \"assertion failed\"))");
+    }
+    if b == "exit" { let x = ex(cg, arg(e, 0)); return format("exit({x})"); }
+    if b == "alloc" {
+        let n = tmp(cg, "cb_n");
+        let elem = e.get("elem").i;
+        let et = ctype(cg, elem);
+        let atomic = pointer_free(cg, elem) ? 1 : 0;
+        let x = ex(cg, arg(e, 0));
+        let ct = ctype(cg, ety(e));
+        let l = loc(cg, e.span);
+        return format("({{ int64_t {n} = (int64_t)({x}); ({ct}){{ ({et} *)cb_alloc({n}, (int64_t)sizeof({et}), {atomic}, {l}), {n} }}; }})");
+    }
+    if b == "alloc_in" {
+        let n = tmp(cg, "cb_n");
+        let et = ctype(cg, e.get("elem").i);
+        let x = ex(cg, arg(e, 0));
+        let ct = ctype(cg, ety(e));
+        let rc = lcname(cg, e.get("region_local").i);
+        let l = loc(cg, e.span);
+        return format("({{ int64_t {n} = (int64_t)({x}); ({ct}){{ ({et} *)cb_region_alloc({rc}, {n}, (int64_t)sizeof({et}), {l}), {n} }}; }})");
+    }
+    if b == "gc_collections" { return String.from("cb_gc_collections()"); }
+    if b == "free" {
+        let a = arg(e, 0);
+        let x = ex(cg, a);
+        if ety(a) == types.STRING { return format("cb_string_free({x})"); }
+        return format("cb_mem_free(({x}).ptr)");
+    }
+    if b == "cstr" { let x = sv(cg, arg(e, 0)); let l = loc(cg, e.span); return format("cb_cstr({x}, {l})"); }
+    if b == "from_cstr" { let x = ex(cg, arg(e, 0)); return format("cb_from_cstr((const char *)({x}))"); }
+    if b == "slice_of" {
+        let ct = ctype(cg, ety(e));
+        let x = ex(cg, arg(e, 0));
+        let y = ex(cg, arg(e, 1));
+        let l = loc(cg, e.span);
+        return format("(({ct}){{ {x}, cb_slice_len((int64_t)({y}), {l}) }})");
+    }
+    if b == "size_of" { let ct = ctype(cg, e.get("elem").i); return format("((int64_t)sizeof({ct}))"); }
+    if b == "drop" {
+        let a = arg(e, 0);
+        if sema.has_glue(cg.ck, ety(a)) {
+            let t = t0(cg);
+            let ct = ctype(cg, ety(a));
+            let x = ex(cg, a);
+            let g = glue_fn(cg, ety(a));
+            return format("({{ {ct} {t} = {x}; {g}(&{t}); (void)0; }})");
+        }
+        let x = ex(cg, a);
+        if ety(a) == types.STRING { return format("cb_string_free({x})"); }
+        return format("((void)({x}))");
+    }
+    if b == "drop_at" {
+        let a = arg(e, 0);
+        let inner = inner_of(cg, ety(a));
+        let x = ex(cg, a);
+        let p = nn(cg, x, ety(a), e.span);
+        if sema.has_glue(cg.ck, inner) { let g = glue_fn(cg, inner); return format("{g}({p})"); }
+        if inner == types.STRING {
+            let q = tmp(cg, "cb_q");
+            return format("({{ cb_String *{q} = {p}; cb_string_free(*{q}); *{q} = (cb_String){{0, 0, 0}}; (void)0; }})");
+        }
+        return format("((void)({p}))");
+    }
+    if b == "write_at" {
+        let a = arg(e, 0);
+        let v = arg(e, 1);
+        if pointer_free(cg, ety(v)) {
+            let x = ex(cg, a);
+            let p = nn(cg, x, ety(a), e.span);
+            let y = ex(cg, v);
+            return format("((void)(*{p} = {y}))");
+        }
+        let p = tmp(cg, "cb_p");
+        let ct = ctype(cg, ety(a));
+        let x = ex(cg, a);
+        let n = nn(cg, x, ety(a), e.span);
+        let y = ex(cg, v);
+        return format("({{ {ct} {p} = {n}; *{p} = {y}; cb_wb_range({p}, sizeof *{p}); (void)0; }})");
+    }
+    if b == "read_at" { let a = arg(e, 0); let x = ex(cg, a); let n = nn(cg, x, ety(a), e.span); return format("(*{n})"); }
+    if b == "gc_collect" { return String.from("cb_gc_collect()"); }
+    if b == "gc_bytes" { return String.from("cb_gc_bytes()"); }
+    if b == "gc_collect_gen" || b == "gc_gen_bytes" || b == "gc_gen_collections" {
+        let x = ex(cg, arg(e, 0));
+        let l = loc(cg, e.span);
+        return format("cb_{b}((int64_t)({x}), {l})");
+    }
+    if b == "string_new" { return String.from("((cb_String){0, 0, 0})"); }
+    if b == "string_from" || b == "format" { let x = ex(cg, arg(e, 0)); let l = loc(cg, e.span); return format("cb_string_from({x}, {l})"); }
+    if b == "string_clear" {
+        let a = arg(e, 0);
+        let x = ex(cg, a);
+        let n = nn(cg, x, ety(a), e.span);
+        return format("((void)({n}->len = 0))");
+    }
+    panic("no code generator for this builtin");
+    return String.empty();
+}
+
+// ---- errors ------------------------------------------------------------------------------------------------------------------
+
+fn drop_stmt(cg: *Cg, d: *DEnt) -> String {
+    let c = String.from(d.cname);
+    if d.kind == 2 { return format("if ({c}__live) {{ cb_region_free({c}); {c}__live = 0; }}"); }
+    if d.kind == 1 { return format("if ({c}__live) {{ cb_mem_free({c}.ptr); {c}__live = 0; }}"); }
+    let g = glue_fn(cg, d.ty);
+    return format("if ({c}__live) {g}(&{c});");
+}
+
+fn drops_text(cg: *Cg, base: i64) -> List<String> {
+    let mut out: List<String> = List.new();
+    let mut i = cg.dscopes.len;
+    while i > base {
+        i -= 1;
+        let mut j = cg.dscopes.at(i).len;
+        while j > 0 { j -= 1; let s = drop_stmt(cg, cg.dscopes.at(i).at(j)); out.push(s); }
+    }
+    return out;
+}
+
+fn glue_fn(cg: *Cg, t: i64) -> String {
+    let key = key_of(cg, t);
+    let p = cg.glue_done.get(key);
+    if p != null { return format("cb_drop_{*p}"); }
+    cg.glue_n += 1;
+    cg.glue_done.set(key, cg.glue_n);
+    cg.glue_todo.push(Todo { name: format("cb_drop_{cg.glue_n}"), ty: t });
+    return format("cb_drop_{cg.glue_n}");
+}
+
+fn gen_glue(cg: *Cg, name: str, t: i64) -> String {
+    let ct = ctype(cg, t);
+    let mut L: List<String> = List.new();
+    L.push(format("static void {name}({ct} *p) {{"));
+    let k = tyk(cg, t);
+    if t == types.STRING {
+        L.push(String.from("    cb_string_free(*p);"));
+        L.push(String.from("    p->ptr = 0; p->len = 0; p->cap = 0;"));
+    } else if k == types.K_ARR {
+        let g = glue_fn(cg, inner_of(cg, t));
+        let n = cg.ck.types.tys.at(t).n;
+        L.push(format("    for (int64_t i = 0; i < {n}; i++) {g}(&p->v[i]);"));
+    } else if k == types.K_OPT {
+        let g = glue_fn(cg, inner_of(cg, t));
+        L.push(format("    if (p->has) {g}(&p->v);"));
+    } else if k == types.K_CLO {
+        L.push(String.from("    cb_clo_drop(p);"));
+    } else {
+        let sy = sym_of(cg, t);
+        let d = sema.drop_fn_of(cg.ck, sy);
+        if d >= 0 { let dc = scname(cg, d); L.push(format("    {dc}(p);")); }
+        let nf = cg.ck.syms.at(sy).fields.len;
+        for i in 0..nf {
+            let ft = cg.ck.syms.at(sy).fields.at(i).ty;
+            if sema.has_glue(cg.ck, ft) {
+                let g = glue_fn(cg, ft);
+                let fl = fld(cg.ck.syms.at(sy).fields.at(i).name);
+                L.push(format("    {g}(&p->{fl});"));
+            }
+        }
+    }
+    L.push(String.from("}"));
+    return join_lines(&L, "\n");
+}
+
+fn fail_jump(cg: *Cg, err: str) -> String {
+    if cg.try_stack.len > 0 {
+        let top = cg.try_stack.len - 1;
+        let var = String.from(cg.try_stack.at(top).var);
+        let label = String.from(cg.try_stack.at(top).label);
+        let mut drops = drops_text(cg, cg.try_stack.at(top).base);
+        let dj = join_lines(&drops, " ");
+        return format("{var} = {err}; {dj} goto {label};");
+    }
+    let r = ctype(cg, cg.cur_ret);
+    let mut drops = drops_text(cg, 0);
+    let dj = join_lines(&drops, " ");
+    return format("{dj} return ({r}){{.err = {err}}};");
+}
+
+fn try_wrap(cg: *Cg, call: str, eut: i64) -> String {
+    let t = t0(cg);
+    let val = inner_of(cg, eut) == types.VOID ? String.from("(void)0") : format("{t}.val");
+    let ct = ctype(cg, eut);
+    let fj = fail_jump(cg, format("{t}.err"));
+    return format("({{ {ct} {t} = {call}; if (CB_UNLIKELY({t}.err)) {{ {fj} }} {val}; }})");
+}
+
+fn g_coalesce(cg: *Cg, e: *ast.Node) -> String {
+    let ot = ety(e.node_of("l"));
+    let t = t0(cg);
+    let ct = ctype(cg, ot);
+    let l = ex(cg, e.node_of("l"));
+    let r = ex(cg, e.node_of("r"));
+    if e.str_of("cmode") == "ptr" { return format("({{ {ct} {t} = {l}; {t} ? {t} : ({r}); }})"); }
+    if flag(e, "chain") { return format("({{ {ct} {t} = {l}; {t}.has ? {t} : ({r}); }})"); }
+    return format("({{ {ct} {t} = {l}; {t}.has ? {t}.v : ({r}); }})");
+}
+
+fn g_optchain(cg: *Cg, e: *ast.Node) -> String {
+    let obj = e.node_of("obj");
+    let ot = ety(obj);
+    let t = t0(cg);
+    let r = t0(cg);
+    let lc = lcname(cg, e.get("payload_local").i);
+    let rt = ctype(cg, ety(e));
+    let mut cond = String.empty();
+    let mut bind = String.empty();
+    if e.str_of("cmode") == "opt" {
+        cond = format("{t}.has");
+        let ic = ctype(cg, inner_of(cg, ot));
+        bind = format("{ic} {lc} = {t}.v;");
+    } else {
+        cond = format("{t} != NULL");
+        let oc = ctype(cg, ot);
+        bind = format("{oc} {lc} = {t};");
+    }
+    let live = format("bool {lc}__live = 0; (void){lc}__live;");
+    let inner = ex(cg, e.node_of("inner"));
+    let val = flag(e, "flat") ? String.from(inner) : format("(({rt}){{1, {inner}}})");
+    let oc = ctype(cg, ot);
+    let ox = ex(cg, obj);
+    return format("({{ {oc} {t} = {ox}; {rt} {r} = ({rt}){{0}}; if ({cond}) {{ {bind} {live} {r} = {val}; }} {r}; }})");
+}
+
+fn g_catch(cg: *Cg, e: *ast.Node) -> String {
+    let t = t0(cg);
+    let ex_ = e.node_of("expr");
+    let lt = ety(ex_);
+    let T = inner_of(cg, lt);
+    let call = ex(cg, ex_);
+    let h = e.node_of("handler");
+    let has_b = e.has("binder_local") && e.get("binder_local").tag == 12;
+    if h.kind != "Block" {
+        let ct = ctype(cg, lt);
+        if has_b {
+            let bn = lcname(cg, e.get("binder_local").i);
+            let hx = ex(cg, h);
+            return format("({{ {ct} {t} = {call}; {t}.err ? ({{ int32_t {bn} = {t}.err; {hx}; }}) : {t}.val; }})");
+        }
+        let hx = ex(cg, h);
+        return format("({{ {ct} {t} = {call}; {t}.err ? ({hx}) : {t}.val; }})");
+    }
+    let saved_ind = cg.ind;
+    push_buf(cg);
+    cg.ind = 0;
+    if has_b { let bn = lcname(cg, e.get("binder_local").i); emit(cg, format("int32_t {bn} = {t}.err;")); }
+    block_body(cg, h);
+    let mut lines = pop_buf(cg);
+    cg.ind = saved_ind;
+    let body = join_lines(&lines, " ");
+    let val = T == types.VOID ? String.from("(void)0") : format("{t}.val");
+    let ct = ctype(cg, lt);
+    return format("({{ {ct} {t} = {call}; if (CB_UNLIKELY({t}.err)) {{ {body} }} {val}; }})");
+}
+
+// ---- statements --------------------------------------------------------------------------------------------------------------
+
+fn af_get(cg: *Cg, l: i64) -> bool { return l < cg.autofree.len && *cg.autofree.at(l); }
+fn af_set(cg: *Cg, l: i64, v: bool) {
+    while cg.autofree.len <= l { cg.autofree.push(false); }
+    *cg.autofree.at(l) = v;
+}
+
+fn block_body(cg: *Cg, b: *ast.Node) {
+    let sc: List<DEnt> = List.new();
+    cg.dscopes.push(sc);
+    let stmts = b.get("stmts");
+    for i in 0..stmts.items.len { stmt(cg, nodes_of(stmts, i)); }
+    let mut top = cg.dscopes.pop() catch { panic("scope underflow"); };
+    let mut j = top.len;
+    while j > 0 { j -= 1; let s = drop_stmt(cg, top.at(j)); emit(cg, s); }
+}
+
+fn block(cg: *Cg, b: *ast.Node) {
+    cg.ind += 1;
+    block_body(cg, b);
+    cg.ind -= 1;
+}
+
+fn is_temp_stmt(k: str) -> bool {
+    return k == "Let" || k == "ExprStmt" || k == "Assign" || k == "Return" || k == "Throw" || k == "If" || k == "For";
+}
+
+fn append_raw(cg: *Cg, lines: *List<String>) {
+    let top = cg.bufs.len - 1;
+    for i in 0..lines.len { cg.bufs.at(top).push(String.from(*lines.at(i))); }
+}
+
+fn remove_temp(cg: *Cg, name: str) {
+    if cg.dscopes.len == 0 { return; }
+    let top = cg.dscopes.len - 1;
+    let mut keep: List<DEnt> = List.new();
+    let mut found = false;
+    while cg.dscopes.at(top).len > 0 {
+        let d = cg.dscopes.at(top).pop() catch { panic("unreachable"); };
+        if !found && d.cname == name && d.kind == 0 { found = true; } else { keep.push(d); }
+    }
+    while keep.len > 0 { let d = keep.pop() catch { panic("unreachable"); }; cg.dscopes.at(top).push(d); }
+}
+
+fn stmt(cg: *Cg, s: *ast.Node) {
+    let k: str = s.kind;
+    let saved = cg.has_st;
+    if !is_temp_stmt(k) {
+        cg.has_st = false;
+        stmt_kind(cg, s);
+        cg.has_st = saved;
+        return;
+    }
+    cg.has_st = true;
+    let tl: List<DEnt> = List.new();
+    cg.st_stack.push(tl);
+    push_buf(cg);
+    stmt_kind(cg, s);
+    let mut body = pop_buf(cg);
+    let temps = cg.st_stack.pop() catch { panic("unreachable"); };
+    cg.has_st = saved;
+    for i in 0..temps.len {
+        let c = ctype(cg, temps.at(i).ty);
+        let n = String.from(temps.at(i).cname);
+        emit(cg, format("{c} {n} = {{0}}; bool {n}__live = 0;"));
+    }
+    append_raw(cg, &body);
+    for i in 0..temps.len {
+        let n = String.from(temps.at(i).cname);
+        remove_temp(cg, n);
+        let g = glue_fn(cg, temps.at(i).ty);
+        emit(cg, format("if ({n}__live) {g}(&{n});"));
+    }
+}
+
+fn stmt_kind(cg: *Cg, s: *ast.Node) {
+    let k: str = s.kind;
+    if k == "Let" { s_let(cg, s); }
+    else if k == "ExprStmt" { s_exprstmt(cg, s); }
+    else if k == "Assign" { s_assign(cg, s); }
+    else if k == "If" { s_if(cg, s); }
+    else if k == "While" { s_while(cg, s); }
+    else if k == "Loop" { s_loop(cg, s); }
+    else if k == "Break" || k == "Continue" { s_brk(cg, k == "Break" ? "break;" : "continue;"); }
+    else if k == "Return" { s_return(cg, s); }
+    else if k == "Throw" { s_throw(cg, s); }
+    else if k == "For" { s_for(cg, s); }
+    else if k == "Match" { s_match(cg, s); }
+    else if k == "Region" { s_region(cg, s); }
+    else if k == "TryBlock" { s_tryblock(cg, s); }
+    else if k == "Block" { s_block(cg, s); }
+    else { panic("no code generator for this statement"); }
+}
+
+fn s_block(cg: *Cg, s: *ast.Node) {
+    emit(cg, "{");
+    block(cg, s);
+    emit(cg, "}");
+}
+
+fn drop_value(cg: *Cg, t: i64, x: str) {
+    let v = t0(cg);
+    emit(cg, "{");
+    let ct = ctype(cg, t);
+    emit(cg, format("    {ct} {v} = {x};"));
+    let g = glue_fn(cg, t);
+    emit(cg, format("    {g}(&{v});"));
+    emit(cg, "}");
+}
+
+fn s_let(cg: *Cg, s: *ast.Node) {
+    let init = s.node_of("init");
+    if !(s.has("local") && s.get("local").tag == 12) {
+        if flag(s, "drop_temp") { let x = ex(cg, init); drop_value(cg, ety(init), x); }
+        else { let x = ex(cg, init); emit(cg, format("(void)({x});")); }
+        return;
+    }
+    let l = s.get("local").i;
+    let ct = ctype(cg, cg.ck.locals.at(l).ty);
+    let cn = lcname(cg, l);
+    let x = ex(cg, init);
+    emit(cg, format("{ct} {cn} = {x};"));
+    if cg.ck.locals.at(l).glue || af_get(cg, l) {
+        emit(cg, format("bool {cn}__live = 1;"));
+        let top = cg.dscopes.len - 1;
+        cg.dscopes.at(top).push(DEnt { kind: af_get(cg, l) ? 1 : 0, cname: String.from(cn), ty: cg.ck.locals.at(l).ty });
+    }
+}
+
+fn s_exprstmt(cg: *Cg, s: *ast.Node) {
+    let e = s.node_of("expr");
+    if flag(s, "drop_temp") { let x = ex(cg, e); drop_value(cg, ety(e), x); return; }
+    if e.kind == "IncDec" && is_simple(cg, e.node_of("expr")) {
+        let x = ex(cg, e.node_of("expr"));
+        let nw = incdec_value(cg, ety(e), x, e.str_of("op"), e.span);
+        emit(cg, format("{x} = {nw};"));
+        return;
+    }
+    let x = ex(cg, e);
+    emit(cg, format("(void)({x});"));
+}
+
+fn wb_target(cg: *Cg, t: *ast.Node) -> bool {
+    let k: str = t.kind;
+    if k == "Ident" { return false; }
+    if k == "Field" {
+        if !(t.has("mode") && t.get("mode").tag == 3 && t.str_of("mode") == "field") { return true; }
+        return wb_target(cg, t.node_of("obj"));
+    }
+    if k == "Index" {
+        if tyk(cg, ety(t.node_of("obj"))) != types.K_ARR { return true; }
+        return wb_target(cg, t.node_of("obj"));
+    }
+    return true;
+}
+
+fn s_assign(cg: *Cg, s: *ast.Node) {
+    let t = s.node_of("target");
+    let val = s.node_of("value");
+    let rhs = ex(cg, val);
+    let opty = s.get("opty").i;
+    let mut wb = wb_target(cg, t) && !pointer_free(cg, opty);
+    let op: str = s.str_of("op");
+    if op == "=" {
+        if sema.has_glue(cg.ck, opty) {
+            let ct = ctype(cg, opty);
+            let g = glue_fn(cg, opty);
+            let v = t0(cg);
+            let isl = t.kind == "Ident" && has_local(t);
+            emit(cg, "{");
+            emit(cg, format("    {ct} {v} = {rhs};"));
+            if isl {
+                let ln = lcname(cg, local_of(t));
+                emit(cg, format("    if ({ln}__live) {g}(&{ln});"));
+                emit(cg, format("    {ln} = {v};"));
+                emit(cg, format("    {ln}__live = 1;"));
+            } else {
+                let p = tmp(cg, "cb_p");
+                let tx = ex(cg, t);
+                emit(cg, format("    {ct} *{p} = &{tx};"));
+                emit(cg, format("    {g}({p});"));
+                emit(cg, format("    *{p} = {v};"));
+                if wb { emit(cg, format("    cb_wb_range({p}, sizeof *{p});")); }
+            }
+            emit(cg, "}");
+            return;
+        }
+        if wb && !is_simple(cg, t) {
+            let p = tmp(cg, "cb_p");
+            emit(cg, "{");
+            let ct = ctype(cg, opty);
+            let tx = ex(cg, t);
+            emit(cg, format("    {ct} *{p} = &{tx};"));
+            emit(cg, format("    *{p} = {rhs};"));
+            emit(cg, format("    cb_wb_range({p}, sizeof *{p});"));
+            emit(cg, "}");
+            return;
+        }
+        let tx = ex(cg, t);
+        emit(cg, format("{tx} = {rhs};"));
+        if wb { let a = ex(cg, t); let b = ex(cg, t); emit(cg, format("cb_wb_range(&{a}, sizeof {b});")); }
+        return;
+    }
+    let is_str = opty == types.STR || opty == types.STRING;
+    if !is_str { wb = false; }
+    let opl = loc(cg, s.get("op_span").span);
+    if is_simple(cg, t) {
+        let lhs = ex(cg, t);
+        let comb = combine(cg, s, opty, lhs, rhs, opl, is_str);
+        emit(cg, format("{lhs} = {comb};"));
+        if wb { emit(cg, format("cb_wb_range(&{lhs}, sizeof {lhs});")); }
+        return;
+    }
+    let p = tmp(cg, "cb_p");
+    emit(cg, "{");
+    cg.ind += 1;
+    let ct = ctype(cg, opty);
+    let tx = ex(cg, t);
+    emit(cg, format("{ct} *{p} = &{tx};"));
+    let comb = combine(cg, s, opty, format("*{p}"), rhs, opl, is_str);
+    emit(cg, format("*{p} = {comb};"));
+    if wb { emit(cg, format("cb_wb_range({p}, sizeof *{p});")); }
+    cg.ind -= 1;
+    emit(cg, "}");
+}
+
+fn combine(cg: *Cg, s: *ast.Node, opty: i64, lhs: str, rhs: str, opl: str, is_str: bool) -> String {
+    let val = s.node_of("value");
+    if is_str {
+        if opty == types.STRING {
+            let vt = ety(val);
+            if vt == types.STRING || vt == types.STR { let x = sv(cg, val); return format("cb_string_append({lhs}, {x}, {opl})"); }
+            return format("cb_string_push({lhs}, {rhs}, {opl})");
+        }
+        let x = sv(cg, val);
+        return format("cb_str_catv((cb_str[]){{{lhs}, {x}}}, 2, {opl})");
+    }
+    return binop(cg, s.str_of("bop"), opty, lhs, rhs, s.get("op_span").span);
+}
+
+fn s_if(cg: *Cg, s: *ast.Node) {
+    let c = ex(cg, s.node_of("cond"));
+    let cs = strip(c);
+    emit(cg, format("if ({cs}) {{"));
+    block(cg, s.node_of("then"));
+    let mut els: *ast.Node = s;
+    let mut has = present(s, "els");
+    if has { els = s.node_of("els"); }
+    while has && els.kind == "If" {
+        let c2 = ex(cg, els.node_of("cond"));
+        let cs2 = strip(c2);
+        emit(cg, format("}} else if ({cs2}) {{"));
+        block(cg, els.node_of("then"));
+        has = present(els, "els");
+        if has { els = els.node_of("els"); }
+    }
+    if has {
+        emit(cg, "} else {");
+        block(cg, els);
+    }
+    emit(cg, "}");
+}
+
+fn loop_base(cg: *Cg) -> i64 { return cg.loop_bases.len > 0 ? *cg.loop_bases.at(cg.loop_bases.len - 1) : 0; }
+
+fn s_while(cg: *Cg, s: *ast.Node) {
+    let c = ex(cg, s.node_of("cond"));
+    let cs = strip(c);
+    emit(cg, format("while ({cs}) {{"));
+    poll(cg);
+    cg.loop_bases.push(cg.dscopes.len);
+    block(cg, s.node_of("body"));
+    cg.loop_bases.pop() catch { panic("unreachable"); };
+    emit(cg, "}");
+}
+
+fn s_loop(cg: *Cg, s: *ast.Node) {
+    emit(cg, "for (;;) {");
+    poll(cg);
+    cg.loop_bases.push(cg.dscopes.len);
+    block(cg, s.node_of("body"));
+    cg.loop_bases.pop() catch { panic("unreachable"); };
+    emit(cg, "}");
+}
+
+fn s_brk(cg: *Cg, word: str) {
+    let mut ds = drops_text(cg, loop_base(cg));
+    for i in 0..ds.len { emit(cg, *ds.at(i)); }
+    emit(cg, word);
+}
+
+fn finish_return(cg: *Cg, value: str, has: bool) {
+    let mut drops = drops_text(cg, 0);
+    if drops.len == 0 {
+        if has { emit(cg, format("return {value};")); } else { emit(cg, "return;"); }
+        return;
+    }
+    emit(cg, "{");
+    let mut v = String.empty();
+    if has {
+        v = t0(cg);
+        let ct = ctype(cg, cg.cur_ret);
+        emit(cg, format("    {ct} {v} = {value};"));
+    }
+    for i in 0..drops.len { let d = String.from(*drops.at(i)); emit(cg, format("    {d}")); }
+    if has { emit(cg, format("    return {v};")); } else { emit(cg, "    return;"); }
+    emit(cg, "}");
+}
+
+fn s_return(cg: *Cg, s: *ast.Node) {
+    let ret = cg.cur_ret;
+    let has_e = present(s, "expr");
+    if tyk(cg, ret) == types.K_EU {
+        let R = ctype(cg, ret);
+        if !has_e || inner_of(cg, ret) == types.VOID { finish_return(cg, format("({R}){{0}}"), true); }
+        else { let x = ex(cg, s.node_of("expr")); finish_return(cg, format("({R}){{.err = 0, .val = {x}}}"), true); }
+    } else if !has_e { finish_return(cg, "", false); }
+    else { let x = ex(cg, s.node_of("expr")); finish_return(cg, x, true); }
+}
+
+fn s_throw(cg: *Cg, s: *ast.Node) {
+    if cg.try_stack.len > 0 {
+        let x = ex(cg, s.node_of("expr"));
+        let fj = fail_jump(cg, x);
+        emit(cg, format("{{ {fj} }}"));
+        return;
+    }
+    let ct = ctype(cg, cg.cur_ret);
+    let x = ex(cg, s.node_of("expr"));
+    finish_return(cg, format("({ct}){{.err = {x}}}"), true);
+}
+
+fn s_for(cg: *Cg, s: *ast.Node) {
+    if s.has("desugared") && s.get("desugared").tag == 4 { s_block(cg, s.node_of("desugared")); return; }
+    let it = s.node_of("iter");
+    let has_l = s.has("local") && s.get("local").tag == 12;
+    let var = has_l ? lcname(cg, s.get("local").i) : tmp(cg, "cb_v");
+    emit(cg, "{");
+    cg.ind += 1;
+    if s.str_of("mode") == "range" {
+        let T = ctype(cg, s.get("range_ty").i);
+        let lo = tmp(cg, "cb_lo");
+        let hi = tmp(cg, "cb_hi");
+        let lx = ex(cg, it.node_of("lo"));
+        emit(cg, format("{T} {lo} = {lx};"));
+        let hx = ex(cg, it.node_of("hi"));
+        emit(cg, format("{T} {hi} = {hx};"));
+        if it.get("inclusive").i == 0 {
+            emit(cg, format("for ({T} {var} = {lo}; {var} < {hi}; {var}++) {{"));
+        } else {
+            let go = tmp(cg, "cb_go");
+            emit(cg, format("bool {go} = {lo} <= {hi};"));
+            emit(cg, format("for ({T} {var} = {lo}; {go}; {go} = ({var} != {hi}), {var} = ({T})({var} + {go})) {{"));
+        }
+    } else {
+        let ot = ety(it);
+        let p = tmp(cg, "cb_p");
+        let n = tmp(cg, "cb_n");
+        let i = tmp(cg, "cb_i");
+        let et = tyk(cg, ot) != types.K_PRIM ? ctype(cg, inner_of(cg, ot)) : String.from("uint8_t");
+        if tyk(cg, ot) == types.K_ARR {
+            let a = tmp(cg, "cb_a");
+            let oc = ctype(cg, ot);
+            let x = ex(cg, it);
+            if is_place(it) {
+                emit(cg, format("{oc} *{a} = &{x};"));
+                emit(cg, format("{et} *{p} = {a}->v;"));
+            } else {
+                emit(cg, format("{oc} {a} = {x};"));
+                emit(cg, format("{et} *{p} = {a}.v;"));
+            }
+            let an = cg.ck.types.tys.at(ot).n;
+            emit(cg, format("int64_t {n} = {an};"));
+        } else {
+            let sv_ = tmp(cg, "cb_s");
+            let oc = ctype(cg, ot);
+            let x = ex(cg, it);
+            emit(cg, format("{oc} {sv_} = {x};"));
+            if ot == types.STR { emit(cg, format("const {et} *{p} = {sv_}.ptr;")); }
+            else { emit(cg, format("{et} *{p} = {sv_}.ptr;")); }
+            emit(cg, format("int64_t {n} = {sv_}.len;"));
+        }
+        emit(cg, format("for (int64_t {i} = 0; {i} < {n}; {i}++) {{"));
+        if has_l { emit(cg, format("    {et} {var} = {p}[{i}];")); }
+    }
+    poll(cg);
+    cg.loop_bases.push(cg.dscopes.len);
+    block(cg, s.node_of("body"));
+    cg.loop_bases.pop() catch { panic("unreachable"); };
+    emit(cg, "}");
+    cg.ind -= 1;
+    emit(cg, "}");
+}
+
+fn s_match(cg: *Cg, s: *ast.Node) {
+    let st = s.get("scrut_ty").i;
+    let t = tmp(cg, "cb_m");
+    emit(cg, "{");
+    cg.ind += 1;
+    let sc = ctype(cg, st);
+    let sx = ex(cg, s.node_of("scrut"));
+    emit(cg, format("{sc} {t} = {sx};"));
+    let mut first = true;
+    let arms = s.get("arms");
+    for ai in 0..arms.items.len {
+        let arm = nodes_of(arms, ai);
+        let mut cond = String.empty();
+        if arm.get("wild").i != 0 { cond = String.from("1"); }
+        else {
+            let mut parts: List<String> = List.new();
+            let pats = arm.get("pats");
+            for pi in 0..pats.items.len { let px = ex(cg, nodes_of(pats, pi)); parts.push(format("{t} == {px}")); }
+            cond = join_lines(&parts, " || ");
+        }
+        let kw = first ? "if" : "} else if";
+        emit(cg, format("{kw} ({cond}) {{"));
+        block(cg, arm.node_of("body"));
+        first = false;
+    }
+    if !first { emit(cg, "}"); } else { emit(cg, format("(void){t};")); }
+    cg.ind -= 1;
+    emit(cg, "}");
+}
+
+fn s_region(cg: *Cg, s: *ast.Node) {
+    let name = lcname(cg, s.get("local").i);
+    emit(cg, "{");
+    cg.ind += 1;
+    emit(cg, format("cb_Region *{name} = cb_region_new(); bool {name}__live = 1;"));
+    let mut mark = DEnt { kind: 2, cname: String.from(name), ty: types.REGION };
+    let mut sc: List<DEnt> = List.new();
+    sc.push(DEnt { kind: 2, cname: String.from(name), ty: types.REGION });
+    cg.dscopes.push(sc);
+    block_body(cg, s.node_of("body"));
+    cg.dscopes.pop() catch { panic("unreachable"); };
+    let ds = drop_stmt(cg, &mark);
+    emit(cg, ds);
+    cg.ind -= 1;
+    emit(cg, "}");
+}
+
+fn s_tryblock(cg: *Cg, s: *ast.Node) {
+    let n = tmp(cg, "cb_try");
+    let var = format("{n}_err");
+    let catch_l = format("{n}_catch");
+    let end_l = format("{n}_end");
+    emit(cg, "{");
+    cg.ind += 1;
+    emit(cg, format("int32_t {var} = 0;"));
+    cg.try_stack.push(TryEnt { var: String.from(var), label: String.from(catch_l), base: cg.dscopes.len });
+    emit(cg, "{");
+    block(cg, s.node_of("body"));
+    emit(cg, "}");
+    cg.try_stack.pop() catch { panic("unreachable"); };
+    emit(cg, format("goto {end_l};"));
+    emit(cg, format("{catch_l}: (void){var};"));
+    emit(cg, "{");
+    cg.ind += 1;
+    if s.has("binder_local") && s.get("binder_local").tag == 12 {
+        let bn = lcname(cg, s.get("binder_local").i);
+        emit(cg, format("int32_t {bn} = {var};"));
+    }
+    block_body(cg, s.node_of("handler"));
+    cg.ind -= 1;
+    emit(cg, "}");
+    emit(cg, format("{end_l}: ;"));
+    cg.ind -= 1;
+    emit(cg, "}");
+}
+
+// ---- autofree analysis -------------------------------------------------------------------------------------------------------
+
+struct AfEnt { kind: String, addr: bool }
+struct AfState { cands: List<i64>, bad: List<bool>, stack: List<AfEnt> }
+
+fn af_mark_bad(st: *AfState, l: i64) {
+    while st.bad.len <= l { st.bad.push(false); }
+    *st.bad.at(l) = true;
+}
+
+fn af_root(cg: *Cg, st: *AfState, l: i64) -> i64 {
+    let mut cur = l;
+    while cg.ck.locals.at(cur).outer >= 0 {
+        af_mark_bad(st, cg.ck.locals.at(cur).outer);
+        cur = cg.ck.locals.at(cur).outer;
+    }
+    return cur;
+}
+
+fn af_under_addr(st: *AfState) -> bool {
+    let mut i = st.stack.len;
+    while i > 0 {
+        i -= 1;
+        let k: str = st.stack.at(i).kind;
+        if k == "Index" || k == "Field" { continue; }
+        return st.stack.at(i).addr;
+    }
+    return false;
+}
+
+fn same_pos(a: *ast.Node, b: *ast.Node) -> bool {
+    return a.kind == b.kind && a.span.line == b.span.line && a.span.col == b.span.col && a.span.len == b.span.len;
+}
+
+fn af_walk_val(cg: *Cg, st: *AfState, v: *ast.Val, parent: *ast.Node, has_parent: bool) {
+    if v.tag == 4 { af_walk(cg, st, v.node.at(0), parent, has_parent); return; }
+    if v.tag == 5 { for i in 0..v.items.len { af_walk_val(cg, st, v.items.at(i), parent, has_parent); } }
+}
+
+fn af_walk(cg: *Cg, st: *AfState, n: *ast.Node, parent: *ast.Node, has_parent: bool) {
+    if n.kind == "Let" && flag(n, "afree") && n.has("local") && n.get("local").tag == 12 { st.cands.push(n.get("local").i); }
+    if n.kind == "Ident" {
+        if has_local(n) {
+            let r = af_root(cg, st, local_of(n));
+            let mut ok = false;
+            if has_parent {
+                if parent.kind == "Index" && same_pos(parent.node_of("obj"), n) { ok = true; }
+                if parent.kind == "Field" && same_pos(parent.node_of("obj"), n) && parent.str_of("name") == "len" { ok = true; }
+            }
+            if !ok || af_under_addr(st) { af_mark_bad(st, r); }
+        }
+        return;
+    }
+    let addr = n.kind == "Unary" && n.str_of("op") == "&";
+    st.stack.push(AfEnt { kind: String.from(n.kind), addr: addr });
+    for i in 0..n.attrs.len {
+        let nm: str = n.attrs.at(i).name;
+        if nm == "span" || nm == "ty" || nm == "local" { continue; }
+        if nm == "desugared" && n.attrs.at(i).v.tag != 4 { continue; }
+        af_walk_val(cg, st, &n.attrs.at(i).v, n, true);
+    }
+    st.stack.pop() catch { panic("unreachable"); };
+}
+
+fn find_autofree(cg: *Cg, body: *ast.Node) {
+    let mut st = AfState { cands: List.new(), bad: List.new(), stack: List.new() };
+    af_walk(cg, &st, body, body, false);
+    for i in 0..st.cands.len {
+        let l = *st.cands.at(i);
+        af_set(cg, l, !(l < st.bad.len && *st.bad.at(l)));
+    }
+}
+
+// ---- functions and top level -------------------------------------------------------------------------------------------------
+
+fn sig(cg: *Cg, sid: i64) -> String {
+    let rt = cg.ck.syms.at(sid).ret;
+    let ret = rt != types.VOID ? ctype(cg, rt) : String.from("void");
+    let mut parts: List<String> = List.new();
+    let np = cg.ck.syms.at(sid).params.len;
+    let nl = cg.ck.syms.at(sid).param_locals.len;
+    let n = np < nl ? np : nl;
+    for i in 0..n {
+        let c = ctype(cg, *cg.ck.syms.at(sid).params.at(i));
+        let ln = lcname(cg, *cg.ck.syms.at(sid).param_locals.at(i));
+        parts.push(format("{c} {ln}"));
+    }
+    let mut params = join_lines(&parts, ", ");
+    if cg.ck.syms.at(sid).clo >= 0 {
+        if params.len > 0 { params = format("void *cb_env, {params}"); } else { params = String.from("void *cb_env"); }
+    }
+    if params.len == 0 { params = String.from("void"); }
+    let st = cg.ck.syms.at(sid).is_export ? "" : "static ";
+    let cn = scname(cg, sid);
+    return format("{st}{ret} {cn}({params})");
+}
+
+fn has_caps(cg: *Cg, sid: i64) -> bool {
+    let c = cg.ck.syms.at(sid).clo;
+    return c >= 0 && cg.ck.clos.at(c).proxy.len > 0;
+}
+
+fn fn_body(cg: *Cg, sid: i64) -> *ast.Node {
+    let c = cg.ck.syms.at(sid).clo;
+    if c >= 0 { return &cg.ck.clos.at(c).body; }
+    return cg.ck.nodes.at(cg.ck.syms.at(sid).node).node_of("body");
+}
+
+fn gen_fn(cg: *Cg, sid: i64) -> String {
+    cg.cur_ret = cg.ck.syms.at(sid).ret;
+    let mut fmod = cg.ck.syms.at(sid).mod_idx;
+    if cg.ck.syms.at(sid).clo < 0 && cg.ck.nodes.at(cg.ck.syms.at(sid).node).has("src_mod") { fmod = cg.ck.nodes.at(cg.ck.syms.at(sid).node).get("src_mod").i; }
+    cg.cur_file = String.from(cg.ck.ld.mods.at(fmod).shown);
+    cg.ind = 1;
+    push_buf(cg);
+    let first: List<DEnt> = List.new();
+    cg.dscopes = List.new();
+    cg.dscopes.push(first);
+    cg.loop_bases = List.new();
+    cg.try_stack = List.new();
+    poll(cg);
+    let body = fn_body(cg, sid);
+    if !cg.gc { find_autofree(cg, body); }
+    let cn = scname(cg, sid);
+    let isclo = cg.ck.syms.at(sid).clo >= 0;
+    if has_caps(cg, sid) { emit(cg, format("struct {cn}_env *cb_e = (struct {cn}_env *)cb_env;")); }
+    else if isclo { emit(cg, "(void)cb_env;"); }
+    let nl = cg.ck.syms.at(sid).param_locals.len;
+    for i in 0..nl {
+        let l = *cg.ck.syms.at(sid).param_locals.at(i);
+        if cg.ck.locals.at(l).glue {
+            let ln = lcname(cg, l);
+            emit(cg, format("bool {ln}__live = 1;"));
+            cg.dscopes.at(0).push(DEnt { kind: 0, cname: ln, ty: cg.ck.locals.at(l).ty });
+        }
+    }
+    block_body(cg, body);
+    let mut j = cg.dscopes.at(0).len;
+    while j > 0 { j -= 1; let s = drop_stmt(cg, cg.dscopes.at(0).at(j)); emit(cg, s); }
+    let rt = cg.ck.syms.at(sid).ret;
+    if tyk(cg, rt) == types.K_EU {
+        if inner_of(cg, rt) == types.VOID { let c = ctype(cg, rt); emit(cg, format("return ({c}){{0}};")); }
+        else { emit(cg, "__builtin_unreachable();"); }
+    } else if rt != types.VOID { emit(cg, "__builtin_unreachable();"); }
+    let mut lines = pop_buf(cg);
+    let sg = sig(cg, sid);
+    let bj = join_lines(&lines, "\n");
+    let mut text = format("{sg} {{\n{bj}\n}}\n");
+    if has_caps(cg, sid) { let cd = closure_drop(cg, sid); text = format("{cd}{text}"); }
+    return text;
+}
+
+fn closure_env(cg: *Cg, sid: i64) -> String {
+    let c = cg.ck.syms.at(sid).clo;
+    let mut parts: List<String> = List.new();
+    for i in 0..cg.ck.clos.at(c).proxy.len {
+        let p = *cg.ck.clos.at(c).proxy.at(i);
+        let ct = ctype(cg, cg.ck.locals.at(p).ty);
+        let star = cg.ck.locals.at(p).byref ? "*" : "";
+        parts.push(format("{ct}{star} c{i};"));
+    }
+    let f = join_lines(&parts, " ");
+    let cn = scname(cg, sid);
+    return format("struct {cn}_env {{ {f} }};");
+}
+
+fn closure_drop(cg: *Cg, sid: i64) -> String {
+    let c = cg.ck.syms.at(sid).clo;
+    let cn = scname(cg, sid);
+    let mut L: List<String> = List.new();
+    L.push(format("static void {cn}_drop(void *cb_p) {{"));
+    L.push(format("    struct {cn}_env *cb_e = (struct {cn}_env *)cb_p;"));
+    for i in 0..cg.ck.clos.at(c).proxy.len {
+        let p = *cg.ck.clos.at(c).proxy.at(i);
+        let pt = cg.ck.locals.at(p).ty;
+        if !cg.ck.locals.at(p).byref && sema.has_glue(cg.ck, pt) { let g = glue_fn(cg, pt); L.push(format("    {g}(&cb_e->c{i});")); }
+    }
+    L.push(String.from("    cb_own_free(cb_e);"));
+    L.push(String.from("}"));
+    let j = join_lines(&L, "\n");
+    return format("{j}\n");
+}
+
+fn const_def(cg: *Cg, sid: i64) -> String {
+    let t = cg.ck.syms.at(sid).ty;
+    let ct = ctype(cg, t);
+    let mut lit = String.empty();
+    if types.is_int(t) { lit = int_lit(cg, cg.ck.syms.at(sid).cv.i, t); }
+    else if types.is_float(t) { lit = float_lit(cg, cg.ck.syms.at(sid).cv.f, t); }
+    else if t == types.BOOL { lit = String.from(cg.ck.syms.at(sid).cv.i != 0 ? "true" : "false"); }
+    else {
+        let v: str = cg.ck.syms.at(sid).cv.s;
+        let cs = c_string(v);
+        lit = format("{{(const uint8_t *){cs}, {v.len}}}");
+    }
+    let cn = scname(cg, sid);
+    return format("CB_UNUSED static const {ct} {cn} = {lit};");
+}
+
+fn is_id0(c: u8) -> bool { return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95; }
+fn is_id(c: u8) -> bool { return is_id0(c) || (c >= 48 && c <= 57); }
+
+// Marks every identifier of `text` that names a function or destructor chunk.
+fn mark_text(text: str, chunks: *map.HashMap<i64>, keep: *List<bool>, work: *List<i64>) {
+    let mut i = 0;
+    while i < text.len {
+        if is_id0(text[i]) {
+            let st = i;
+            while i < text.len && is_id(text[i]) { i += 1; }
+            let p = chunks.get(String.from(text[st..i]));
+            if p != null {
+                let c = *p;
+                if !*keep.at(c) { *keep.at(c) = true; work.push(c); }
+            }
+        } else { i += 1; }
+    }
+}
+
+fn after_prefix(s: str, pre: str) -> String {
+    let mut i = 0;
+    while i + pre.len <= s.len {
+        if s[i..i + pre.len] == pre {
+            let st = i;
+            let mut j = i;
+            while j < s.len && is_id(s[j]) { j += 1; }
+            return String.from(s[st..j]);
+        }
+        i += 1;
+    }
+    return String.empty();
+}
+
+pub fn generate(cg: *Cg, src_name: str, runtime: str) -> String {
+    let ck = cg.ck;
+    let mut fns: List<i64> = List.new();
+    for i in 0..ck.fns.len { let s = *ck.fns.at(i); if !ck.syms.at(s).is_extern { fns.push(s); } }
+    let mut bodies: List<String> = List.new();
+    for i in 0..fns.len { let b = gen_fn(cg, *fns.at(i)); bodies.push(b); }
+    let mut protos: List<String> = List.new();
+    for i in 0..fns.len {
+        let s = *fns.at(i);
+        let mut p = sig(cg, s);
+        p.append(";");
+        if has_caps(cg, s) { let cn = scname(cg, s); p.append(format("\nstatic void {cn}_drop(void *);")); }
+        protos.push(p);
+    }
+    for i in 0..fns.len {
+        let s = *fns.at(i);
+        if has_caps(cg, s) {
+            let c = ck.syms.at(s).clo;
+            for k in 0..ck.clos.at(c).proxy.len { let _x = ctype(cg, ck.locals.at(*ck.clos.at(c).proxy.at(k)).ty); }
+        }
+    }
+    let mut glue: List<String> = List.new();
+    let mut gi = 0;
+    while gi < cg.glue_todo.len {
+        let nm = String.from(cg.glue_todo.at(gi).name);
+        let t = cg.glue_todo.at(gi).ty;
+        gi += 1;
+        let g = gen_glue(cg, nm, t);
+        glue.push(g);
+    }
+    let mut dbg: List<String> = List.new();
+    let mut di = 0;
+    while di < cg.dbg_todo.len {
+        let nm = String.from(cg.dbg_todo.at(di).name);
+        let t = cg.dbg_todo.at(di).ty;
+        di += 1;
+        let g = gen_dbg(cg, nm, t);
+        dbg.push(g);
+        // the glue and debug passes feed each other
+        while gi < cg.glue_todo.len {
+            let nm2 = String.from(cg.glue_todo.at(gi).name);
+            let t2 = cg.glue_todo.at(gi).ty;
+            gi += 1;
+            let g2 = gen_glue(cg, nm2, t2);
+            glue.push(g2);
+        }
+    }
+
+    // prune: keep what user code (or the entry point) can reach
+    let mut chunks: map.HashMap<i64> = map.HashMap.new();
+    let nf = fns.len;
+    for i in 0..nf { chunks.set(scname(cg, *fns.at(i)), i); }
+    for i in 0..glue.len {
+        let nm = after_prefix(*glue.at(i), "cb_drop_");
+        if nm.len > 0 { chunks.set(nm, nf + i); }
+    }
+    let mut keep: List<bool> = List.new();
+    for i in 0..(nf + glue.len) { keep.push(false); }
+    let mut work: List<i64> = List.new();
+    for i in 0..nf {
+        let s = *fns.at(i);
+        if !ck.ld.mods.at(ck.syms.at(s).mod_idx).is_std || ck.syms.at(s).is_export {
+            if !*keep.at(i) { *keep.at(i) = true; work.push(i); }
+        }
+    }
+    if ck.main_sym >= 0 {
+        let p = chunks.get(scname(cg, ck.main_sym));
+        if p != null { let c = *p; if !*keep.at(c) { *keep.at(c) = true; work.push(c); } }
+    }
+    let mut extra = String.empty();
+    for i in 0..ck.consts.len {
+        let s = *ck.consts.at(i);
+        if !ck.syms.at(s).is_extern { let d = const_def(cg, s); extra.append(d); extra.append("\n"); }
+    }
+    mark_text(extra, &chunks, &keep, &work);
+    while work.len > 0 {
+        let c = work.pop() catch { panic("unreachable"); };
+        if c < nf { mark_text(*bodies.at(c), &chunks, &keep, &work); }
+        else { mark_text(*glue.at(c - nf), &chunks, &keep, &work); }
+    }
+    let mut kfns: List<i64> = List.new();
+    let mut kbodies: List<String> = List.new();
+    let mut kprotos: List<String> = List.new();
+    let mut kglue: List<String> = List.new();
+    for i in 0..nf {
+        if *keep.at(i) { kfns.push(*fns.at(i)); kbodies.push(String.from(*bodies.at(i))); kprotos.push(String.from(*protos.at(i))); }
+    }
+    for i in 0..glue.len { if *keep.at(nf + i) { kglue.push(String.from(*glue.at(i))); } }
+    fns = kfns; bodies = kbodies; protos = kprotos; glue = kglue;
+
+    for i in 0..ck.fns.len {
+        let s = *ck.fns.at(i);
+        if !ck.syms.at(s).is_extern { continue; }
+        let mut ps: List<String> = List.new();
+        for k in 0..ck.syms.at(s).params.len { ps.push(ctype(cg, *ck.syms.at(s).params.at(k))); }
+        if ck.syms.at(s).variadic { ps.push(String.from("...")); }
+        let rt = ck.syms.at(s).ret;
+        let ret = rt != types.VOID ? ctype(cg, rt) : String.from("void");
+        let mut pj = join_lines(&ps, ", ");
+        if pj.len == 0 { pj = String.from("void"); }
+        let cn = scname(cg, s);
+        let cs = c_string(ck.syms.at(s).csym);
+        protos.push(format("extern {ret} {cn}({pj}) CB_ASM({cs});"));
+        if is_math(ck.syms.at(s).csym) && ret == "double" {
+            let mut all = true;
+            for k in 0..ps.len { if *ps.at(k) != "double" { all = false; } }
+            if all { let cx = String.from(ck.syms.at(s).csym); protos.push(format("#define {cn} __builtin_{cx}")); }
+        }
+    }
+    let mut consts: List<String> = List.new();
+    for i in 0..ck.consts.len {
+        let s = *ck.consts.at(i);
+        if !ck.syms.at(s).is_extern { consts.push(const_def(cg, s)); }
+    }
+    for i in 0..ck.structs.len {
+        let s = *ck.structs.at(i);
+        for k in 0..ck.syms.at(s).fields.len { let _x = ctype(cg, ck.syms.at(s).fields.at(k).ty); }
+    }
+
+    let mut defines: List<String> = List.new();
+    let mut includes: List<String> = List.new();
+    for oi in 0..ck.ld.order.len {
+        let m = *ck.ld.order.at(oi);
+        for k in 0..ck.ld.mods.at(m).directives.len {
+            let kind: str = ck.ld.mods.at(m).directives.at(k).kind;
+            let val: str = ck.ld.mods.at(m).directives.at(k).value;
+            if kind == "define" {
+                let mut line = String.from("#define ");
+                let mut done = false;
+                for q in 0..val.len {
+                    if !done && val[q] == 61 { line.push(' '); done = true; } else { line.push(val[q]); }
+                }
+                if !has_line(&defines, line) { defines.push(line); }
+            } else if kind == "include" {
+                let line = format("#include \"{val}\"");
+                if !has_line(&includes, line) { includes.push(line); }
+            }
+        }
+    }
+    let mut L: List<String> = List.new();
+    L.push(format("/* Generated by Crumbs from {src_name}. Do not edit. */"));
+    if cg.gc {
+        L.push(String.from("#define CB_GC 1"));
+        if cg.gc_mode == "manual" { L.push(String.from("#define CB_GC_MANUAL 1")); }
+        if cg.gc_mode == "thread" { L.push(String.from("#define CB_GC_THREAD 1")); L.push(format("#define CB_GC_INTERVAL_MS {cg.gc_interval}")); }
+    }
+    if cg.nostd { L.push(String.from("#define CB_NOSTD 1")); }
+    if cg.overflow_panic { L.push(String.from("#define CB_OVERFLOW_PANIC 1")); }
+    for i in 0..defines.len { L.push(String.from(*defines.at(i))); }
+    L.push(String.from(runtime));
+    for i in 0..includes.len { L.push(String.from(*includes.at(i))); }
+
+    // forward declarations
+    let mut ckeys: List<String> = List.new();     // "s:<full>", "a:<key>", "o:<key>"
+    let mut cidx: List<i64> = List.new();
+    for i in 0..ck.structs.len { ckeys.push(format("s:{ck.syms.at(*ck.structs.at(i)).full}")); cidx.push(*ck.structs.at(i)); }
+    let na = cg.arrs.len;
+    let no = cg.opts.len;
+    for i in 0..na { ckeys.push(format("a:{key_of(cg, cg.arrs.at(i).ty)}")); cidx.push(i); }
+    for i in 0..no { ckeys.push(format("o:{key_of(cg, cg.opts.at(i).ty)}")); cidx.push(i); }
+    L.push(String.from("/* forward declarations */"));
+    for i in 0..ck.structs.len { let cn = scname(cg, *ck.structs.at(i)); L.push(format("typedef struct {cn} {cn};")); }
+    for i in 0..na { let cn = String.from(cg.arrs.at(i).name); L.push(format("typedef struct {cn} {cn};")); }
+    for i in 0..cg.slices.len { let cn = String.from(cg.slices.at(i).name); L.push(format("typedef struct {cn} {cn};")); }
+    for i in 0..cg.eus.len { let cn = String.from(cg.eus.at(i).name); L.push(format("typedef struct {cn} {cn};")); }
+    for i in 0..no { let cn = String.from(cg.opts.at(i).name); L.push(format("typedef struct {cn} {cn};")); }
+    L.push(String.empty());
+
+    if ck.enums.len > 0 { L.push(String.from("/* enums */")); }
+    for i in 0..ck.enums.len {
+        let s = *ck.enums.at(i);
+        let cn = scname(cg, s);
+        L.push(format("typedef int32_t {cn};"));
+        let mut vs: List<String> = List.new();
+        let mut ns: List<String> = List.new();
+        for k in 0..ck.syms.at(s).variants.len {
+            let v: str = *ck.syms.at(s).variants.at(k);
+            vs.push(format("{cn}__{v} = {k}"));
+            ns.push(c_string(v));
+        }
+        let vj = join_lines(&vs, ", ");
+        let nj = join_lines(&ns, ", ");
+        L.push(format("enum {{ {vj} }};"));
+        L.push(format("CB_UNUSED static const char *const {cn}__names[] = {{{nj}}};"));
+    }
+    L.push(String.empty());
+
+    L.push(String.from("/* errors */"));
+    if ck.errors.len > 0 {
+        let mut es: List<String> = List.new();
+        for i in 0..ck.errors.len { let s = *ck.errors.at(i); let cn = scname(cg, s); es.push(format("{cn} = {ck.syms.at(s).code}")); }
+        let ej = join_lines(&es, ", ");
+        L.push(format("enum {{ {ej} }};"));
+    }
+    let mut ens: List<String> = List.new();
+    ens.push(String.from("\"<none>\""));
+    for i in 0..ck.errors.len {
+        let s = *ck.errors.at(i);
+        let mn = String.from(ck.ld.mods.at(ck.syms.at(s).mod_idx).name);
+        ens.push(c_string(format("{mn}.{ck.syms.at(s).name}")));
+    }
+    let enj = join_lines(&ens, ", ");
+    L.push(format("CB_UNUSED static const char *const cb_err_names[] = {{{enj}}};"));
+    L.push(String.empty());
+
+    L.push(String.from("/* function pointer types */"));
+    for i in 0..cg.fnts.len { L.push(String.from(*cg.fnts.at(i))); }
+    L.push(String.from("/* slices */"));
+    for i in 0..cg.slices.len {
+        let cn = String.from(cg.slices.at(i).name);
+        let inn = String.from(cg.slices.at(i).inner);
+        L.push(format("struct {cn} {{ {inn} *ptr; int64_t len; }};"));
+    }
+    L.push(String.empty());
+
+    L.push(String.from("/* structs and arrays */"));
+    let mut done: map.HashMap<i64> = map.HashMap.new();
+    for i in 0..ckeys.len { emit_comp(cg, &ckeys, &cidx, na, &done, &L, i); }
+    L.push(String.empty());
+
+    L.push(String.from("/* error unions */"));
+    for i in 0..cg.eus.len {
+        let cn = String.from(cg.eus.at(i).name);
+        if !cg.eus.at(i).has_inner { L.push(format("struct {cn} {{ int32_t err; }};")); }
+        else { let inn = String.from(cg.eus.at(i).inner); L.push(format("struct {cn} {{ int32_t err; {inn} val; }};")); }
+    }
+    L.push(String.empty());
+
+    let mut envs: List<String> = List.new();
+    for i in 0..fns.len { if has_caps(cg, *fns.at(i)) { envs.push(closure_env(cg, *fns.at(i))); } }
+    if envs.len > 0 {
+        L.push(String.from("/* closure environments */"));
+        for i in 0..envs.len { L.push(String.from(*envs.at(i))); }
+        L.push(String.empty());
+    }
+    L.push(String.from("/* constants */"));
+    for i in 0..consts.len { L.push(String.from(*consts.at(i))); }
+    L.push(String.empty());
+    L.push(String.from("/* prototypes */"));
+    for i in 0..protos.len { L.push(String.from(*protos.at(i))); }
+    L.push(String.empty());
+    if glue.len > 0 {
+        L.push(String.from("/* destructors */"));
+        for i in 0..glue.len { L.push(proto_of(*glue.at(i))); }
+        for i in 0..glue.len { L.push(String.from(*glue.at(i))); }
+        L.push(String.empty());
+    }
+    if dbg.len > 0 {
+        L.push(String.from("/* debug representations */"));
+        for i in 0..dbg.len { L.push(proto_of(*dbg.at(i))); }
+        for i in 0..dbg.len { L.push(String.from(*dbg.at(i))); }
+        L.push(String.empty());
+    }
+    L.push(String.from("/* functions */"));
+    for i in 0..bodies.len { L.push(String.from(*bodies.at(i))); }
+
+    if ck.main_sym >= 0 {
+        let m = ck.main_sym;
+        let r = ck.syms.at(m).ret;
+        let mc = scname(cg, m);
+        L.push(String.from(cg.nostd ? "int main(void) {" : "int main(int argc, char **argv) {"));
+        if !cg.nostd {
+            L.push(String.from("    cb_argc_v = argc; cb_argv_v = argv;"));
+            L.push(String.from("    CB_GC_INIT();"));
+        }
+        if tyk(cg, r) == types.K_EU {
+            let rc = ctype(cg, r);
+            L.push(format("    {rc} r = {mc}();"));
+            L.push(String.from(cg.nostd ? "    if (r.err) return 1;" : "    if (r.err) { fflush(stdout); fprintf(stderr, \"error: %s\\n\", cb_err_names[r.err]); return 1; }"));
+            L.push(String.from(inner_of(cg, r) == types.VOID ? "    return 0;" : "    return (int)r.val;"));
+        } else if r == types.VOID {
+            L.push(format("    {mc}();"));
+            L.push(String.from("    return 0;"));
+        } else { L.push(format("    return (int){mc}();")); }
+        L.push(String.from("}"));
+    }
+    let mut out = join_lines(&L, "\n");
+    out.append("\n");
+    return out;
+}
+
+fn has_line(l: *List<String>, s: str) -> bool {
+    for i in 0..l.len { if *l.at(i) == s { return true; } }
+    return false;
+}
+
+fn is_math(n: str) -> bool {
+    return n == "sqrt" || n == "sin" || n == "cos" || n == "tan" || n == "atan" || n == "atan2" || n == "exp" || n == "exp2"
+        || n == "log" || n == "log2" || n == "log10" || n == "pow" || n == "floor" || n == "ceil" || n == "trunc" || n == "round"
+        || n == "fabs" || n == "fmod" || n == "fmin" || n == "fmax" || n == "cbrt" || n == "hypot";
+}
+
+// `static void name(args) {` -> `static void name(args);`
+fn proto_of(g: str) -> String {
+    let mut e = 0;
+    while e < g.len && g[e] != 10 { e += 1; }
+    let mut first = String.from(g[0..e]);
+    // strip the trailing " {"
+    let mut n = first.len;
+    while n > 0 && (first[n - 1] == 32 || first[n - 1] == 123) { n -= 1; }
+    let mut out = String.from(first[0..n]);
+    out.append(";");
+    return out;
+}
+
+fn comp_dep(cg: *Cg, t: i64, ckeys: *List<String>) -> i64 {
+    let k = tyk(cg, t);
+    let mut key = String.empty();
+    if k == types.K_STRUCT { key = format("s:{cg.ck.syms.at(sym_of(cg, t)).full}"); }
+    else if k == types.K_ARR { key = format("a:{key_of(cg, t)}"); }
+    else if k == types.K_OPT { key = format("o:{key_of(cg, t)}"); }
+    else { return -1; }
+    for i in 0..ckeys.len { if *ckeys.at(i) == key { return i; } }
+    return -1;
+}
+
+fn emit_comp(cg: *Cg, ckeys: *List<String>, cidx: *List<i64>, na: i64, done: *map.HashMap<i64>, L: *List<String>, i: i64) {
+    let key = String.from(*ckeys.at(i));
+    if done.get(key) != null { return; }
+    done.set(key, 1);
+    let k: str = key[0..1];
+    let ix = *cidx.at(i);
+    if k == "s" {
+        if cg.ck.syms.at(ix).opaque { return; }
+        let nf = cg.ck.syms.at(ix).fields.len;
+        for f in 0..nf {
+            let d = comp_dep(cg, cg.ck.syms.at(ix).fields.at(f).ty, ckeys);
+            if d >= 0 { emit_comp(cg, ckeys, cidx, na, done, L, d); }
+        }
+        let mut parts: List<String> = List.new();
+        for f in 0..nf {
+            let c = ctype(cg, cg.ck.syms.at(ix).fields.at(f).ty);
+            let fl = fld(cg.ck.syms.at(ix).fields.at(f).name);
+            parts.push(format("{c} {fl};"));
+        }
+        let body = join_lines(&parts, " ");
+        let cn = scname(cg, ix);
+        L.push(format("struct {cn} {{ {body} }};"));
+    } else if k == "o" {
+        let name = String.from(cg.opts.at(ix).name);
+        let t = cg.opts.at(ix).ty;
+        let d = comp_dep(cg, inner_of(cg, t), ckeys);
+        if d >= 0 { emit_comp(cg, ckeys, cidx, na, done, L, d); }
+        let c = ctype(cg, inner_of(cg, t));
+        L.push(format("struct {name} {{ bool has; {c} v; }};"));
+    } else {
+        let name = String.from(cg.arrs.at(ix).name);
+        let t = cg.arrs.at(ix).ty;
+        let d = comp_dep(cg, inner_of(cg, t), ckeys);
+        if d >= 0 { emit_comp(cg, ckeys, cidx, na, done, L, d); }
+        let c = ctype(cg, inner_of(cg, t));
+        let n = cg.ck.types.tys.at(t).n;
+        L.push(format("struct {name} {{ {c} v[{n}]; }};"));
+    }
+}

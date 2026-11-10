@@ -28,6 +28,7 @@ pub fn v_bytes(s: str) -> Val { let mut v = empty_val(7); v.s = String.from(s); 
 // annotations added by the checker: 10 a type handle, 11 a symbol id, 12 a local id (all in `.i`)
 pub fn v_tag(tag: i64, i: i64) -> Val { let mut v = empty_val(tag); v.i = i; return v; }
 pub fn v_float() -> Val { return empty_val(8); }
+pub fn v_float_text(s: str) -> Val { let mut v = empty_val(8); v.s = String.from(s); return v; }
 pub fn v_span(sp: Span) -> Val { let mut v = empty_val(6); v.span = sp; return v; }
 pub fn v_node(n: Node) -> Val { let mut v = empty_val(4); v.node.push(n); return v; }
 pub fn v_list(items: List<Val>) -> Val { let mut v = empty_val(5); v.items = items; return v; }
@@ -176,7 +177,7 @@ pub fn dump_node(out: *String, n: *Node) {
     let mut first = true;
     for k in 0..order.len {
         let a = n.attrs.at(*order.at(k));
-        if a.name == "tok_lo" || a.name == "tok_hi" { continue; }     // bookkeeping the Python tree keeps as tokens
+        if a.name == "tok_lo" || a.name == "tok_hi" || a.name == "src_mod" { continue; }     // bookkeeping the Python tree keeps as tokens
         if !first { out.push(','); }
         first = false;
         out.append(a.name);

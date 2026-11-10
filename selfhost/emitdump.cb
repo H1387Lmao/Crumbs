@@ -1,0 +1,47 @@
+// Prints the C that cgen.cb generates for a program, to compare against `python3 crumbs.py emit`.
+import std.env;
+import std.fs;
+import loader;
+import sema;
+import cgen;
+
+fn main() -> void! {
+    let path = env.arg(1);
+    let mut std_dir = String.from("src/std");
+    let mut runtime_path = String.from("src/crumbsc/runtime.c");
+    let mut nostd = false;
+    let mut gc = false;
+    for i in 2..env.arg_count() {
+        let a: str = env.arg(i);
+        if a == "--nostd" { nostd = true; }
+        if a == "--gc" { gc = true; }
+        if a.starts_with("--std=") { std_dir = String.from(a[6..a.len]); }
+        if a.starts_with("--runtime=") { runtime_path = String.from(a[10..a.len]); }
+    }
+    let mut ld = loader.new_loader(std_dir, nostd);
+    if nostd { ld.predefined.push(loader.Define { name: String.from("CB_NO_STDRUNTIME"), value: String.from("1"), undef: false }); }
+    if gc && !nostd { ld.predefined.push(loader.Define { name: String.from("CB_GC"), value: String.from("1"), undef: false }); }
+    let mut fatal = false;
+    try {
+        try loader.load_entry(&ld, path);
+    } catch {
+        println("fatal: {ld.fatal}");
+        fatal = true;
+    }
+    if fatal { exit(1); }
+    let mut ck = sema.new_checker(&ld, nostd);
+    sema.run_decl(&ck);
+    sema.run_sigs(&ck);
+    sema.run_bodies(&ck);
+    sema.finalize_impls(&ck);
+    if ck.d.error_count() > 0 || ck.ld.d.error_count() > 0 {
+        for e in ck.d.items { println("{e.level} {e.file}:{e.line}:{e.col} {e.msg}"); }
+        exit(1);
+    }
+    let runtime = try fs.read_to_string(runtime_path);
+    let last = *ck.ld.order.at(ck.ld.order.len - 1);
+    let src_name = String.from(ck.ld.mods.at(last).shown);
+    let mut cg = cgen.new_cg(&ck, gc, nostd, false, "auto", 100);
+    let out = cgen.generate(&cg, src_name, runtime);
+    print("{out}");
+}
