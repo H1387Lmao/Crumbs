@@ -625,8 +625,11 @@ class CodeGen:
         if zero:
             return f"(({ct}){{{{0}}}})"
         t, i = self.tmp(), self.tmp("cb_i")
+        cp = f"{t}e"
+        if self.rc and self.ck.rc_copyable(e.ty.inner):      # the first element takes the count, the others retain
+            cp = f"({i} ? {self.rc_retain(f'{t}e', e.ty.inner)} : {t}e)"
         return (f"({{ {self.ctype(e.ty.inner)} {t}e = {self.ex(el)}; {ct} {t}; "
-                f"for (int64_t {i} = 0; {i} < {e.n}; {i}++) {t}.v[{i}] = {t}e; {t}; }})")
+                f"for (int64_t {i} = 0; {i} < {e.n}; {i}++) {t}.v[{i}] = {cp}; {t}; }})")
 
     # ----------------------------------------------------------------- calls
     def g_Call(self, e):

@@ -2850,7 +2850,9 @@ class Checker:
             self.d.error(e.count.span, "array length must be a positive integer constant")
             return POISON
         e.n = n
-        if not t.poison and self.has_glue(t):
+        if not t.poison and self.rc_copyable(t):
+            self.consume(e.elem)         # --rc: the copies share one block; each holds a count
+        elif not t.poison and self.has_glue(t):
             self.d.error(e.span, f"cannot repeat a value of type `{t}`: it has a destructor and cannot be copied",
                          help="write the elements out one by one, e.g. `[make(), make()]`")
             return POISON

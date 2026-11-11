@@ -141,6 +141,8 @@ fn help_of(m: str) -> String {
     if m.starts_with("parameter `") && m.contains("has no default") { return String.from("parameters with defaults must come last"); }
     if m.starts_with("optional types cannot be nested") { return String.from("`T??` is the same as `T?`"); }
     if m.starts_with("error unions (") { return String.from("handle the error at the call site with `try` or `catch`"); }
+    if m == "expected an expression, found keyword `if`" { return String.from("`if` is a statement, not an expression; write a ternary: `cond ? a : b`"); }
+    if m == "expected loop variable, found `(`" { return String.from("loops are written `for i in 0..n { .. }`; there is no C-style `for (;;)`"); }
     if m.starts_with("comparison operators cannot be chained") { return String.from("use `&&` to combine comparisons, e.g. `a < b && b < c`"); }
     return String.empty();
 }

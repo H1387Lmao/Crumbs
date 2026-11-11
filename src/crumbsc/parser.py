@@ -835,6 +835,9 @@ class Parser:
 
     def parse_for(self):
         t = self.advance()
+        if self.is_op("("):
+            self.fail("expected loop variable, found `(`", label="expected loop variable",
+                      help="loops are written `for i in 0..n { .. }`; there is no C-style `for (;;)`")
         nm = self.expect_ident("loop variable")
         self.expect_kw("in")
         saved = self.no_struct
@@ -1245,7 +1248,8 @@ class Parser:
         if k == "kw" and t.val == "error":
             self.fail("`error` is a keyword; declare errors with `error Name;` and refer to them by name",
                       label="not an expression")
-        self.fail(f"expected an expression, found {self.describe(t)}", label="expected an expression")
+        self.fail(f"expected an expression, found {self.describe(t)}", label="expected an expression",
+                  help="`if` is a statement, not an expression; write a ternary: `cond ? a : b`" if k == "kw" and t.val == "if" else None)
 
     def parse_array_lit(self):
         start = self.advance()
