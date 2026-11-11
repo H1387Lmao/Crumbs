@@ -1,0 +1,8 @@
+// Sloppy on purpose: pick one of two.
+fn pick(a: []i64, b: []i64, f: bool) -> []i64 { if f { return a; } return b; }
+fn main() {
+    let x = alloc(i64, 1);
+    let y = alloc(i64, 2);
+    let z = pick(x, y, false);
+    println("{z.len}");
+}

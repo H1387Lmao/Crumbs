@@ -1,0 +1,11 @@
+// Sloppy on purpose: free three aliases.
+fn main() {
+    let s = alloc(i64, 5);
+    let t = s;
+    let u = t;
+    free(u);
+    free(s);
+    println("x");
+    let again = alloc(i64, 5);
+    println("{again.len}");
+}

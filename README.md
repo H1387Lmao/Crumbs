@@ -551,8 +551,9 @@ what can build with `--gc` (the conservative collector below).
 temporary that goes away releases it, and the block is freed when the last count goes. So code that forgets `free`, frees twice, frees and keeps using a
 copy, or returns buffers nobody reads still runs and does not leak (`tests/sloppy/` has 50 such programs, each checked under AddressSanitizer).
 `free(p)` frees at once and clears `p`; copies are then dangling-safe only if they never touch the block again, so prefer letting counts do the work.
-Limits: pointers into the middle of a block, to locals and to arenas/regions are not counted; reference cycles are not collected; the elements of a
-block freed this way are not released one by one (use `List`, which does that). Every counted block costs a hash-table entry, so allocation-heavy
+Limits: pointers into the middle of a block, to locals and to arenas/regions are not counted; reference cycles are not collected; blocks made by `alloc` in your
+own code destroy their elements (Strings, counted slices, ...) when the last count goes, but blocks you resize by hand with `realloc` keep the
+element count they were allocated with. Every counted block costs a hash-table entry, so allocation-heavy
 inner loops are faster with `--no-rc`. `--gc` replaces counting, and `--no-stdruntime` has none. The self-hosted compiler in `selfhost/` does not implement
 counting yet (its parity tests build with `--no-rc`).
 

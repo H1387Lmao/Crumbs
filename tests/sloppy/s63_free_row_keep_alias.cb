@@ -1,0 +1,9 @@
+// Sloppy on purpose: free row keep alias.
+fn main() {
+    let grid = alloc([]i64, 3);
+    for r in 0..3 { grid[r] = alloc(i64, 3); }
+    let alias = grid[1];
+    free(grid[1]);
+    alias[0] = 1;
+    println("{alias[0]}");
+}

@@ -1,0 +1,9 @@
+// Sloppy on purpose: clear list keep len.
+import std.list;
+fn main() {
+    let mut l: list.List<String> = list.List.new<String>();
+    for i in 0..10 { l.push(format("{i}")); }
+    let first = l.view()[0].len;
+    l.clear();
+    println("{first}");
+}

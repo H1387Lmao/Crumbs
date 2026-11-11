@@ -1,0 +1,12 @@
+// Sloppy on purpose: list shares one buffer.
+import std.list;
+fn main() {
+    let mut l: list.List<[]i64> = list.List.new<[]i64>();
+    let shared = alloc(i64, 2);
+    for i in 0..4 { l.push(shared); }
+    let z = l.get(0); z[0] = 5;
+    println("{l.get(3)[0]}");
+    l.clear();
+    shared[1] = 1;
+    println("{shared[1]}");
+}

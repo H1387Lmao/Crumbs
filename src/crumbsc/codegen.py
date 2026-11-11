@@ -90,6 +90,7 @@ class CodeGen:
         self.retain_done = {}
         self.glue_todo = []
         self.thunks = {}
+        self.cur_std = False
         self.stmt_temps = None   # temporaries with destructors created while generating the current statement
 
     # ------------------------------------------------------------ utilities
@@ -728,6 +729,10 @@ class CodeGen:
         n = self.tmp("cb_n")
         et = self.ctype(e.elem)
         atomic = 1 if self.pointer_free(e.elem) else 0
+        if self.rc and not self.cur_std and self.ck.has_glue(e.elem):        # the elements own memory: destroy them with the block
+            return (f"({{ int64_t {n} = (int64_t)({self.ex(e.args[0])}); "
+                    f"({self.ctype(e.ty)}){{ ({et} *)cb_alloc_d({n}, (int64_t)sizeof({et}), {atomic}, {self.loc(e.span)}, "
+                    f"(void (*)(void *)){self.glue_fn(e.elem)}), {n} }}; }})")
         return (f"({{ int64_t {n} = (int64_t)({self.ex(e.args[0])}); "
                 f"({self.ctype(e.ty)}){{ ({et} *)cb_alloc({n}, (int64_t)sizeof({et}), {atomic}, {self.loc(e.span)}), {n} }}; }})")
 
@@ -1382,6 +1387,7 @@ class CodeGen:
         return f"{'' if sym.export else 'static '}{ret} {sym.cname}({params or 'void'})"
 
     def gen_fn(self, sym):
+        self.cur_std = sym.mod.is_std
         self.cur_ret = sym.ret
         self.ind = 1
         self.out = []

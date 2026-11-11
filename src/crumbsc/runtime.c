@@ -259,7 +259,7 @@ static void cb_region_free(cb_Region *r) {
    regions, C memory, the middle of a block) are ignored by retain and release, so they cost nothing but a lookup.
    `free(x)` releases the reference `x` holds and clears it, so freeing twice, or freeing and then falling off
    the end of the scope, is harmless. Cycles are not collected.                                              */
-typedef struct { void *p; int64_t n; } cb_rc_ent;
+typedef struct { void *p; int64_t n; void (*dt)(void *); int64_t cnt, esz; } cb_rc_ent;   /* dt: destroys each of the cnt elements when the block dies */
 #define CB_RC_DEAD ((void *)1)
 static cb_rc_ent *cb_rc_tab;
 static size_t cb_rc_cap, cb_rc_live, cb_rc_dead;
@@ -301,7 +301,7 @@ static void cb_rc_put(void *p, int64_t n) {          /* the table is locked; `p`
     size_t m = cb_rc_cap - 1, i = cb_rc_hash(p) & m;
     while (cb_rc_tab[i].p && cb_rc_tab[i].p != CB_RC_DEAD) i = (i + 1) & m;
     if (cb_rc_tab[i].p == CB_RC_DEAD) cb_rc_dead--;
-    cb_rc_tab[i].p = p; cb_rc_tab[i].n = n;
+    cb_rc_tab[i].p = p; cb_rc_tab[i].n = n; cb_rc_tab[i].dt = 0; cb_rc_tab[i].cnt = cb_rc_tab[i].esz = 0;
     cb_rc_live++;
 }
 static void *cb_rc_register(void *p) {
@@ -312,15 +312,19 @@ static void *cb_rc_retain(void *p) {
     if (p) { CB_RC_LOCK(); cb_rc_ent *e = cb_rc_find(p); if (e) e->n++; CB_RC_UNLOCK(); }
     return p;
 }
-static int cb_rc_drop_ref(void *p, int force) {      /* 1 when the block was known and is now gone (the caller frees it) */
+static int cb_rc_drop_ref(void *p, int force, cb_rc_ent *snap) {      /* 1 when the block was known and is now gone (the caller destroys its elements and frees it) */
     CB_RC_LOCK();
     cb_rc_ent *e = cb_rc_find(p);
     int gone = 0;
-    if (e && (force || --e->n <= 0)) { e->p = CB_RC_DEAD; cb_rc_live--; cb_rc_dead++; gone = 1; }
+    if (e && (force || --e->n <= 0)) { if (snap) *snap = *e; e->p = CB_RC_DEAD; cb_rc_live--; cb_rc_dead++; gone = 1; }
     CB_RC_UNLOCK();
     return gone;
 }
-static void cb_rc_release(void *p) { if (p && cb_rc_drop_ref(p, 0)) free(p); }
+static void cb_rc_destroy(void *p, const cb_rc_ent *e) {
+    if (e->dt) for (int64_t i = 0; i < e->cnt; i++) e->dt((char *)p + i * e->esz);
+    free(p);
+}
+static void cb_rc_release(void *p) { cb_rc_ent s; if (p && cb_rc_drop_ref(p, 0, &s)) cb_rc_destroy(p, &s); }
 static int cb_rc_known(void *p) {
     CB_RC_LOCK(); int k = cb_rc_find(p) != 0; CB_RC_UNLOCK();
     return k;
@@ -328,22 +332,27 @@ static int cb_rc_known(void *p) {
 static void *cb_mem_alloc(size_t n, int atomic) { (void)atomic; return calloc(n ? n : 1, 1); }
 static void *cb_mem_realloc(void *p, size_t old, size_t n) {
     (void)old;
-    int64_t cnt = 0;
-    if (p) { CB_RC_LOCK(); cb_rc_ent *e = cb_rc_find(p); if (e) { cnt = e->n; e->p = CB_RC_DEAD; cb_rc_live--; cb_rc_dead++; } CB_RC_UNLOCK(); }
+    cb_rc_ent keep; keep.n = 0;
+    if (p) { CB_RC_LOCK(); cb_rc_ent *e = cb_rc_find(p); if (e) { keep = *e; e->p = CB_RC_DEAD; cb_rc_live--; cb_rc_dead++; } CB_RC_UNLOCK(); }
     void *q = realloc(p, n);
-    if (q && cnt) { CB_RC_LOCK(); cb_rc_put(q, cnt); CB_RC_UNLOCK(); }
+    if (q && keep.n) {
+        CB_RC_LOCK(); cb_rc_put(q, keep.n);
+        if (keep.dt) { cb_rc_ent *e = cb_rc_find(q); e->dt = keep.dt; e->esz = keep.esz; e->cnt = (int64_t)(n / (size_t)keep.esz); }
+        CB_RC_UNLOCK();
+    }
     return q;
 }
-static void cb_mem_free(void *p) { if (p) { cb_rc_drop_ref(p, 1); free(p); } }
+static void cb_mem_free(void *p) { cb_rc_ent s; if (p) { if (cb_rc_drop_ref(p, 1, &s)) cb_rc_destroy(p, &s); else free(p); } }
 /* free(x): give back the reference x holds; a block the table does not know is freed outright */
 static void cb_rc_free_ptr(void *p) {
     if (!p) return;
     CB_RC_LOCK();
-    cb_rc_ent *e = cb_rc_find(p);
+    cb_rc_ent *e = cb_rc_find(p), snap;
     int gone = 0, known = e != 0;
-    if (e && --e->n <= 0) { e->p = CB_RC_DEAD; cb_rc_live--; cb_rc_dead++; gone = 1; }
+    if (e && --e->n <= 0) { snap = *e; e->p = CB_RC_DEAD; cb_rc_live--; cb_rc_dead++; gone = 1; }
     CB_RC_UNLOCK();
-    if (gone || !known) free(p);
+    if (gone) cb_rc_destroy(p, &snap);
+    else if (!known) free(p);
 }
 #else
 #define cb_rc_retain(p) (p)
@@ -1047,6 +1056,15 @@ static inline void *cb_alloc(int64_t n, int64_t size, int atomic, const char *l)
     if (CB_UNLIKELY(!p)) cb_panic(l, "out of memory");
     return cb_rc_register(p);
 }
+
+#if defined(CB_RC) && !defined(CB_GC)
+/* a block whose elements own something (Strings, counted slices, ...): they are destroyed when the block's last count goes */
+static inline void *cb_alloc_d(int64_t n, int64_t size, int atomic, const char *l, void (*dt)(void *)) {
+    void *p = cb_alloc(n, size, atomic, l);
+    if (p && n > 0) { CB_RC_LOCK(); cb_rc_ent *e = cb_rc_find(p); if (e) { e->dt = dt; e->cnt = n; e->esz = size; } CB_RC_UNLOCK(); }
+    return p;
+}
+#endif
 
 /* printing */
 static void cb_print_i(long long v) { printf("%lld", v); }
