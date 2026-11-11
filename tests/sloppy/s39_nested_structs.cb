@@ -1,0 +1,9 @@
+// Sloppy on purpose: nests structs that each own a buffer.
+struct Inner { a: []i64 }
+struct Outer { i: Inner, b: []i64 }
+fn main() {
+    let o = Outer { i: Inner { a: alloc(i64, 2) }, b: alloc(i64, 3) };
+    o.i.a[1] = 4;
+    o.b[2] = 5;
+    println("{o.i.a[1] + o.b[2]}");
+}

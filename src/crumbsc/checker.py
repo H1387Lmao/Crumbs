@@ -145,8 +145,9 @@ class FnInfo:
 
 
 class Checker:
-    def __init__(self, mods, diags, c_reserved=(), strict=False, entry_name="main", nostd=False, gc_mode="auto"):
+    def __init__(self, mods, diags, c_reserved=(), strict=False, entry_name="main", nostd=False, gc_mode="auto", rc=False):
         self.strict = strict
+        self.rc = rc                       # --rc: raw pointers and slices are reference counted (copyable, freed with the last owner)
         self.gc_mode = gc_mode             # auto | thread | manual (or "off" with --no-gc)
         self.nostd = nostd                 # --no-stdruntime: no libc-backed features
         self.entry_name = entry_name       # "" = no entry point (library / object-file mode)
@@ -171,6 +172,7 @@ class Checker:
         self.n_inst = 0
         self.glue = {}
         self.glue_busy = set()
+        self.glue_nl = {}
         self.methods = {}        # type key -> {method name: Sym}
         self.traits = []         # trait syms
         self.trait_impls = {}    # (trait full name, type key) -> TraitImpl
@@ -1175,6 +1177,8 @@ class Checker:
         s.param_locals = []
         for p, t in zip(it.params, s.params):
             s.param_locals.append(self.declare_local(p.name, t, getattr(p, "mut", False), p.name_span, is_param=True))
+            if self.rc and (s.is_drop or (s.base is not None and s.base.is_drop)):
+                s.param_locals[-1].glue = False     # --rc: destructors are called on borrowed element addresses, no count held
         n_err = self.d.error_count
         self.check_block(it.body)
         self.pop()
@@ -1397,35 +1401,59 @@ class Checker:
             return sym.drop_inst
         return sym.drop_sym if not sym.tparams else None
 
-    def has_glue(self, t):
-        """Does dropping a value of type `t` run any destructor?"""
+    def has_glue(self, t, leaves=True):
+        """Does dropping a value of type `t` run any destructor?  (`leaves=False` ignores the `--rc` pointer/slice counts,
+        leaving only what must be moved: Strings, closures, destructors.)"""
         k = t.kind
         if t == STRING:
             return True                 # an owned String frees its buffer when it goes out of scope
+        if self.rc and leaves and k in ("ptr", "slice"):
+            return True                 # --rc: a pointer or slice holds one count on its block
         if k in ("arr", "opt"):
-            return self.has_glue(t.inner)
+            return self.has_glue(t.inner, leaves)
         if k == "clo":
             return True                 # a closure owns its captured environment
         if k != "struct":
             return False
         key = t.key
-        if key in self.glue:
-            return self.glue[key]
-        if key in self.glue_busy:
+        cache = self.glue if leaves else self.glue_nl
+        if key in cache:
+            return cache[key]
+        busy = (key, leaves)
+        if busy in self.glue_busy:
             return False
-        self.glue_busy.add(key)
+        self.glue_busy.add(busy)
         sym = t.sym
-        r = self.drop_fn_of(sym) is not None or any(self.has_glue(ft) for _, ft, _ in sym.fields)
-        self.glue_busy.discard(key)
-        self.glue[key] = r
+        r = self.drop_fn_of(sym) is not None or any(self.field_glue(sym, ft) if leaves else self.has_glue(ft, False) for _, ft, _ in sym.fields)
+        self.glue_busy.discard(busy)
+        cache[key] = r
         return r
 
-    def consume(self, e):
+    def field_glue(self, sym, ft):
+        """Does field `ft` of struct `sym` get destroyed with the struct?  A struct with a destructor manages its raw
+        pointers and slices itself (under --rc too), so only its real owners (Strings, ...) are dropped for it."""
+        if self.rc and self.drop_fn_of(sym) is not None:
+            return self.has_glue(ft, False)
+        return self.has_glue(ft)
+
+    def rc_copyable(self, t):
+        """--rc: a type whose only 'glue' is pointer/slice counts is copied freely (each copy retains)."""
+        return self.rc and self.has_glue(t) and not self.has_glue(t, leaves=False)
+
+    def consume(self, e, move=False):
         """`e` is used by value where ownership is taken: a variable is moved, anything else must be a temporary."""
         t = getattr(e, "ty", None)
-        if t is None or t.poison or not self.has_glue(t) or getattr(e, "coerce", False):
+        if t is None or t.poison or not self.has_glue(t) or (getattr(e, "coerce", False) and t.kind not in ("ptr", "slice")):
             return                      # (a `String` converted to a `str` view is a borrow, not a move)
         k = e.kind
+        if not move and self.rc_copyable(t):
+            # --rc: copying a pointer/slice (or a struct of them) retains it; fresh values pass their count on
+            if k in ("Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch", "Ternary") and \
+                    not (k == "Call" and getattr(e, "builtin", None) in ("slice_of", "from_cstr")):
+                e.owned = True
+            else:
+                e.rc_copy = True
+            return
         if k == "Ident" and getattr(e, "local", None) is not None:
             if e.local.captured:
                 self.d.error(e.span, f"cannot move `{e.name}` out of a closure's captured variables",
@@ -1553,8 +1581,10 @@ class Checker:
         if self.ro_violation(e, t, exp):
             return POISON
         if self.ptr_ok(exp, t):
+            self.consume(e)
             return exp
         if exp.kind == "ptr" and t.kind == "ptr" and same(t, exp) and exp.ro and not t.ro:
+            self.consume(e)
             return exp                                       # `*T` -> `*const T` is always fine
         if not same(t, exp):
             self.mismatch(e, exp, t)
@@ -3026,6 +3056,9 @@ class Checker:
         sig = f"fn {sym.name}({', '.join(f'{p.name}: {t}' for p, t in zip(sym.node.params, sym.params))}{', ...' if sym.variadic else ''})" \
               + (f" -> {sym.ret}" if sym.ret != VOID else "")
         self.check_args(e, sym.params, f"function `{sym.name}`", sig=sig, variadic=sym.variadic)
+        if self.rc and sym.extern:
+            for a in e.args:
+                a.rc_copy = False           # C code does not release what it is given: pass a borrow
         return sym.ret
 
     def find_method(self, e):
@@ -3327,7 +3360,7 @@ class Checker:
         if name == "drop":
             if arity(1):
                 self.check(args[0], None)
-                self.consume(args[0])
+                self.consume(args[0], move=True)
             return VOID
         if name == "drop_at":
             if arity(1):
@@ -3475,7 +3508,7 @@ class Checker:
         t = self.check(s.init, ann)
         # `let buf = alloc(T, n)`: a candidate for being freed automatically at the end of its scope (codegen checks it never escapes)
         s.afree = (s.init.kind == "Call" and getattr(s.init, "builtin", None) == "alloc" and not t.poison
-                   and not self.has_glue(s.init.elem))
+                   and not self.has_glue(s.init.elem) and not self.rc)
         if ann == STR and t == STRING:
             s.init.coerce = True
             t = STR
@@ -3579,7 +3612,7 @@ class Checker:
                 vt = POISON
             elif ot.kind in ("arr", "slice"):
                 vt = ot.inner
-                if self.has_glue(vt):
+                if self.has_glue(vt) and not self.rc_copyable(vt):
                     self.d.error(it.span, f"cannot iterate over `{ot}` by value: `{vt}` has a destructor",
                                  help="iterate over indices (`for i in 0..xs.len`) and borrow with `&xs[i]`")
                     vt = POISON
@@ -3596,6 +3629,8 @@ class Checker:
             if s.var != "_":
                 s.local = self.declare_local(s.var, vt, False, s.var_span)
                 s.local.used = True
+                if self.rc:
+                    s.local.glue = False        # --rc: the loop variable borrows the element; the container still holds its count
             else:
                 s.local = None
             self.check_block(s.body)

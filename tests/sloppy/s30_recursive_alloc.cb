@@ -1,0 +1,8 @@
+// Sloppy on purpose: allocates at every level of a recursion.
+fn depth(n: i64) -> i64 {
+    if n == 0 { return 0; }
+    let tmp = alloc(i64, 8);
+    tmp[0] = n;
+    return depth(n - 1) + tmp[0];
+}
+fn main() { println("{depth(50)}"); }

@@ -1,0 +1,8 @@
+// Sloppy on purpose: copies a slice, frees the original, keeps using the copy.
+fn main() {
+    let a = alloc(i64, 3);
+    a[0] = 5; a[1] = 6; a[2] = 7;
+    let b = a;
+    free(a);
+    println("{b[0]} {b[1]} {b[2]}");
+}

@@ -1,0 +1,10 @@
+// Sloppy on purpose: builds a matrix out of separate row allocations and leaks it.
+fn main() {
+    let n = 4;
+    let rows = alloc([]i64, n);
+    for r in 0..n {
+        rows[r] = alloc(i64, n);
+        for c in 0..n { rows[r][c] = r * n + c; }
+    }
+    println("{rows[3][3]}");
+}

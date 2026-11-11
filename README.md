@@ -23,7 +23,8 @@ python3 crumbs.py emit  examples/hello.cb        # print the generated C
 python3 crumbs.py check examples/hello.cb        # type-check only
         --unchecked        # drop bounds/null/division/conversion checks (about 1.08x of hand-written C vs 1.3x checked)
         --overflow-panic   # panic on integer overflow (+ - * neg); the default is to wrap around like C
-        --gc               # turn on the conservative garbage collector (default: owned memory, no collector)
+        --gc               # turn on the conservative garbage collector (default: owned memory + reference counting, no collector)
+        --no-rc            # turn reference counting off: raw alloc() pointers and slices are then plain C memory (free them yourself)
         --no-stdruntime    # freestanding build: only integer/bounds helpers, no libc (no print, String, alloc, std.*)
         -O3 --cc clang --keep-c out.c
         --entry=start  # use `fn start()` as the entry point instead of `main`
@@ -543,8 +544,17 @@ the borrow and the conflicting use. Limits: a pointer stored inside a struct kee
 
 Without `--gc` memory is owned: values are freed deterministically at the end of their scope, with a borrow checker and without `free()`.
 `String` and `List` already work this way; `std.own` gives the same thing to any value. Programs that would rather not think about who frees
-what can build with `--gc` (the conservative collector below). `alloc()` memory is raw: free it with `free`, or wrap it in an owner. When a `let buf = alloc(T, n)` never escapes its function (it is
-only indexed and asked for `.len`: not passed, returned, stored, sliced, captured or freed by hand) the compiler frees it at the end of its scope.
+what can build with `--gc` (the conservative collector below).
+
+**Reference counting (default, `--no-rc` turns it off).** Raw `alloc()` memory frees itself too: every pointer and slice that points at the start of an
+`alloc()` block holds one count on it. Copying one (`let b = a;`, passing it, storing it in a struct or closure) retains the block; a variable, field or
+temporary that goes away releases it, and the block is freed when the last count goes. So code that forgets `free`, frees twice, frees and keeps using a
+copy, or returns buffers nobody reads still runs and does not leak (`tests/sloppy/` has 50 such programs, each checked under AddressSanitizer).
+`free(p)` frees at once and clears `p`; copies are then dangling-safe only if they never touch the block again, so prefer letting counts do the work.
+Limits: pointers into the middle of a block, to locals and to arenas/regions are not counted; reference cycles are not collected; the elements of a
+block freed this way are not released one by one (use `List`, which does that). Every counted block costs a hash-table entry, so allocation-heavy
+inner loops are faster with `--no-rc`. `--gc` replaces counting, and `--no-stdruntime` has none. The self-hosted compiler in `selfhost/` does not implement
+counting yet (its parity tests build with `--no-rc`).
 
 * `own.new(v)` returns an `Own<T>`, the single owner of a heap value. Owners move like `String`s, and the value is destroyed and its memory
   freed at the end of the owner's scope, so allocation costs what `malloc` costs. Nothing pauses and nothing is traced.

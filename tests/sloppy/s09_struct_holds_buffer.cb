@@ -1,0 +1,7 @@
+// Sloppy on purpose: stores a buffer in a struct that is never cleaned up.
+struct Bag { items: []i64, n: i64 }
+fn main() {
+    let b = Bag { items: alloc(i64, 10), n: 0 };
+    b.items[0] = 99;
+    println("{b.items[0]} {b.n}");
+}

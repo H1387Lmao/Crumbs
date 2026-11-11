@@ -1,0 +1,17 @@
+// Sloppy on purpose: grows a buffer by allocating a bigger one and copying, never freeing the old one.
+fn main() {
+    let mut buf = alloc(i64, 2);
+    let mut cap = 2;
+    let mut n = 0;
+    for i in 0..20 {
+        if n == cap {
+            let bigger = alloc(i64, cap * 2);
+            for k in 0..n { bigger[k] = buf[k]; }
+            buf = bigger;
+            cap = cap * 2;
+        }
+        buf[n] = i;
+        n += 1;
+    }
+    println("{n} {cap} {buf[19]}");
+}

@@ -1358,14 +1358,67 @@ fn parse_expr(p: *P) -> ast.Node! {
     return lhs;
 }
 
+// `list.List<T>.new()` parses as a chain of comparisons; the type arguments belong after the method name
+fn toks_text(p: *P, from: i64, to: i64) -> String {
+    let mut out = String.empty();
+    let mut last: u8 = 0;
+    for i in from..to {
+        let v: str = p.lx.toks.at(i).text;
+        if i > from && is_alnum_byte(last) && v.len > 0 && is_alnum_byte(v[0]) { out.append(" "); }
+        out.append(v);
+        if v == "," { out.append(" "); }
+        if v.len > 0 { last = v[v.len - 1]; }
+        if v == "," { last = 32; }
+    }
+    return out;
+}
+
+fn is_alnum_byte(c: u8) -> bool {
+    return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95;
+}
+
+fn misplaced_type_args(p: *P, start_idx: i64, lt_idx: i64) -> bool {
+    let mut depth: i64 = 1;
+    let mut gt = lt_idx + 1;
+    while depth > 0 {
+        if gt >= p.lx.toks.len { return false; }
+        let k = p.lx.toks.at(gt);
+        if k.kind == lexer.TK.Eof { return false; }
+        if k.kind == lexer.TK.Op {
+            if k.text == ";" || k.text == "{" || k.text == "}" || k.text == "(" || k.text == ")" || k.text == "=" { return false; }
+            if k.text == "<" { depth += 1; }
+            else if k.text == ">" { depth -= 1; }
+            else if k.text == ">>" { depth -= 2; }
+        }
+        gt += 1;
+    }
+    if depth < 0 { return false; }
+    gt -= 1;
+    if gt <= lt_idx + 1 || lt_idx <= start_idx || gt + 4 >= p.lx.toks.len { return false; }
+    let a0 = p.lx.toks.at(gt + 1);
+    let a1 = p.lx.toks.at(gt + 2);
+    let a2 = p.lx.toks.at(gt + 3);
+    if !(a0.kind == lexer.TK.Op && a0.text == "." && a1.kind == lexer.TK.Ident && a2.kind == lexer.TK.Op && a2.text == "(") { return false; }
+    let a3 = p.lx.toks.at(gt + 4);
+    let call = (a3.kind == lexer.TK.Op && a3.text == ")") ? "()" : "(..)";
+    let lt = ts(p.lx.toks.at(lt_idx));
+    if !has_error_on(p, lt.line) {
+        let help = format("write `{toks_text(p, start_idx, lt_idx)}.{a1.text}<{toks_text(p, lt_idx + 1, gt)}>{call}`");
+        add_error_lh(p, lt.line, lt.col, lt.len, "type arguments go after the function or method name, not after the type", "move these type arguments", help);
+    }
+    return true;
+}
+
 fn parse_bin(p: *P, minprec: i64) -> ast.Node! {
     let mut start = clone_tok(tok(p));
+    let start_idx = p.p;
     let mut lhs = try parse_cast(p);
     loop {
         let mut t = clone_tok(tok(p));
         if t.kind != lexer.TK.Op { break; }
         let prec = bin_prec(t.text);
         if prec == 0 || prec < minprec { break; }
+        let lt_idx = p.p;
         advance(p);
         let rhs = try parse_bin(p, prec + 1);
         let mut n = ast.new_node("Binary", sp(p, ts(&start)));
@@ -1374,6 +1427,9 @@ fn parse_bin(p: *P, minprec: i64) -> ast.Node! {
         n.put_node("r", rhs);
         n.put_span("op_span", ts(&t));
         lhs = n;
+        if t.text == "<" && tok(p).kind == lexer.TK.Op && (tok(p).text == ">" || tok(p).text == ",") && misplaced_type_args(p, start_idx, lt_idx) {
+            throw Abort;
+        }
         if is_cmp(t.text) && tok(p).kind == lexer.TK.Op && is_cmp(tok(p).text) {
             fail(p, "comparison operators cannot be chained");
             throw Abort;

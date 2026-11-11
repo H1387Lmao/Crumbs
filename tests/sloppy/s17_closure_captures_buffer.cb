@@ -1,0 +1,7 @@
+// Sloppy on purpose: captures a buffer in a closure and forgets about it.
+fn main() {
+    let buf = alloc(i64, 3);
+    buf[2] = 8;
+    let get = move |i: i64| -> i64 { return buf[i]; };
+    println("{get(2)}");
+}

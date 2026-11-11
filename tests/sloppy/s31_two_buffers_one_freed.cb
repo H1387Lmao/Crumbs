@@ -1,0 +1,8 @@
+// Sloppy on purpose: frees one of two buffers and forgets the other.
+fn main() {
+    let a = alloc(i64, 4);
+    let b = alloc(i64, 4);
+    a[0] = 1; b[0] = 2;
+    free(a);
+    println("{b[0]}");
+}

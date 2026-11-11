@@ -1,0 +1,10 @@
+// Sloppy on purpose: allocates in a loop and drops every buffer on the floor.
+fn main() {
+    let mut total: i64 = 0;
+    for i in 0..1000 {
+        let tmp = alloc(i64, 64);
+        tmp[0] = i;
+        total += tmp[0];
+    }
+    println("{total}");
+}

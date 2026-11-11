@@ -1,0 +1,9 @@
+// Sloppy on purpose: frees in only one branch of an if.
+fn run(flag: bool) -> i64 {
+    let buf = alloc(i64, 4);
+    buf[0] = 3;
+    let r = buf[0];
+    if flag { free(buf); }
+    return r;
+}
+fn main() { println("{run(true)} {run(false)}"); }

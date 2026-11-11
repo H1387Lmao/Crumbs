@@ -1,0 +1,9 @@
+// Sloppy on purpose: passes a buffer through several functions, each taking a copy.
+fn a(x: []i64) -> i64 { return b(x) + 1; }
+fn b(x: []i64) -> i64 { return c(x) + 1; }
+fn c(x: []i64) -> i64 { return x[0]; }
+fn main() {
+    let buf = alloc(i64, 1);
+    buf[0] = 40;
+    println("{a(buf)}");
+}

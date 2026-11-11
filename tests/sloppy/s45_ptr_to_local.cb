@@ -1,0 +1,7 @@
+// Sloppy on purpose: returns nothing but passes a pointer to a local around.
+fn bump(p: *i64) { *p += 1; }
+fn main() {
+    let mut n: i64 = 0;
+    for i in 0..10 { bump(&n); }
+    println("{n}");
+}

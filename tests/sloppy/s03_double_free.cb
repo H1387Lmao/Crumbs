@@ -1,0 +1,9 @@
+// Sloppy on purpose: frees the same buffer twice.
+fn main() {
+    let buf = alloc(u8, 16);
+    buf[0] = 7;
+    println("{buf[0]}");
+    free(buf);
+    free(buf);
+    println("still alive");
+}

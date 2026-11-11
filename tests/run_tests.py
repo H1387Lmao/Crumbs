@@ -49,6 +49,27 @@ def test_ok(path, extra=(), exp_path=None):
     report(name, True)
 
 
+def test_sloppy_asan(path):
+    """Build with AddressSanitizer (when gcc has it): the default reference counting must leave no leak or stale access."""
+    import shutil, subprocess, tempfile
+    name = os.path.relpath(path, HERE) + " (asan)"
+    if not shutil.which("gcc"):
+        return
+    with tempfile.TemporaryDirectory() as d:
+        c, exe = os.path.join(d, "x.c"), os.path.join(d, "x")
+        e = subprocess.run([sys.executable, os.path.join(HERE, "..", "crumbs.py"), "emit", path, "--no-warn"], capture_output=True, text=True)
+        if e.returncode != 0:
+            return report(name, False, e.stderr)
+        open(c, "w").write(e.stdout)
+        b = subprocess.run(["gcc", "-std=gnu11", "-Uunix", "-fsanitize=address", "-g", "-O0", c, "-o", exe, "-lm", "-pthread"], capture_output=True, text=True)
+        if b.returncode != 0:
+            return report(name, True)       # no sanitizer runtime here: skip
+        r = subprocess.run([exe], capture_output=True, text=True, env={**os.environ, "ASAN_OPTIONS": "detect_leaks=1"})
+        if r.returncode != 0:
+            return report(name, False, r.stderr[:1500])
+    report(name, True)
+
+
 def markers(path):
     out = []
     for i, line in enumerate(open(path).read().split("\n"), 1):
@@ -172,7 +193,7 @@ def test_bootstrap():
         r = run(["build", src, "-o", s1, "--no-warn"])
         if r.returncode != 0:
             return report("bootstrap: stage 1 (built by the Python compiler)", False, r.stdout + r.stderr)
-        want = subprocess.run([sys.executable, os.path.join(HERE, "..", "crumbs.py"), "emit", src], capture_output=True, text=True).stdout
+        want = subprocess.run([sys.executable, os.path.join(HERE, "..", "crumbs.py"), "emit", "--no-rc", src], capture_output=True, text=True).stdout
         exe = s1
         for n in (2, 3):
             c_path = os.path.join(tmp, f"stage{n}.c")
@@ -211,6 +232,11 @@ def main():
     for p in sorted(glob.glob(os.path.join(HERE, "ok", "*.cb"))):
         if sel(p):
             test_ok(p)
+    print("== sloppy programs: leaks and double frees that must still run, and be cleaned up by reference counting")
+    for p in sorted(glob.glob(os.path.join(HERE, "sloppy", "*.cb"))):
+        if sel(p):
+            test_ok(p)
+            test_sloppy_asan(p)
     ex = os.path.join(HERE, "..", "examples", "ffi", "main.cb")
     if not only or "ffi" in " ".join(only):
         test_ok(ex, exp_path=os.path.join(HERE, "ok", "ffi_wrapper.out"))

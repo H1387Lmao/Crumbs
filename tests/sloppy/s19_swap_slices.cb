@@ -1,0 +1,12 @@
+// Sloppy on purpose: swaps two buffers with a temporary.
+fn main() {
+    let a = alloc(i64, 1);
+    let b = alloc(i64, 1);
+    a[0] = 1; b[0] = 2;
+    let mut x = a;
+    let mut y = b;
+    let t = x;
+    x = y;
+    y = t;
+    println("{x[0]} {y[0]}");
+}

@@ -1,0 +1,10 @@
+// Sloppy on purpose: allocates ten thousand small blocks and keeps none of them.
+fn main() {
+    let mut sum: i64 = 0;
+    for i in 0..10000 {
+        let b = alloc(u8, 32);
+        b[0] = 1;
+        sum += b[0] as i64;
+    }
+    println("{sum}");
+}

@@ -62,8 +62,9 @@ class RegionLocal:
 
 
 class CodeGen:
-    def __init__(self, ck, gc=False, nostd=False, overflow_panic=False, gc_mode="auto", gc_interval=100):
+    def __init__(self, ck, gc=False, nostd=False, overflow_panic=False, gc_mode="auto", gc_interval=100, rc=False):
         self.ck = ck
+        self.rc = rc and not gc and not nostd
         self.gc = gc and not nostd
         self.gc_mode = gc_mode if self.gc else "auto"
         self.gc_interval = gc_interval
@@ -86,7 +87,9 @@ class CodeGen:
         self.loop_bases = []
         self.try_stack = []
         self.glue_done = {}
+        self.retain_done = {}
         self.glue_todo = []
+        self.thunks = {}
         self.stmt_temps = None   # temporaries with destructors created while generating the current statement
 
     # ------------------------------------------------------------ utilities
@@ -237,8 +240,10 @@ class CodeGen:
                 c = f"cb_cvt_{dst.name}((__int128)({c}), {self.loc(e.span)})"
             else:
                 c = f"(({self.ctype(dst)})({c}))"
+        if getattr(e, "rc_copy", False) and self.rc:
+            c = self.rc_retain(c, e.ty)           # --rc: a copy of a pointer/slice holds its own count
         if (self.stmt_temps is not None and e.kind in ("Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch", "Ternary")
-                and not getattr(e, "owned", False) and e.ty is not None and not e.ty.poison and e.ty.kind != "eu"
+                and not getattr(e, "owned", False) and not getattr(e, "rc_copy", False) and e.ty is not None and not e.ty.poison and e.ty.kind != "eu"
                 and self.ck.has_glue(e.ty)):
             # a temporary that is only borrowed (printed, viewed, compared, ...): destroy it after the statement
             name = self.tmp("cb_tmp")
@@ -390,6 +395,27 @@ class CodeGen:
             return f"(({self.ctype(sym.ty)})({sym.csym}))"
         return sym.cname
 
+    def fn_value_ref(self, sym):
+        """A named function used as a value is called from places that hold no count on its pointer arguments (C callbacks,
+        thread entries): under --rc the code pointer is a thunk that retains them first."""
+        if not (self.rc and sym.kind == "fn" and not sym.extern and not sym.tparams
+                and any(self.ck.rc_copyable(t) for t in sym.params)):
+            return self.sym_ref(sym)
+        name = sym.cname + "__cbk"
+        if name not in self.thunks:
+            ps = ", ".join(f"{self.ctype(t)} a{i}" for i, t in enumerate(sym.params)) or "void"
+            ret = self.ctype(sym.ret) if sym.ret != VOID else "void"
+            L = [f"static {ret} {name}({ps});"]
+            body = [f"static {ret} {name}({ps}) {{"]
+            for i, t in enumerate(sym.params):
+                if self.ck.rc_copyable(t):
+                    body.append(f"    (void){self.rc_retain(f'a{i}', t)};")
+            args = ", ".join(f"a{i}" for i in range(len(sym.params)))
+            body.append(f"    {'' if ret == 'void' else 'return '}{sym.cname}({args});")
+            body.append("}")
+            self.thunks[name] = (sym, "\n".join(L), "\n".join(body))
+        return f"/*{sym.cname}*/ {name}"
+
     def g_Closure(self, e):
         sym = e.sym
         if not e.captures:
@@ -399,6 +425,8 @@ class CodeGen:
         for i, (outer, proxy) in enumerate(e.captures):
             if proxy.byref:
                 parts.append(f"{en}->c{i} = &{outer.cname};")
+            elif outer.glue and self.rc and not self.ck.has_glue(outer.ty, leaves=False):
+                parts.append(f"{en}->c{i} = {self.rc_retain(outer.cname, outer.ty)};")      # --rc: the closure holds its own count
             elif outer.glue:
                 parts.append(f"{en}->c{i} = ({outer.cname}__live = 0, {outer.cname});")
             else:
@@ -416,12 +444,12 @@ class CodeGen:
             if getattr(e, "move", False) and loc.glue:
                 return f"({loc.cname}__live = 0, {loc.cname})"
             return loc.cname
-        return self.sym_ref(e.sym)
+        return self.fn_value_ref(e.sym)
 
     def g_Field(self, e):
         m = e.mode
         if m == "sym":
-            return self.sym_ref(e.sym)
+            return self.fn_value_ref(e.sym)
         if m == "slice_ptr":
             ot = e.obj.ty
             x = f"{self.nn(self.ex(e.obj), ot, e.span)}->ptr" if ot.kind == "ptr" else f"({self.ex(e.obj)}).ptr"
@@ -724,6 +752,12 @@ class CodeGen:
     def b_free(self, e):
         if e.args[0].ty == STRING:
             return f"cb_string_free({self.ex(e.args[0])})"
+        if self.rc:
+            a = e.args[0]
+            if self.is_place(a):
+                p = self.tmp("cb_fp")       # frees the reference this place holds, and clears the place so it is not released twice
+                return (f"({{ __typeof__({self.ex(a)}) *{p} = &({self.ex(a)}); cb_rc_free_ptr({p}->ptr); {p}->ptr = 0; {p}->len = 0; (void)0; }})")
+            return f"cb_rc_free_ptr(({self.ex(a)}).ptr)"
         return f"cb_mem_free(({self.ex(e.args[0])}).ptr)"
 
     def b_cstr(self, e):
@@ -1016,10 +1050,51 @@ class CodeGen:
         self.glue_todo.append((name, t))
         return name
 
+    # ---- --rc: retaining a copy of a pointer/slice (or of a struct/array/optional made of them)
+    def rc_retain(self, c, t):
+        if t.kind == "ptr":
+            return f"(({self.ctype(t)})cb_rc_retain((void *)({c})))"
+        v = self.tmp("cb_rv")
+        if t.kind == "slice":
+            return f"({{ {self.ctype(t)} {v} = {c}; cb_rc_retain((void *){v}.ptr); {v}; }})"
+        return f"({{ {self.ctype(t)} {v} = {c}; {self.retain_fn(t)}(&{v}); {v}; }})"
+
+    def retain_fn(self, t):
+        got = self.retain_done.get(t.key)
+        if got:
+            return got
+        name = f"cb_rcr_{len(self.retain_done) + 1}"
+        self.retain_done[t.key] = name
+        self.glue_todo.append((name, t))
+        return name
+
+    def gen_retain(self, name, t):
+        L = [f"static void {name}({self.ctype(t)} *p) {{"]
+        if t.kind == "ptr":
+            L.append("    cb_rc_retain((void *)*p);")
+        elif t.kind == "slice":
+            L.append("    cb_rc_retain((void *)p->ptr);")
+        elif t.kind == "arr":
+            L.append(f"    for (int64_t i = 0; i < {t.n}; i++) {self.retain_fn(t.inner)}(&p->v[i]);")
+        elif t.kind == "opt":
+            L.append(f"    if (p->has) {self.retain_fn(t.inner)}(&p->v);")
+        else:
+            for fname, ft, _ in t.sym.fields:
+                if self.ck.has_glue(ft):
+                    L.append(f"    {self.retain_fn(ft)}(&p->{self.fld(fname)});")
+        L.append("}")
+        return "\n".join(L)
+
     def gen_glue(self, name, t):
+        if name.startswith("cb_rcr_"):
+            return self.gen_retain(name, t)
         ct = self.ctype(t)
         L = [f"static void {name}({ct} *p) {{"]
-        if t == STRING:
+        if t.kind == "ptr":
+            L.append("    cb_rc_release((void *)*p);")
+        elif t.kind == "slice":
+            L.append("    cb_rc_release((void *)p->ptr);")
+        elif t == STRING:
             L.append("    cb_string_free(*p);")
             L.append("    p->ptr = 0; p->len = 0; p->cap = 0;")
         elif t.kind == "arr":
@@ -1033,7 +1108,7 @@ class CodeGen:
             if d is not None:
                 L.append(f"    {d.cname}(p);")
             for fname, ft, _ in t.sym.fields:
-                if self.ck.has_glue(ft):
+                if self.ck.field_glue(t.sym, ft):
                     L.append(f"    {self.glue_fn(ft)}(&p->{self.fld(fname)});")
         L.append("}")
         return "\n".join(L)
@@ -1311,7 +1386,7 @@ class CodeGen:
         self.loop_bases = []
         self.try_stack = []
         self.poll()
-        if not self.gc:
+        if not self.gc and not self.rc:
             self.find_autofree(sym.node.body)       # under --gc the collector reclaims it instead
         clo = getattr(sym, "closure", None)
         if clo is not None and clo.caps:
@@ -1370,7 +1445,7 @@ class CodeGen:
         for i, s in enumerate(fns):
             chunks[s.cname] = ("fn", i)
         for i, g in enumerate(glue):
-            m = re.search(r"\b(cb_drop_[A-Za-z0-9_]+)\s*\(", g)
+            m = re.search(r"\b(cb_(?:drop|rcr)_[A-Za-z0-9_]+)\s*\(", g)
             if m:
                 chunks[m.group(1)] = ("glue", i)
         keep_fn, keep_glue = set(), set()
@@ -1422,6 +1497,11 @@ class CodeGen:
             if getattr(s, "closure", None) is not None and s.closure.caps:
                 for _, p in s.closure.caps.items():
                     self.ctype(p.ty)
+        for i, s in enumerate(fns):          # --rc thunks live next to the function they wrap (pruning keeps them together)
+            for tn, (ts, tproto, tbody) in self.thunks.items():
+                if ts is s:
+                    protos[i] += "\n" + tproto
+                    bodies[i] += "\n\n" + tbody
         glue = []                # destructor glue (generating one may require more)
         while self.glue_todo:
             name, t = self.glue_todo.pop(0)
@@ -1459,7 +1539,7 @@ class CodeGen:
                         includes.append(line)
         modedef = {"manual": ["#define CB_GC_MANUAL 1"],
                    "thread": ["#define CB_GC_THREAD 1", f"#define CB_GC_INTERVAL_MS {self.gc_interval}"]}.get(self.gc_mode, []) if self.gc else []
-        gcdef = (["#define CB_GC 1"] + modedef if self.gc else []) + (["#define CB_NOSTD 1"] if self.nostd else []) \
+        gcdef = (["#define CB_GC 1"] + modedef if self.gc else []) + (["#define CB_RC 1"] if self.rc else []) + (["#define CB_NOSTD 1"] if self.nostd else []) \
             + (["#define CB_OVERFLOW_PANIC 1"] if self.overflow_panic else [])
         L = [f"/* Generated by Crumbs from {src_name}. Do not edit. */"] + gcdef + defines + [RUNTIME] + includes
 

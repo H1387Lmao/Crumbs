@@ -1,0 +1,7 @@
+// Sloppy on purpose: calls a function that allocates and ignores what it returns.
+fn make(n: i64) -> []i64 { return alloc(i64, n); }
+fn main() {
+    make(100);
+    make(200);
+    println("done");
+}

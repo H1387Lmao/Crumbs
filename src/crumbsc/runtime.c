@@ -251,9 +251,109 @@ static void cb_region_free(cb_Region *r) {
 }
 
 #ifndef CB_GC
+#ifdef CB_RC
+/* ---- reference counting (the default memory manager) ------------------------------------------
+   Every block handed out by alloc() is entered in a table with a count of 1. Every copy of a pointer or slice
+   that the program keeps retains its block (count + 1); every owner that goes away releases it (count - 1), and
+   the block is freed when the count reaches 0. Pointers the table does not know (the stack, the string arena,
+   regions, C memory, the middle of a block) are ignored by retain and release, so they cost nothing but a lookup.
+   `free(x)` releases the reference `x` holds and clears it, so freeing twice, or freeing and then falling off
+   the end of the scope, is harmless. Cycles are not collected.                                              */
+typedef struct { void *p; int64_t n; } cb_rc_ent;
+#define CB_RC_DEAD ((void *)1)
+static cb_rc_ent *cb_rc_tab;
+static size_t cb_rc_cap, cb_rc_live, cb_rc_dead;
+static volatile int cb_rc_spin;
+#define CB_RC_LOCK() while (__atomic_exchange_n(&cb_rc_spin, 1, __ATOMIC_ACQUIRE)) { }
+#define CB_RC_UNLOCK() __atomic_store_n(&cb_rc_spin, 0, __ATOMIC_RELEASE)
+static inline size_t cb_rc_hash(void *p) {
+    uint64_t x = (uint64_t)(uintptr_t)p;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    return (size_t)x;
+}
+static cb_rc_ent *cb_rc_find(void *p) {
+    if (!cb_rc_cap) return 0;
+    size_t m = cb_rc_cap - 1, i = cb_rc_hash(p) & m;
+    for (;;) {
+        cb_rc_ent *e = &cb_rc_tab[i];
+        if (e->p == p) return e;
+        if (!e->p) return 0;
+        i = (i + 1) & m;
+    }
+}
+static void cb_rc_put(void *p, int64_t n) {          /* the table is locked; `p` is not in it */
+    if ((cb_rc_live + cb_rc_dead + 1) * 2 > cb_rc_cap) {
+        size_t ncap = cb_rc_cap ? cb_rc_cap : 256;
+        if (cb_rc_live * 4 > ncap) ncap *= 2;
+        cb_rc_ent *nt = (cb_rc_ent *)calloc(ncap, sizeof *nt);
+        if (!nt) { fputs("panic: out of memory (reference counts)\n", stderr); exit(101); }
+        for (size_t k = 0; k < cb_rc_cap; k++) {
+            cb_rc_ent *o = &cb_rc_tab[k];
+            if (o->p && o->p != CB_RC_DEAD) {
+                size_t j = cb_rc_hash(o->p) & (ncap - 1);
+                while (nt[j].p) j = (j + 1) & (ncap - 1);
+                nt[j] = *o;
+            }
+        }
+        free(cb_rc_tab);
+        cb_rc_tab = nt; cb_rc_cap = ncap; cb_rc_dead = 0;
+    }
+    size_t m = cb_rc_cap - 1, i = cb_rc_hash(p) & m;
+    while (cb_rc_tab[i].p && cb_rc_tab[i].p != CB_RC_DEAD) i = (i + 1) & m;
+    if (cb_rc_tab[i].p == CB_RC_DEAD) cb_rc_dead--;
+    cb_rc_tab[i].p = p; cb_rc_tab[i].n = n;
+    cb_rc_live++;
+}
+static void *cb_rc_register(void *p) {
+    if (p) { CB_RC_LOCK(); cb_rc_put(p, 1); CB_RC_UNLOCK(); }
+    return p;
+}
+static void *cb_rc_retain(void *p) {
+    if (p) { CB_RC_LOCK(); cb_rc_ent *e = cb_rc_find(p); if (e) e->n++; CB_RC_UNLOCK(); }
+    return p;
+}
+static int cb_rc_drop_ref(void *p, int force) {      /* 1 when the block was known and is now gone (the caller frees it) */
+    CB_RC_LOCK();
+    cb_rc_ent *e = cb_rc_find(p);
+    int gone = 0;
+    if (e && (force || --e->n <= 0)) { e->p = CB_RC_DEAD; cb_rc_live--; cb_rc_dead++; gone = 1; }
+    CB_RC_UNLOCK();
+    return gone;
+}
+static void cb_rc_release(void *p) { if (p && cb_rc_drop_ref(p, 0)) free(p); }
+static int cb_rc_known(void *p) {
+    CB_RC_LOCK(); int k = cb_rc_find(p) != 0; CB_RC_UNLOCK();
+    return k;
+}
+static void *cb_mem_alloc(size_t n, int atomic) { (void)atomic; return calloc(n ? n : 1, 1); }
+static void *cb_mem_realloc(void *p, size_t old, size_t n) {
+    (void)old;
+    int64_t cnt = 0;
+    if (p) { CB_RC_LOCK(); cb_rc_ent *e = cb_rc_find(p); if (e) { cnt = e->n; e->p = CB_RC_DEAD; cb_rc_live--; cb_rc_dead++; } CB_RC_UNLOCK(); }
+    void *q = realloc(p, n);
+    if (q && cnt) { CB_RC_LOCK(); cb_rc_put(q, cnt); CB_RC_UNLOCK(); }
+    return q;
+}
+static void cb_mem_free(void *p) { if (p) { cb_rc_drop_ref(p, 1); free(p); } }
+/* free(x): give back the reference x holds; a block the table does not know is freed outright */
+static void cb_rc_free_ptr(void *p) {
+    if (!p) return;
+    CB_RC_LOCK();
+    cb_rc_ent *e = cb_rc_find(p);
+    int gone = 0, known = e != 0;
+    if (e && --e->n <= 0) { e->p = CB_RC_DEAD; cb_rc_live--; cb_rc_dead++; gone = 1; }
+    CB_RC_UNLOCK();
+    if (gone || !known) free(p);
+}
+#else
+#define cb_rc_retain(p) (p)
+#define cb_rc_release(p) ((void)(p))
+#define cb_rc_register(p) (p)
+#define cb_rc_free_ptr(p) cb_mem_free(p)
 static void *cb_mem_alloc(size_t n, int atomic) { (void)atomic; return calloc(n ? n : 1, 1); }
 static void *cb_mem_realloc(void *p, size_t old, size_t n) { (void)old; return realloc(p, n); }
 static void cb_mem_free(void *p) { free(p); }
+#endif
 static void cb_gc_collect(void) {}
 static int64_t cb_gc_bytes(void) { return 0; }
 static int64_t cb_gc_collections(void) { return 0; }
@@ -935,13 +1035,17 @@ static void cb_gc_collector_start(void) {
 #endif
 #endif
 
+#if defined(CB_GC) || !defined(CB_RC)
+#undef cb_rc_register
+#define cb_rc_register(p) (p)
+#endif
 static inline void *cb_alloc(int64_t n, int64_t size, int atomic, const char *l) {
     if (CB_UNLIKELY(n < 0)) cb_panic(l, "negative allocation size");
     size_t total;
     if (CB_UNLIKELY(__builtin_mul_overflow((size_t)n, (size_t)size, &total))) cb_panic(l, "allocation size overflow");
     void *p = cb_mem_alloc(total, atomic);
     if (CB_UNLIKELY(!p)) cb_panic(l, "out of memory");
-    return p;
+    return cb_rc_register(p);
 }
 
 /* printing */

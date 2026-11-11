@@ -1,0 +1,5 @@
+// Sloppy on purpose: allocates something and never even reads it.
+fn main() {
+    let unused = alloc(i64, 1000);
+    println("nothing to see");
+}

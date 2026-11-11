@@ -1,0 +1,8 @@
+// Sloppy on purpose: overwrites a variable holding a buffer without freeing it.
+fn main() {
+    let mut buf = alloc(i64, 4);
+    buf[0] = 1;
+    buf = alloc(i64, 8);
+    buf[0] = 2;
+    println("{buf[0]} {buf.len}");
+}

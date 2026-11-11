@@ -1,0 +1,12 @@
+// Sloppy on purpose: pops buffers off a list and ignores them.
+import std.list;
+fn main() {
+    let mut l: list.List<[]i64> = list.List.new<[]i64>();
+    for i in 0..5 { l.push(alloc(i64, 2)); }
+    let mut n = 0;
+    while l.len > 0 {
+        let x = l.pop() catch alloc(i64, 0);
+        n += 1;
+    }
+    println("{n}");
+}

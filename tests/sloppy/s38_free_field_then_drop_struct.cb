@@ -1,0 +1,7 @@
+// Sloppy on purpose: frees a field by hand, then lets the struct go.
+struct Holder { buf: []i64, tag: i64 }
+fn main() {
+    let h = Holder { buf: alloc(i64, 2), tag: 3 };
+    free(h.buf);
+    println("{h.tag}");
+}

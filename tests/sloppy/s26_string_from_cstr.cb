@@ -1,0 +1,10 @@
+// Sloppy on purpose: builds C strings in a loop and never releases them.
+fn main() {
+    let mut n: i64 = 0;
+    for i in 0..500 {
+        let s = format("item-{i}");
+        let c = cstr(s);
+        n += from_cstr(c).len;
+    }
+    println("{n}");
+}

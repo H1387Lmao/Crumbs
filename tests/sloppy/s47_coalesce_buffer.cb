@@ -1,0 +1,7 @@
+// Sloppy on purpose: builds a throwaway fallback buffer and uses it, leaking the original.
+fn main() {
+    let first = alloc(i64, 2);
+    let mut b = first;
+    if b.len < 5 { b = alloc(i64, 5); }
+    println("{b.len}");
+}

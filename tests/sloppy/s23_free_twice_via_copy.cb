@@ -1,0 +1,9 @@
+// Sloppy on purpose: frees through two different names of the same buffer.
+fn main() {
+    let a = alloc(i64, 2);
+    let b = a;
+    a[0] = 5;
+    free(a);
+    free(b);
+    println("ok");
+}

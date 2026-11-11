@@ -1,0 +1,11 @@
+// Sloppy on purpose: a list of slices that is never drained.
+import std.list;
+fn main() {
+    let mut l: list.List<[]i64> = list.List.new<[]i64>();
+    for i in 0..10 {
+        let b = alloc(i64, 3);
+        b[0] = i;
+        l.push(b);
+    }
+    println("{l.len}");
+}

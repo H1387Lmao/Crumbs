@@ -1,0 +1,11 @@
+// Sloppy on purpose: frees inside the loop only on even turns.
+fn main() {
+    let mut sum: i64 = 0;
+    for i in 0..40 {
+        let b = alloc(i64, 2);
+        b[0] = i;
+        sum += b[0];
+        if i % 2 == 0 { free(b); }
+    }
+    println("{sum}");
+}

@@ -1,0 +1,8 @@
+// Sloppy on purpose: calls free on a slice that came from the middle of another buffer.
+fn main() {
+    let big = alloc(i64, 8);
+    let mid = big[2..6];
+    mid[0] = 3;
+    println("{big[2]}");
+    free(big);
+}
