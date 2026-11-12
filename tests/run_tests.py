@@ -193,7 +193,7 @@ def test_bootstrap():
         r = run(["build", src, "-o", s1, "--no-warn"])
         if r.returncode != 0:
             return report("bootstrap: stage 1 (built by the Python compiler)", False, r.stdout + r.stderr)
-        want = subprocess.run([sys.executable, os.path.join(HERE, "..", "crumbs.py"), "emit", "--no-rc", src], capture_output=True, text=True).stdout
+        want = subprocess.run([sys.executable, os.path.join(HERE, "..", "crumbs.py"), "emit", src], capture_output=True, text=True).stdout
         exe = s1
         for n in (2, 3):
             c_path = os.path.join(tmp, f"stage{n}.c")

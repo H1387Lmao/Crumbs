@@ -93,7 +93,6 @@ class CodeGen:
         self.glue_done = {}
         self.retain_done = {}
         self.glue_todo = []
-        self.thunks = {}
         self.cur_std = False
         self.stmt_temps = None   # temporaries with destructors created while generating the current statement
 
@@ -409,27 +408,6 @@ class CodeGen:
             return f"(({self.ctype(sym.ty)})({sym.csym}))"
         return sym.cname
 
-    def fn_value_ref(self, sym):
-        """A named function used as a value is called from places that hold no count on its pointer arguments (C callbacks,
-        thread entries): under --rc the code pointer is a thunk that retains them first."""
-        if not (self.rc and sym.kind == "fn" and not sym.extern and not sym.tparams
-                and any(self.ck.rc_copyable(t) for t in sym.params)):
-            return self.sym_ref(sym)
-        name = sym.cname + "__cbk"
-        if name not in self.thunks:
-            ps = ", ".join(f"{self.ctype(t)} a{i}" for i, t in enumerate(sym.params)) or "void"
-            ret = self.ctype(sym.ret) if sym.ret != VOID else "void"
-            L = [f"static {ret} {name}({ps});"]
-            body = [f"static {ret} {name}({ps}) {{"]
-            for i, t in enumerate(sym.params):
-                if self.ck.rc_copyable(t):
-                    body.append(f"    (void){self.rc_retain(f'a{i}', t)};")
-            args = ", ".join(f"a{i}" for i in range(len(sym.params)))
-            body.append(f"    {'' if ret == 'void' else 'return '}{sym.cname}({args});")
-            body.append("}")
-            self.thunks[name] = (sym, "\n".join(L), "\n".join(body))
-        return f"/*{sym.cname}*/ {name}"
-
     def g_Closure(self, e):
         sym = e.sym
         if not e.captures:
@@ -458,12 +436,12 @@ class CodeGen:
             if getattr(e, "move", False) and loc.glue:
                 return f"({loc.cname}__live = 0, {loc.cname})"
             return loc.cname
-        return self.fn_value_ref(e.sym)
+        return self.sym_ref(e.sym)
 
     def g_Field(self, e):
         m = e.mode
         if m == "sym":
-            return self.fn_value_ref(e.sym)
+            return self.sym_ref(e.sym)
         if m == "slice_ptr":
             ot = e.obj.ty
             x = f"{self.nn(self.ex(e.obj), ot, e.span)}->ptr" if ot.kind == "ptr" else f"({self.ex(e.obj)}).ptr"
@@ -1521,11 +1499,6 @@ class CodeGen:
             if getattr(s, "closure", None) is not None and s.closure.caps:
                 for _, p in s.closure.caps.items():
                     self.ctype(p.ty)
-        for i, s in enumerate(fns):          # --rc thunks live next to the function they wrap (pruning keeps them together)
-            for tn, (ts, tproto, tbody) in self.thunks.items():
-                if ts is s:
-                    protos[i] += "\n" + tproto
-                    bodies[i] += "\n\n" + tbody
         if self.pyext:
             from .pybind import PyBind
             pb = PyBind(self, self.pyext, ck.mods[-1])

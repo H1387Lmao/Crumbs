@@ -29,7 +29,7 @@ fn main() -> void! {
         fatal = true;
     }
     if fatal { exit(1); }
-    let mut ck = sema.new_checker(&ld, nostd);
+    let mut ck = sema.new_checker(&ld, nostd, true);
     sema.run_decl(&ck);
     sema.run_sigs(&ck);
     sema.run_bodies(&ck);
@@ -41,7 +41,7 @@ fn main() -> void! {
     let runtime = try fs.read_to_string(runtime_path);
     let last = *ck.ld.order.at(ck.ld.order.len - 1);
     let src_name = String.from(ck.ld.mods.at(last).shown);
-    let mut cg = cgen.new_cg(&ck, gc, nostd, false, "auto", 100);
+    let mut cg = cgen.new_cg(&ck, gc, nostd, false, "auto", 100, true);
     let out = cgen.generate(&cg, src_name, runtime);
     print("{out}");
 }

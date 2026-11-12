@@ -174,6 +174,7 @@ fn main() -> void! {
     let mut gc_mode = String.from("auto");
     let mut gc_interval = 100;
     let mut nostd = false;
+    let mut no_rc = false;
     let mut cflags = String.empty();
     let mut user_defs: List<loader.Define> = List.new();
     let mut i = 3;
@@ -196,6 +197,7 @@ fn main() -> void! {
         else if a.starts_with("-U") && a.len > 2 { user_defs.push(parse_def(a[2..a.len], true)); }
         else if a == "--no-gc" { gc_flag = 0; }
         else if a == "--no-stdruntime" { nostd = true; }
+        else if a == "--no-rc" { no_rc = true; }
         else if a.starts_with("--gc-mode=") { gc_mode = String.from(a[10..a.len]); }
         else if a.starts_with("--gc-interval=") { gc_interval = parse_i(a[14..a.len]); }
         else if a == "-o" && i + 1 < env.arg_count() { i += 1; out_path = String.from(env.arg(i)); }
@@ -211,8 +213,10 @@ fn main() -> void! {
     if gc_interval < 1 || gc_interval > 60000 { fail("--gc-interval must be between 1 and 60000 milliseconds"); }
     if gc_mode != "auto" && gc_flag == 0 && !nostd { fail(format("`--gc-mode={gc_mode}` needs the collector, but `--no-gc` is set")); }
     let gc = gc_flag == 1;
+    let use_rc = !no_rc && !gc && !nostd;
     let mut ld = loader.new_loader(std_dir, nostd);
     let one = String.from("1");
+    if use_rc { ld.predefined.push(loader.Define { name: String.from("CB_RC"), value: String.from("1"), undef: false }); }
     if gc {
         ld.predefined.push(loader.Define { name: String.from("CB_GC"), value: String.from(one), undef: false });
         if gc_mode == "manual" { ld.predefined.push(loader.Define { name: String.from("CB_GC_MANUAL"), value: String.from(one), undef: false }); }
@@ -229,7 +233,7 @@ fn main() -> void! {
         fatal = true;
     }
     if fatal { exit(1); }
-    let mut ck = sema.new_checker(&ld, nostd);
+    let mut ck = sema.new_checker(&ld, nostd, use_rc);
     ck.gc_mode = gc ? String.from(gc_mode) : String.from("off");
     let mut all: List<diag.Diagnostic> = List.new();
     let mut errors = ck.ld.d.error_count();
@@ -261,7 +265,7 @@ fn main() -> void! {
     let last = *ck.ld.order.at(ck.ld.order.len - 1);
     let src_name = String.from(ck.ld.mods.at(last).shown);
     let runtime = try fs.read_to_string(runtime_path);
-    let mut cg = cgen.new_cg(&ck, gc, nostd, overflow, gc_mode, gc_interval);
+    let mut cg = cgen.new_cg(&ck, gc, nostd, overflow, gc_mode, gc_interval, use_rc);
     let c_src = cgen.generate(&cg, src_name, runtime);
     if cmd == "emit" { print("{c_src}"); return; }
     // link plan

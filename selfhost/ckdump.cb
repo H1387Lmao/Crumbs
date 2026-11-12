@@ -59,7 +59,7 @@ fn main() -> void! {
     }
     if fatal { return; }
     let n_loader = ld.d.items.len;
-    let mut ck = sema.new_checker(&ld, nostd);
+    let mut ck = sema.new_checker(&ld, nostd, false);
     sema.run_decl(&ck);
     sema.run_sigs(&ck);
     sema.run_bodies(&ck);
