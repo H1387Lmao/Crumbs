@@ -1,0 +1,10 @@
+// Sloppy on purpose: keep some drop rest.
+fn main() {
+    let mut keep: []i64 = alloc(i64, 1);
+    for i in 0..30 {
+        let t = alloc(i64, 2);
+        t[0] = i;
+        if i % 7 == 0 { keep = t; }
+    }
+    println("{keep[0]}");
+}

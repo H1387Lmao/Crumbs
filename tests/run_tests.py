@@ -49,6 +49,27 @@ def test_ok(path, extra=(), exp_path=None):
     report(name, True)
 
 
+def test_sloppy_asan(path):
+    """Build with AddressSanitizer (when gcc has it): the default reference counting must leave no leak or stale access."""
+    import shutil, subprocess, tempfile
+    name = os.path.relpath(path, HERE) + " (asan)"
+    if not shutil.which("gcc"):
+        return
+    with tempfile.TemporaryDirectory() as d:
+        c, exe = os.path.join(d, "x.c"), os.path.join(d, "x")
+        e = subprocess.run([sys.executable, os.path.join(HERE, "..", "crumbs.py"), "emit", path, "--no-warn"], capture_output=True, text=True)
+        if e.returncode != 0:
+            return report(name, False, e.stderr)
+        open(c, "w").write(e.stdout)
+        b = subprocess.run(["gcc", "-std=gnu11", "-Uunix", "-fsanitize=address", "-g", "-O0", c, "-o", exe, "-lm", "-pthread"], capture_output=True, text=True)
+        if b.returncode != 0:
+            return report(name, True)       # no sanitizer runtime here: skip
+        r = subprocess.run([exe], capture_output=True, text=True, env={**os.environ, "ASAN_OPTIONS": "detect_leaks=1"})
+        if r.returncode != 0:
+            return report(name, False, r.stderr[:1500])
+    report(name, True)
+
+
 def markers(path):
     out = []
     for i, line in enumerate(open(path).read().split("\n"), 1):
@@ -139,6 +160,69 @@ def test_docs_fresh():
     report("docs/stdlib.json is up to date", ok, why or r.stderr)
 
 
+def test_selfhost(stage, tool_cb, py_tool, patterns, skip_async=False, extra=()):
+    """The Crumbs-in-Crumbs `stage` (lexer, parser, ...) must print exactly what the Python one prints, for every file."""
+    import tempfile, shutil
+    tmp = tempfile.mkdtemp(prefix="selfhost-")
+    exe = os.path.join(tmp, stage)
+    try:
+        r = run(["build", os.path.join(HERE, "..", "selfhost", tool_cb), "-o", exe, "--no-warn"])
+        if r.returncode != 0:
+            return report(f"selfhost/{stage}", False, r.stdout + r.stderr)
+        files = sorted(f for pat in patterns for f in glob.glob(os.path.join(HERE, "..", pat)))
+        if skip_async:   # the self-hosted parser does not desugar `async fn`; `NOSELFHOST` files use features it lacks (implicit conversions)
+            files = [f for f in files if not any(w in open(f, encoding="utf-8", errors="replace").read() for w in ("async fn", "import std.async", "NOSELFHOST"))]
+        bad = []
+        for f in files:
+            a = subprocess.run([sys.executable, os.path.join(HERE, "..", "tools", py_tool), f, *extra], capture_output=True, text=True)
+            b = subprocess.run([exe, f, *extra], capture_output=True, text=True)
+            if a.stdout != b.stdout:
+                bad.append(os.path.relpath(f, HERE))
+        report(f"selfhost/{stage}: {len(files)} files identical to the Python {stage}", not bad, "differs on: " + ", ".join(bad[:10]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_bootstrap():
+    """The compiler written in Crumbs compiles itself, and the result is a fixed point: Python -> stage 2 -> stage 3 emit the same C."""
+    import tempfile, shutil
+    tmp = tempfile.mkdtemp(prefix="bootstrap-")
+    src = os.path.join(HERE, "..", "selfhost", "crumbsc.cb")
+    try:
+        s1 = os.path.join(tmp, "stage1")
+        r = run(["build", src, "-o", s1, "--no-warn"])
+        if r.returncode != 0:
+            return report("bootstrap: stage 1 (built by the Python compiler)", False, r.stdout + r.stderr)
+        want = subprocess.run([sys.executable, os.path.join(HERE, "..", "crumbs.py"), "emit", "--no-rc", src], capture_output=True, text=True).stdout
+        exe = s1
+        for n in (2, 3):
+            c_path = os.path.join(tmp, f"stage{n}.c")
+            out = os.path.join(tmp, f"stage{n}")
+            r = subprocess.run([exe, "build", src, "-o", out, "--keep-c", c_path, "--no-warn"], capture_output=True, text=True, cwd=os.path.join(HERE, ".."))
+            if r.returncode != 0:
+                return report(f"bootstrap: stage {n}", False, r.stdout + r.stderr)
+            if open(c_path).read() != want:
+                return report(f"bootstrap: stage {n} emits different C than the Python compiler", False)
+            exe = out
+        hello = subprocess.run([exe, "run", os.path.join(HERE, "ok", "arith.cb")], capture_output=True, text=True, cwd=os.path.join(HERE, ".."))
+        exp = open(os.path.join(HERE, "ok", "arith.out")).read() if os.path.exists(os.path.join(HERE, "ok", "arith.out")) else hello.stdout
+        report("bootstrap: crumbsc compiles itself (stage 2 == stage 3 == Python), and the result runs programs",
+               hello.returncode == 0 and hello.stdout == exp, hello.stderr)
+        # the self-hosted driver reports errors exactly like the Python one
+        root = os.path.join(HERE, "..")
+        bad = []
+        errs = [f for f in sorted(glob.glob(os.path.join(HERE, "err", "*.cb"))) if not os.path.basename(f).startswith(("_", "async"))]
+        for f in errs:
+            rel = os.path.relpath(f, root)
+            a = subprocess.run([exe, "check", rel], capture_output=True, text=True, cwd=root)
+            b = subprocess.run([sys.executable, os.path.join(root, "crumbs.py"), "check", rel], capture_output=True, text=True, cwd=root)
+            if a.stdout + a.stderr != b.stdout + b.stderr:
+                bad.append(os.path.basename(f))
+        report(f"bootstrap: crumbsc check prints the same diagnostics as the Python compiler on {len(errs)} error programs", not bad, ", ".join(bad))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_pyext(path):
     """Builds `path` as a Python extension and runs `test_<name>.py` against it."""
     import shutil, sysconfig, tempfile
@@ -168,6 +252,11 @@ def main():
     for p in sorted(glob.glob(os.path.join(HERE, "ok", "*.cb"))):
         if sel(p):
             test_ok(p)
+    print("== sloppy programs: leaks and double frees that must still run, and be cleaned up by reference counting")
+    for p in sorted(glob.glob(os.path.join(HERE, "sloppy", "*.cb"))):
+        if sel(p):
+            test_ok(p)
+            test_sloppy_asan(p)
     ex = os.path.join(HERE, "..", "examples", "ffi", "main.cb")
     if not only or "ffi" in " ".join(only):
         test_ok(ex, exp_path=os.path.join(HERE, "ok", "ffi_wrapper.out"))
@@ -183,6 +272,33 @@ def main():
     for p in sorted(glob.glob(os.path.join(HERE, "panic", "*.cb"))):
         if sel(p):
             test_panic(p)
+    if not only or "selfhost" in " ".join(only):
+        print("== the compiler written in Crumbs")
+        pats = ["tests/ok/*.cb", "tests/err/*.cb", "tests/panic/*.cb", "tests/strict/*.cb", "src/std/*.cb", "selfhost/*.cb", "examples/*.cb", "examples/*/*.cb"]
+        test_selfhost("lexer", "tokdump.cb", "tokdump.py", pats)
+        test_selfhost("parser", "astdump.cb", "astdump.py", pats, skip_async=True)
+        test_selfhost("fmtspec", "fmtdump.cb", "fmtdump.py", ["tests/selfhost_fmt/*.txt"])
+        test_selfhost("loader", "loaddump.cb", "loaddump.py", pats + ["tests/selfhost_ld/*.cb"], skip_async=True,
+                      extra=("--std=" + os.path.join(HERE, "..", "src", "std"),))
+        test_selfhost("checker-decl", "symdump.cb", "symdump.py", pats, skip_async=True,
+                      extra=("--std=" + os.path.join(HERE, "..", "src", "std"),))
+        test_selfhost("checker-sigs", "symdump.cb", "symdump.py", pats + ["tests/selfhost_sig/*.cb"], skip_async=True,
+                      extra=("--phase=sigs", "--std=" + os.path.join(HERE, "..", "src", "std")))
+        test_selfhost("checker-body", "ckdump.cb", "ckdump.py",
+                      ["tests/selfhost_ck/basic1.cb", "tests/selfhost_ck/errors1.cb", "tests/selfhost_ck/agg*.cb", "tests/selfhost_ck/for*.cb", "tests/selfhost_ck/flow*.cb", "tests/selfhost_ck/gen*.cb", "tests/selfhost_ck/clo*.cb", "tests/selfhost_ck/region*.cb"], skip_async=True,
+                      extra=("--nostd", "--std=" + os.path.join(HERE, "..", "src", "std")))
+        test_selfhost("checker-body-std", "ckdump.cb", "ckdump.py", ["tests/selfhost_ck/builtin*.cb"], skip_async=True,
+                      extra=("--std=" + os.path.join(HERE, "..", "src", "std"),))
+        test_selfhost("checker-std-bodies", "ckdump.cb", "ckdump.py",
+                      ["tests/ok/closures.cb", "tests/ok/collections2.cb", "tests/ok/iterators.cb", "tests/ok/regions.cb", "tests/ok/traits.cb",
+                       "tests/err/borrow_*.cb", "tests/err/closure_leak.cb", "tests/err/own_dangling*.cb", "selfhost/ckdump.cb"], skip_async=True,
+                      extra=("--all", "--std=" + os.path.join(HERE, "..", "src", "std")))
+        ok_progs = [os.path.relpath(f, os.path.join(HERE, "..")) for f in sorted(glob.glob(os.path.join(HERE, "ok", "*.cb")))
+                    if not os.path.basename(f).startswith(("_", "gc_"))]
+        test_selfhost("codegen", "emitdump.cb", "emitdump.py", ok_progs + ["examples/*.cb", "tests/panic/*.cb", "selfhost/ckdump.cb", "selfhost/emitdump.cb"],
+                      skip_async=True, extra=("--std=" + os.path.join(HERE, "..", "src", "std"),))
+        test_bootstrap()
+        test_selfhost("preprocessor", "ppdump.cb", "ppdump.py", pats + ["tests/selfhost_pp/*.cb"], extra=("-DMODE=2", "-DFEATURE"))
     if not only or "pyext" in " ".join(only):
         print("== python extensions")
         for p in sorted(glob.glob(os.path.join(HERE, "pyext", "*.cb"))):

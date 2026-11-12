@@ -1,0 +1,10 @@
+// Sloppy on purpose: returns a closure that keeps a buffer alive.
+fn make() -> |i64| -> i64 {
+    let table = alloc(i64, 4);
+    for i in 0..4 { table[i] = i * 100; }
+    return move |i| table[i];
+}
+fn main() {
+    let f = make();
+    println("{f(1)} {f(3)}");
+}

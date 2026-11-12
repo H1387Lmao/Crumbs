@@ -1,0 +1,6 @@
+// Sloppy on purpose: keeps three buffers in an array and forgets all of them.
+fn main() {
+    let rows = [alloc(i64, 2), alloc(i64, 2), alloc(i64, 2)];
+    for i in 0..3 { rows[i][0] = i; rows[i][1] = i * 10; }
+    println("{rows[2][1]}");
+}

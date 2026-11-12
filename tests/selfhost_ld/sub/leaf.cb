@@ -1,0 +1,2 @@
+import sibling;
+fn leaf() {}

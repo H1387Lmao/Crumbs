@@ -1,0 +1,144 @@
+// Loads a program, runs the declaration phase of the checker and prints the symbol tables (the format of
+// tools/symdump.py).
+import std.env;
+import ast;
+import loader;
+import sema;
+
+fn b(x: bool) -> str { return x ? "1" : "0"; }
+
+fn lst(xs: *List<String>) -> String {
+    let mut o = String.from("[");
+    for i in 0..xs.len { if i > 0 { o.push(','); } o.append(*xs.at(i)); }
+    o.push(']');
+    return o;
+}
+
+fn dump_sym(ck: *sema.Checker, sid: i64) {
+    let s = ck.syms.at(sid);
+    let n = ck.nodes.at(s.node);
+    let csym = s.has_csym ? String.from(s.csym) : String.from("None");
+    let mut o = format("  sym {s.kind} {s.name} pub={b(s.is_pub)} full={s.full} cname={s.cname} extern={b(s.is_extern)} export={b(s.is_export)}");
+    o.append(format(" variadic={b(s.variadic)} tparams={lst(&s.tparams)} csym={csym} opaque={b(s.opaque)} xstruct={b(s.extern_struct)}"));
+    o.append(format(" method={b(s.is_method)} has_self={b(s.has_self)} self_mut={b(s.self_mut)} drop={b(s.is_drop)} code={s.code}"));
+    o.append(format(" variants={lst(&s.variants)} node@{n.span.line}:{n.span.col}"));
+    if s.kind == "trait" {
+        let mut ms: List<String> = List.new();
+        for i in 0..s.trait_methods.len { ms.push(String.from(s.trait_methods.at(i).name)); }
+        let mut sups: List<String> = List.new();
+        for i in 0..s.supers.len { sups.push(String.from(ck.syms.at(*s.supers.at(i)).full)); }
+        o.append(format(" methods={lst(&ms)} supers={lst(&sups)}"));
+    }
+    if s.drop_sym >= 0 { o.append(format(" drop_sym={ck.syms.at(s.drop_sym).full}")); }
+    if s.has_bounds {
+        o.append(" bounds={");
+        for i in 0..s.bounds.len {
+            if i > 0 { o.push(','); }
+            let mut ts: List<String> = List.new();
+            for q in 0..s.bounds.at(i).traits.len { ts.push(String.from(ck.syms.at(*s.bounds.at(i).traits.at(q)).full)); }
+            o.append(format("{s.bounds.at(i).tp}:{lst(&ts)}"));
+        }
+        o.push('}');
+    }
+    println("{o}");
+}
+
+fn cnames(ck: *sema.Checker, which: i64) -> String {
+    let mut ids = &ck.fns;
+    if which == 1 { ids = &ck.structs; }
+    else if which == 2 { ids = &ck.enums; }
+    else if which == 3 { ids = &ck.consts; }
+    else if which == 4 { ids = &ck.traits; }
+    else if which == 5 { ids = &ck.errors; }
+    let mut o = String.from("[");
+    for i in 0..ids.len { if i > 0 { o.push(','); } o.append(ck.syms.at(*ids.at(i)).cname); }
+    o.push(']');
+    return o;
+}
+
+fn main() -> void! {
+    let path = env.arg(1);
+    let mut std_dir = String.from("src/std");
+    let mut sigs = false;
+    for i in 2..env.arg_count() {
+        let a: str = env.arg(i);
+        if a == "--phase=sigs" { sigs = true; }
+        if a.starts_with("--std=") { std_dir = String.from(a[6..a.len]); }
+    }
+    let mut ld = loader.new_loader(std_dir, false);
+    let mut fatal = false;
+    try {
+        try loader.load_entry(&ld, path);
+    } catch {
+        println("fatal: {ld.fatal}");
+        fatal = true;
+    }
+    if fatal { return; }
+    let n_loader = ld.d.items.len;
+    let mut ck = sema.new_checker(&ld, false);
+    sema.run_decl(&ck);
+    if sigs {
+        sema.run_sigs(&ck);
+        sema.check_struct_cycles(&ck);
+    }
+    for oi in 0..ck.ld.order.len {
+        let mi = *ck.ld.order.at(oi);
+        println("module {ck.ld.mods.at(mi).name}");
+        for q in 0..ck.cmods.at(mi).order.len { dump_sym(&ck, *ck.cmods.at(mi).order.at(q)); }
+    }
+    for t in ck.methods {
+        let mut o = format("methods {t.key}: ");
+        for i in 0..t.entries.len {
+            if i > 0 { o.push(','); }
+            o.append(format("{t.entries.at(i).name}={ck.syms.at(t.entries.at(i).sym).cname}"));
+        }
+        println("{o}");
+    }
+    for info in ck.trait_impls {
+        let mut keys: List<String> = List.new();
+        let mut i = 0 as i64;
+        while i < info.bounds.items.len { keys.push(String.from(info.bounds.items.at(i).s)); i += 2; }
+        println("impl {info.trait_full} {info.key} tparams={lst(&info.tparams)} line={info.line} bounds={lst(&keys)}");
+    }
+    println("fns {cnames(&ck, 0)}");
+    println("structs {cnames(&ck, 1)}");
+    println("enums {cnames(&ck, 2)}");
+    println("consts {cnames(&ck, 3)}");
+    println("traits {cnames(&ck, 4)}");
+    println("errors {cnames(&ck, 5)}");
+    if sigs {
+        for q in 0..ck.structs.len {
+            let sid = *ck.structs.at(q);
+            let mut o = format("fields {ck.syms.at(sid).cname}: ");
+            for i in 0..ck.syms.at(sid).fields.len {
+                if i > 0 { o.push(','); }
+                let ts = sema.ty_str(&ck, ck.syms.at(sid).fields.at(i).ty);
+                o.append(format("{ck.syms.at(sid).fields.at(i).name}:{ts}"));
+            }
+            println("{o}");
+        }
+        for q in 0..ck.fns.len {
+            let sid = *ck.fns.at(q);
+            let mut o = format("sig {ck.syms.at(sid).cname}: (");
+            for i in 0..ck.syms.at(sid).params.len {
+                if i > 0 { o.push(','); }
+                o.append(sema.ty_str(&ck, *ck.syms.at(sid).params.at(i)));
+            }
+            let rs = sema.ty_str(&ck, ck.syms.at(sid).ret);
+            o.append(format(")->{rs}"));
+            println("{o}");
+        }
+        for q in 0..ck.consts.len {
+            let sid = *ck.consts.at(q);
+            let ts = sema.ty_str(&ck, ck.syms.at(sid).ty);
+            println("const {ck.syms.at(sid).cname}: {ts}");
+        }
+    }
+    for i in 0..n_loader {
+        let e = ck.ld.d.items.at(i);
+        println("{e.level} {e.file}:{e.line}:{e.col} {e.msg}");
+    }
+    for e in ck.d.items {
+        println("{e.level} {e.file}:{e.line}:{e.col}+{e.len} {e.msg} || {e.label} || {e.help} || {e.note}");
+    }
+}

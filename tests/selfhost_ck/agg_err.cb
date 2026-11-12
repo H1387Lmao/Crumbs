@@ -1,0 +1,42 @@
+struct P { x: i64, y: i64 }
+struct Op;
+impl P {
+    fn sum(self) -> i64 { return self.x; }
+    fn bump(mut self) { self.x += 1; }
+    fn make() -> P { return P { x: 1, y: 2 }; }
+}
+fn takes_const(p: *const P) { p.bump(); }
+fn main() {
+    let a = P { x: 1 };
+    let b = P { x: 1, y: 2, z: 3 };
+    let c = P { x: 1, x: 2, y: 3 };
+    let d = Foo { x: 1 };
+    let e = Op { };
+    let f = a.nothing();
+    let g = a.sum(1);
+    let h = P.nothing();
+    let i = P.make(1);
+    let j = 5.sum();
+    let arr = [1, 2, 3];
+    let k = arr[5];
+    let l = arr[1.5];
+    let m = arr["x"];
+    let n = 5[0];
+    let o = [];
+    let p = [1, true];
+    let q = [0; 0];
+    let r = [0; x];
+    let s = arr[1..];
+    let t = [1,2][0..1];
+    let u = 5[1..2];
+    let v = true ? 1 : "s";
+    let w = 1 ? 1 : 2;
+    let im = P.sum;
+    let cc = a.x.y;
+    let mut mm = P { x: 1, y: 2 };
+    mm.bump(5);
+    a.bump();
+    let pcon: *const P = &mm;
+    pcon.bump();
+    let sm = mm.sum() + mm.x + P.sum(mm);
+}

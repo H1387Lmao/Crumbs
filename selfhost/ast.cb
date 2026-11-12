@@ -1,0 +1,188 @@
+// The syntax tree: a generic node with a kind, a source span and named attributes, like the Python parser's `N`.
+// Values are dynamically typed (`Val`), which keeps one data structure for every kind of node.
+
+pub struct Span { line: i64, col: i64, len: i64 }
+
+// tags: 0 none, 1 bool, 2 int, 3 str, 4 node, 5 list, 6 span, 7 bytes, 8 float (value not kept)
+pub struct Val { tag: i64, i: i64, s: String, node: List<Node>, items: List<Val>, span: Span }
+pub struct Attr { name: String, v: Val }
+pub struct Node { kind: String, span: Span, attrs: List<Attr> }
+
+pub fn span(line: i64, col: i64, len: i64) -> Span { return Span { line: line, col: col, len: len > 1 ? len : 1 }; }
+
+fn empty_val(tag: i64) -> Val {
+    return Val { tag: tag, i: 0, s: String.empty(), node: List.new(), items: List.new(), span: Span { line: 0, col: 0, len: 0 } };
+}
+
+pub fn v_none() -> Val { return empty_val(0); }
+pub fn v_bool(b: bool) -> Val { let mut v = empty_val(1); v.i = b ? 1 : 0; return v; }
+pub fn v_int(i: i64) -> Val { let mut v = empty_val(2); v.i = i; return v; }
+// an integer that may exceed i64: the decimal text is kept in `s`
+pub fn v_u64(x: u64) -> Val {
+    let mut v = empty_val(2);
+    if x > 9223372036854775807 { v.s = format("{x}"); } else { v.i = x as i64; }
+    return v;
+}
+pub fn v_str(s: str) -> Val { let mut v = empty_val(3); v.s = String.from(s); return v; }
+pub fn v_bytes(s: str) -> Val { let mut v = empty_val(7); v.s = String.from(s); return v; }
+// annotations added by the checker: 10 a type handle, 11 a symbol id, 12 a local id (all in `.i`)
+pub fn v_tag(tag: i64, i: i64) -> Val { let mut v = empty_val(tag); v.i = i; return v; }
+pub fn v_float() -> Val { return empty_val(8); }
+pub fn v_float_text(s: str) -> Val { let mut v = empty_val(8); v.s = String.from(s); return v; }
+pub fn v_span(sp: Span) -> Val { let mut v = empty_val(6); v.span = sp; return v; }
+pub fn v_node(n: Node) -> Val { let mut v = empty_val(4); v.node.push(n); return v; }
+pub fn v_list(items: List<Val>) -> Val { let mut v = empty_val(5); v.items = items; return v; }
+
+// moves a list of nodes into value form
+pub fn vals_of(mut ns: List<Node>) -> List<Val> {
+    let mut items: List<Val> = List.new();
+    ns.reverse();
+    while ns.len > 0 {
+        let n = ns.pop() catch { panic("unreachable"); };
+        items.push(v_node(n));
+    }
+    return items;
+}
+
+pub fn new_node(kind: str, sp: Span) -> Node { return Node { kind: kind_of(kind), span: sp, attrs: List.new() }; }
+fn kind_of(k: str) -> String { return String.from(k); }
+
+impl Node {
+    pub fn put(mut self, name: str, v: Val) {
+        let a = Attr { name: String.from(name), v: v };
+        self.attrs.push(a);
+    }
+    // replaces the attribute if it exists (Python's `node.name = value`)
+    pub fn set(mut self, name: str, v: Val) {
+        for i in 0..self.attrs.len {
+            if self.attrs.at(i).name == name {
+                self.attrs.at(i).v = v;
+                return;
+            }
+        }
+        self.put(name, v);
+    }
+    pub fn put_str(mut self, name: str, s: str) { self.put(name, v_str(s)); }
+    pub fn put_int(mut self, name: str, i: i64) { self.put(name, v_int(i)); }
+    pub fn put_bool(mut self, name: str, b: bool) { self.put(name, v_bool(b)); }
+    pub fn put_none(mut self, name: str) { self.put(name, v_none()); }
+    pub fn put_span(mut self, name: str, sp: Span) { self.put(name, v_span(sp)); }
+    pub fn put_node(mut self, name: str, n: Node) { self.put(name, v_node(n)); }
+    // an optional node: `None` when absent
+    pub fn put_opt(mut self, name: str, n: Node?) {
+        if n.is_none() { self.put_none(name); } else { self.put(name, v_node(n.unwrap())); }
+    }
+    pub fn put_nodes(mut self, name: str, ns: List<Node>) { self.put(name, v_list(vals_of(ns))); }
+    // a list of names (identifier paths and the like)
+    pub fn put_strs(mut self, name: str, ss: *List<String>) {
+        let mut items: List<Val> = List.new();
+        for i in 0..ss.len { items.push(v_str(*ss.at(i))); }
+        self.put(name, v_list(items));
+    }
+    pub fn has(self, name: str) -> bool {
+        for a in self.attrs { if a.name == name { return true; } }
+        return false;
+    }
+    pub fn get(self, name: str) -> *Val {
+        for a in self.attrs { if a.name == name { return &a.v; } }
+        panic("node has no attribute: {name} (kind {self.kind})");
+    }
+    pub fn str_of(self, name: str) -> str { return self.get(name).s; }
+    pub fn node_of(self, name: str) -> *Node { return self.get(name).node.at(0); }
+    pub fn is_none(self, name: str) -> bool { return self.get(name).tag == 0; }
+}
+
+pub fn clone_val(v: *Val) -> Val {
+    let mut out = Val { tag: v.tag, i: v.i, s: String.from(v.s), node: List.new(), items: List.new(), span: v.span };
+    for i in 0..v.node.len { out.node.push(clone_node(v.node.at(i))); }
+    for i in 0..v.items.len { out.items.push(clone_val(v.items.at(i))); }
+    return out;
+}
+
+pub fn clone_node(n: *Node) -> Node {
+    let mut out = Node { kind: String.from(n.kind), span: n.span, attrs: List.new() };
+    for i in 0..n.attrs.len {
+        let a = n.attrs.at(i);
+        out.attrs.push(Attr { name: String.from(a.name), v: clone_val(&a.v) });
+    }
+    return out;
+}
+
+// ---- dumping (the format of tools/astdump.py) --------------------------------------------------
+
+fn dump_str(out: *String, s: str, prefix: str) {
+    out.append(prefix);
+    out.push('"');
+    let digits = "0123456789abcdef";
+    for i in 0..s.len {
+        let c = s[i];
+        if c >= 32 && c < 127 && c != '"' && c != '\\' { out.push(c); }
+        else { out.append("\\x"); out.push(digits[(c >> 4) as i64]); out.push(digits[(c & 15) as i64]); }
+    }
+    out.push('"');
+}
+
+fn dump_span(out: *String, sp: Span) { out.append(format("@{sp.line}:{sp.col}+{sp.len}")); }
+
+fn dump_val(out: *String, v: *Val) {
+    if v.tag == 0 { out.append("None"); }
+    else if v.tag == 1 { out.append(v.i != 0 ? "true" : "false"); }
+    else if v.tag == 2 { if v.s.len > 0 { out.append(v.s); } else { out.append(format("{v.i}")); } }
+    else if v.tag == 3 { dump_str(out, v.s, ""); }
+    else if v.tag == 7 { dump_str(out, v.s, "b"); }
+    else if v.tag == 8 { out.append("f"); }
+    else if v.tag == 14 { out.append(v.s); }
+    else if v.tag == 6 { dump_span(out, v.span); }
+    else if v.tag == 4 { dump_node(out, v.node.at(0)); }
+    else if v.tag == 9 {
+        out.push('{');
+        let mut i = 0 as i64;
+        while i < v.items.len {
+            if i > 0 { out.push(','); }
+            dump_val(out, v.items.at(i));
+            out.push(':');
+            dump_val(out, v.items.at(i + 1));
+            i += 2;
+        }
+        out.push('}');
+    }
+    else {
+        out.push('[');
+        for i in 0..v.items.len {
+            if i > 0 { out.push(','); }
+            dump_val(out, v.items.at(i));
+        }
+        out.push(']');
+    }
+}
+
+pub fn dump_node(out: *String, n: *Node) {
+    out.append(n.kind);
+    dump_span(out, n.span);
+    out.push('{');
+    // attributes in name order
+    let mut order: List<i64> = List.new();
+    for i in 0..n.attrs.len { order.push(i); }
+    for i in 0..order.len {
+        for j in i + 1..order.len {
+            let nj: str = n.attrs.at(*order.at(j)).name;
+            let ni: str = n.attrs.at(*order.at(i)).name;
+            if nj.compare(ni) < 0 {
+                let t = *order.at(i);
+                order.set(i, *order.at(j));
+                order.set(j, t);
+            }
+        }
+    }
+    let mut first = true;
+    for k in 0..order.len {
+        let a = n.attrs.at(*order.at(k));
+        if a.name == "tok_lo" || a.name == "tok_hi" || a.name == "src_mod" { continue; }     // bookkeeping the Python tree keeps as tokens
+        if !first { out.push(','); }
+        first = false;
+        out.append(a.name);
+        out.push('=');
+        dump_val(out, &a.v);
+    }
+    out.push('}');
+}

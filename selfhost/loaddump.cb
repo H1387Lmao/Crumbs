@@ -1,0 +1,31 @@
+// Loads a program and prints the modules (in load order), their imports and directives, and the diagnostics,
+// in the format of tools/loaddump.py.
+import std.env;
+import loader;
+import diag;
+
+fn main() -> void! {
+    let path = env.arg(1);
+    let mut std_dir = String.from("src/std");
+    let mut nostd = false;
+    for i in 2..env.arg_count() {
+        let a: str = env.arg(i);
+        if a == "--nostd" { nostd = true; }
+        else if a.starts_with("--std=") { std_dir = String.from(a[6..a.len]); }
+    }
+    let mut ld = loader.new_loader(std_dir, nostd);
+    try {
+        try loader.load_entry(&ld, path);
+    } catch {
+        println("fatal: {ld.fatal}");
+    }
+    for k in 0..ld.order.len {
+        let m = ld.mods.at(*ld.order.at(k));
+        let e = m.is_entry ? 1 : 0;
+        let s = m.is_std ? 1 : 0;
+        println("module {m.name} path={m.path} shown={m.shown} prefix={m.cprefix} entry={e} std={s}");
+        for im in m.imports { println("  import {im.alias} -> {ld.mods.at(im.mod_idx).name} @{im.line}:{im.col}"); }
+        for dr in m.directives { println("  directive {dr.kind} {dr.value} @{dr.line}:{dr.col}"); }
+    }
+    for d in ld.d.items { println("{d.level} {d.file}:{d.line}:{d.col} {d.msg} || {d.note}"); }
+}

@@ -1,0 +1,11 @@
+// Sloppy on purpose: allocates then breaks out of the loop before freeing.
+fn main() {
+    let mut found: i64 = -1;
+    for i in 0..100 {
+        let b = alloc(i64, 4);
+        b[0] = i;
+        if b[0] == 7 { found = i; break; }
+        free(b);
+    }
+    println("{found}");
+}

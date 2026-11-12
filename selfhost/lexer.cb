@@ -1,0 +1,344 @@
+// The Crumbs lexer, written in Crumbs. It mirrors src/crumbsc/lexer.py token for token.
+
+pub enum TK { Int, Float, Str, Char, Ident, Kw, Op, Eof }
+
+pub struct Token {
+    kind: TK,
+    text: String,        // identifier / keyword / operator text; string literal bytes; the cleaned digits of a number
+    ival: u64,           // integer and char values
+    suffix: String,      // numeric suffix, "" for none
+    line: i64,
+    col: i64,
+    len: i64,
+}
+
+pub struct Diag { line: i64, col: i64, len: i64, msg: String, label: String, help: String }
+
+pub struct LexResult { toks: List<Token>, errors: List<Diag> }
+
+fn is_alpha(c: u8) -> bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+fn is_digit(c: u8) -> bool { return c >= '0' && c <= '9'; }
+fn is_ident_start(c: u8) -> bool { return is_alpha(c) || c == '_'; }
+fn is_ident_char(c: u8) -> bool { return is_alpha(c) || is_digit(c) || c == '_'; }
+fn is_hex(c: u8) -> bool { return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
+
+fn hex_val(c: u8) -> u64 {
+    if is_digit(c) { return (c - '0') as u64; }
+    if c >= 'a' { return (c - 'a') as u64 + 10; }
+    return (c - 'A') as u64 + 10;
+}
+
+pub fn is_keyword(w: str) -> bool {
+    let kws = ["fn", "let", "mut", "const", "if", "else", "while", "loop", "for", "in", "return", "break", "continue",
+               "struct", "enum", "import", "as", "pub", "match", "true", "false", "extern", "error", "throw", "try",
+               "catch", "export"];
+    for i in 0..kws.len { if kws[i] == w { return true; } }
+    return false;
+}
+
+fn is_op3(s: str) -> bool { return s == "<<=" || s == ">>=" || s == "..=" || s == "..."; }
+
+fn is_op2(s: str) -> bool {
+    let ops = ["->", "=>", "==", "!=", "<=", ">=", "&&", "||", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
+               "..", "++", "--", "??", "?."];
+    for i in 0..ops.len { if ops[i] == s { return true; } }
+    return false;
+}
+
+fn is_op1(c: u8) -> bool {
+    let ops = "+-*/%&|^~!<>=.,;:(){}[]?";
+    for i in 0..ops.len { if ops[i] == c { return true; } }
+    return false;
+}
+
+fn escape_value(e: u8) -> i64 {
+    if e == 'n' { return 10; }
+    if e == 't' { return 9; }
+    if e == 'r' { return 13; }
+    if e == '0' { return 0; }
+    if e == '\\' { return 92; }
+    if e == '"' { return 34; }
+    if e == '\'' { return 39; }
+    return -1;
+}
+
+fn starts_with_at(t: str, i: i64, p: str) -> bool {
+    if i + p.len > t.len { return false; }
+    for k in 0..p.len { if t[i + k] != p[k] { return false; } }
+    return true;
+}
+
+// the length of the number's digits, mirroring NUM_RE
+fn scan_number(t: str, i: i64) -> i64 {
+    let n = t.len;
+    let mut j = i;
+    if t[i] == '0' && i + 1 < n {
+        let x = t[i + 1];
+        if x == 'x' || x == 'X' {
+            j = i + 2;
+            while j < n && (is_hex(t[j]) || t[j] == '_') { j += 1; }
+            return j - i;
+        }
+        if x == 'b' || x == 'B' {
+            j = i + 2;
+            while j < n && (t[j] == '0' || t[j] == '1' || t[j] == '_') { j += 1; }
+            return j - i;
+        }
+        if x == 'o' || x == 'O' {
+            j = i + 2;
+            while j < n && ((t[j] >= '0' && t[j] <= '7') || t[j] == '_') { j += 1; }
+            return j - i;
+        }
+    }
+    while j < n && (is_digit(t[j]) || t[j] == '_') { j += 1; }
+    if j + 1 < n && t[j] == '.' && is_digit(t[j + 1]) {
+        j += 1;
+        while j < n && (is_digit(t[j]) || t[j] == '_') { j += 1; }
+    }
+    if j < n && (t[j] == 'e' || t[j] == 'E') {
+        let mut k = j + 1;
+        if k < n && (t[k] == '+' || t[k] == '-') { k += 1; }
+        if k < n && (is_digit(t[k]) || t[k] == '_') {
+            while k < n && (is_digit(t[k]) || t[k] == '_') { k += 1; }
+            j = k;
+        }
+    }
+    return j - i;
+}
+
+// parses digits in `base` into a u64; `over` is set when the value does not fit
+fn parse_digits(d: str, base: u64, over: *bool) -> u64 {
+    let mut v = 0 as u64;
+    let max = 18446744073709551615 as u64;
+    for i in 0..d.len {
+        let dv = hex_val(d[i]);
+        if v > (max - dv) / base { *over = true; return 0; }
+        v = v * base + dv;
+    }
+    return v;
+}
+
+// columns and lengths count characters, not bytes (continuation bytes of UTF-8 do not count)
+fn chars(t: str, a: i64, b: i64) -> i64 {
+    let mut n = 0 as i64;
+    for k in a..b { if (t[k] & 0xC0) != 0x80 { n += 1; } }
+    return n;
+}
+
+fn err_s(r: *LexResult, line: i64, col: i64, len: i64, msg: str, label: str, help: str) {
+    r.errors.push(Diag { line: line, col: col, len: len, msg: String.from(msg), label: String.from(label), help: String.from(help) });
+}
+fn err(r: *LexResult, line: i64, col: i64, msg: str) { err_s(r, line, col, 1, msg, "", ""); }
+
+fn tok(kind: TK, text: str, line: i64, col: i64, len: i64) -> Token {
+    return Token { kind: kind, text: String.from(text), ival: 0, suffix: String.empty(), line: line, col: col, len: len };
+}
+
+pub fn lex(text: str) -> LexResult {
+    let mut r = LexResult { toks: List.new(), errors: List.new() };
+    lex_into(text, &r);
+    return r;
+}
+
+// like `lex`, but fills a result that already lives somewhere (a struct field cannot be moved out)
+pub fn lex_into(text: str, r: *LexResult) {
+    let n = text.len;
+    let mut i = 0 as i64;
+    let mut line = 1 as i64;
+    let mut ls = 0 as i64;                 // index of the first byte of the current line
+    while i < n {
+        let c = text[i];
+        if c == '\n' { i += 1; line += 1; ls = i; continue; }
+        if c == ' ' || c == '\t' || c == '\r' { i += 1; continue; }
+        if starts_with_at(text, i, "//") {
+            while i < n && text[i] != '\n' { i += 1; }
+            continue;
+        }
+        if starts_with_at(text, i, "/*") {
+            let mut depth = 0 as i64;
+            let start = i;
+            let sline = line;
+            let sls = ls;
+            while i < n {
+                if starts_with_at(text, i, "/*") { depth += 1; i += 2; }
+                else if starts_with_at(text, i, "*/") { depth -= 1; i += 2; if depth == 0 { break; } }
+                else {
+                    if text[i] == '\n' { line += 1; ls = i + 1; }
+                    i += 1;
+                }
+            }
+            if depth != 0 { err_s(r, sline, chars(text, sls, start) + 1, 2, "unterminated block comment", "comment starts here", "close it with `*/`"); }
+            continue;
+        }
+        if is_ident_start(c) {
+            let mut j = i;
+            while j < n && is_ident_char(text[j]) { j += 1; }
+            let w = text[i..j];
+            r.toks.push(tok(is_keyword(w) ? TK.Kw : TK.Ident, w, line, chars(text, ls, i) + 1, j - i));
+            i = j;
+            continue;
+        }
+        if is_digit(c) {
+            let blen = scan_number(text, i);
+            let body = text[i..i + blen];
+            let mut j = i + blen;
+            let sp_start = i;
+            let mut suffix = "";
+            if j < n && is_ident_start(text[j]) {
+                let mut k = j;
+                while k < n && is_ident_char(text[k]) { k += 1; }
+                suffix = text[j..k];
+                j = k;
+            }
+            let col = chars(text, ls, sp_start) + 1;
+            let slen = chars(text, sp_start, j);
+            i = j;
+            let mut clean = String.empty();
+            for k in 0..body.len { if body[k] != '_' { clean.push(body[k]); } }
+            let cs: str = clean;
+            let mut ok = true;
+            let mut is_float = false;
+            let mut val = 0 as u64;
+            let prefixed = cs.len >= 2 && cs[0] == '0' && (cs[1] == 'x' || cs[1] == 'X' || cs[1] == 'b' || cs[1] == 'B' || cs[1] == 'o' || cs[1] == 'O');
+            if prefixed {
+                let digits = cs[2..cs.len];
+                if digits.len == 0 {
+                    err_s(r, line, col, slen, format("missing digits after `{body[0..2]}`"), "", "");
+                    ok = false;
+                } else {
+                    let p = cs[1];
+                    let base = (p == 'x' || p == 'X') ? 16 as u64 : ((p == 'b' || p == 'B') ? 2 as u64 : 8 as u64);
+                    let mut over = false;
+                    val = parse_digits(digits, base, &over);
+                    if over { err_s(r, line, col, slen, "integer literal is too large", "", "the largest supported integer is 18446744073709551615 (u64)"); ok = false; }
+                }
+            } else {
+                for k in 0..cs.len { if cs[k] == '.' || cs[k] == 'e' || cs[k] == 'E' { is_float = true; } }
+                if !is_float {
+                    let mut over = false;
+                    val = parse_digits(cs, 10, &over);
+                    if over { err_s(r, line, col, slen, "integer literal is too large", "", "the largest supported integer is 18446744073709551615 (u64)"); ok = false; }
+                }
+            }
+            if ok && i < n && is_digit(text[i]) {
+                err_s(r, line, col, chars(text, sp_start, i + 1), format("invalid digit in numeric literal `{body}{text[i]:c}`"), "", "");
+                ok = false;
+            }
+            let sfl = suffix == "f32" || suffix == "f64";
+            let sfi = suffix == "i8" || suffix == "i16" || suffix == "i32" || suffix == "i64"
+                   || suffix == "u8" || suffix == "u16" || suffix == "u32" || suffix == "u64";
+            if ok && suffix.len > 0 {
+                if is_float && !sfl { err_s(r, line, col, slen, format("invalid suffix `{suffix}` for float literal"), "", "valid suffixes are `f32` and `f64`"); ok = false; }
+                else if !is_float && !sfi && !sfl { err_s(r, line, col, slen, format("invalid suffix `{suffix}` for integer literal"), "", "valid suffixes are i8 i16 i32 i64 u8 u16 u32 u64"); ok = false; }
+                else if !is_float && sfl { is_float = true; }
+            }
+            if !ok { let mut t = tok(TK.Int, "", line, col, slen); r.toks.push(t); continue; }
+            if is_float {
+                let mut t = tok(TK.Float, cs, line, col, slen);
+                t.suffix = String.from(suffix);
+                r.toks.push(t);
+            } else {
+                let mut t = tok(TK.Int, "", line, col, slen);
+                t.ival = val;
+                t.suffix = String.from(suffix);
+                r.toks.push(t);
+            }
+            continue;
+        }
+        if c == '"' {
+            let start = i;
+            let sline = line;
+            let sls = ls;
+            i += 1;
+            let mut buf = String.empty();
+            let mut closed = false;
+            while i < n {
+                let ch = text[i];
+                if ch == '"' { i += 1; closed = true; break; }
+                if ch == '\n' { break; }
+                if ch == '\\' {
+                    let esc_at = i;
+                    i += 1;
+                    if i >= n || text[i] == '\n' { break; }
+                    let e = text[i];
+                    if escape_value(e) >= 0 { buf.push(escape_value(e) as u8); i += 1; }
+                    else if e == 'x' {
+                        if i + 2 < n + 0 && is_hex(text[i + 1]) && is_hex(text[i + 2]) {
+                            buf.push((hex_val(text[i + 1]) * 16 + hex_val(text[i + 2])) as u8);
+                            i += 3;
+                        } else {
+                            err_s(r, line, chars(text, ls, esc_at) + 1, chars(text, esc_at, (n < i + 3 ? n : i + 3)), "invalid `\\x` escape", "", "`\\x` must be followed by exactly two hex digits");
+                            i += 1;
+                        }
+                    } else {
+                        err_s(r, line, chars(text, ls, esc_at) + 1, chars(text, esc_at, i + 1), format("unknown escape sequence `\\{e:c}`"), "", "valid escapes: \\n \\t \\r \\0 \\\\ \\\" \\' \\xHH");
+                        i += 1;
+                    }
+                    continue;
+                }
+                buf.push(ch);
+                i += 1;
+            }
+            let slen = chars(text, start, i) > 1 ? chars(text, start, i) : 1;
+            if !closed { err_s(r, sline, chars(text, sls, start) + 1, 1, "unterminated string literal", "string starts here", "add a closing `\"` (strings cannot span lines)"); }
+            let mut t = tok(TK.Str, "", sline, chars(text, sls, start) + 1, slen);
+            t.text = buf;
+            r.toks.push(t);
+            continue;
+        }
+        if c == '\'' {
+            let start = i;
+            i += 1;
+            let mut val = -1 as i64;
+            if i < n && text[i] == '\\' {
+                i += 1;
+                let e = i < n ? text[i] : 0;
+                if i < n && escape_value(e) >= 0 { val = escape_value(e); i += 1; }
+                else if i < n && e == 'x' && i + 2 < n + 0 && is_hex(text[i + 1]) && is_hex(text[i + 2]) {
+                    val = (hex_val(text[i + 1]) * 16 + hex_val(text[i + 2])) as i64;
+                    i += 3;
+                } else {
+                    err_s(r, line, chars(text, ls, start) + 1, chars(text, start, (n < i + 1 ? n : i + 1)), "unknown escape sequence in char literal", "", "");
+                    i += 1;
+                    val = 0;
+                }
+            } else if i < n && text[i] != '\'' && text[i] != '\n' {
+                let ch = text[i];
+                i += 1;
+                if ch >= 128 {
+                    err_s(r, line, chars(text, ls, start) + 1, chars(text, start, i), "char literal must be a single byte", "", "use a string for non-ASCII text");
+                    val = 0;
+                    // skip the rest of a multi-byte character
+                    while i < n && (text[i] & 0xC0) == 0x80 { i += 1; }
+                } else { val = ch as i64; }
+            }
+            if i < n && text[i] == '\'' && val < 0 {
+                i += 1;
+                err_s(r, line, chars(text, ls, start) + 1, chars(text, start, i), "unterminated or empty char literal", "", "char literals look like 'a' or '\\n'");
+                val = 0;
+            } else if i < n && text[i] == '\'' {
+                i += 1;
+            } else {
+                err_s(r, line, chars(text, ls, start) + 1, chars(text, start, (i > start + 1 ? i : start + 1)), "unterminated or empty char literal", "", "char literals look like 'a' or '\\n'");
+                if val < 0 { val = 0; }
+            }
+            let mut t = tok(TK.Char, "", line, chars(text, ls, start) + 1, chars(text, start, i) > 0 ? chars(text, start, i) : 1);
+            t.ival = (val < 0 ? 0 : val) as u64;
+            r.toks.push(t);
+            continue;
+        }
+        let three = i + 3 <= n ? text[i..i + 3] : "";
+        let two = i + 2 <= n ? text[i..i + 2] : "";
+        if three.len == 3 && is_op3(three) { r.toks.push(tok(TK.Op, three, line, chars(text, ls, i) + 1, 3)); i += 3; }
+        else if two.len == 2 && is_op2(two) { r.toks.push(tok(TK.Op, two, line, chars(text, ls, i) + 1, 2)); i += 2; }
+        else if is_op1(c) { r.toks.push(tok(TK.Op, text[i..i + 1], line, chars(text, ls, i) + 1, 1)); i += 1; }
+        else {
+            let mut e = i + 1;
+            while e < n && (text[e] & 192) == 128 { e += 1; }        // one whole character
+            let ch = text[i..e];
+            err(r, line, chars(text, ls, i) + 1, format("unexpected character `{ch}`"));
+            i = e;
+        }
+    }
+    r.toks.push(tok(TK.Eof, "", line, chars(text, ls, i) + 1, 1));
+}

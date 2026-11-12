@@ -1,0 +1,16 @@
+// Sloppy on purpose: grow by hand in method.
+struct W { buf: []u8 }
+impl W {
+    fn grow(mut self, n: i64) {
+        let nb = alloc(u8, n);
+        for i in 0..self.buf.len { nb[i] = self.buf[i]; }
+        self.buf = nb;
+    }
+}
+fn main() {
+    let mut w = W { buf: alloc(u8, 2) };
+    w.buf[0] = 3;
+    w.grow(10);
+    w.grow(100);
+    println("{w.buf[0]} {w.buf.len}");
+}

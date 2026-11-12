@@ -1,0 +1,11 @@
+// Sloppy on purpose: recursion with scratch.
+fn rec(n: i64, acc: []i64) -> i64 {
+    if n == 0 { return acc[0]; }
+    acc[0] += n;
+    let extra = alloc(i64, 2);
+    return rec(n - 1, acc) + extra[0];
+}
+fn main() {
+    let a = alloc(i64, 1);
+    println("{rec(10, a)}");
+}

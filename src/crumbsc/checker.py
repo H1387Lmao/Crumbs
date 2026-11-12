@@ -145,8 +145,9 @@ class FnInfo:
 
 
 class Checker:
-    def __init__(self, mods, diags, c_reserved=(), strict=False, entry_name="main", nostd=False, gc_mode="auto"):
+    def __init__(self, mods, diags, c_reserved=(), strict=False, entry_name="main", nostd=False, gc_mode="auto", rc=False):
         self.strict = strict
+        self.rc = rc                       # --rc: raw pointers and slices are reference counted (copyable, freed with the last owner)
         self.gc_mode = gc_mode             # auto | thread | manual (or "off" with --no-gc)
         self.nostd = nostd                 # --no-stdruntime: no libc-backed features
         self.entry_name = entry_name       # "" = no entry point (library / object-file mode)
@@ -171,6 +172,7 @@ class Checker:
         self.n_inst = 0
         self.glue = {}
         self.glue_busy = set()
+        self.glue_nl = {}
         self.methods = {}        # type key -> {method name: Sym}
         self.traits = []         # trait syms
         self.trait_impls = {}    # (trait full name, type key) -> TraitImpl
@@ -1175,6 +1177,8 @@ class Checker:
         s.param_locals = []
         for p, t in zip(it.params, s.params):
             s.param_locals.append(self.declare_local(p.name, t, getattr(p, "mut", False), p.name_span, is_param=True))
+            if self.rc and (s.is_drop or (s.base is not None and s.base.is_drop)):
+                s.param_locals[-1].glue = False     # --rc: destructors are called on borrowed element addresses, no count held
         n_err = self.d.error_count
         self.check_block(it.body)
         self.pop()
@@ -1338,6 +1342,13 @@ class Checker:
                      help=f"specify explicitly, e.g. `{sym.name}<{', '.join(sym.tparams)}>(...)`"
                      if what == "fn" else "annotate the variable or give the fields concrete values")
 
+    def probe(self, a):
+        """Checks an argument only to learn its type: the moves it makes are undone, since the real check comes later."""
+        saved = dict(self.moved)
+        t = self.check(a, None)
+        self.moved = saved
+        return t
+
     def instantiate_call(self, e, sym, exp):
         tps, params = sym.tparams, sym.node.params
         if len(e.args) != len(params):
@@ -1361,10 +1372,10 @@ class Checker:
         else:
             for a, p in zip(e.args, params):
                 if not self.untyped(a) and a.kind != "Closure":
-                    self.unify(p.tyn, self.check(a, None), sym, b)
+                    self.unify(p.tyn, self.probe(a), sym, b)
             for a, p in zip(e.args, params):
                 if self.untyped(a) and a.kind != "Closure" and not self.is_bare_param(p.tyn, sym, b):
-                    self.unify(p.tyn, self.check(a, None), sym, b)
+                    self.unify(p.tyn, self.probe(a), sym, b)
             for a, p in zip(e.args, params):                    # closures last: their parameter types come from what is already known
                 if a.kind == "Closure" and p.tyn.kind == "TClo":
                     self.unify(p.tyn, self.check(a, self.clo_hint(p.tyn, sym, b)), sym, b)
@@ -1390,35 +1401,59 @@ class Checker:
             return sym.drop_inst
         return sym.drop_sym if not sym.tparams else None
 
-    def has_glue(self, t):
-        """Does dropping a value of type `t` run any destructor?"""
+    def has_glue(self, t, leaves=True):
+        """Does dropping a value of type `t` run any destructor?  (`leaves=False` ignores the `--rc` pointer/slice counts,
+        leaving only what must be moved: Strings, closures, destructors.)"""
         k = t.kind
         if t == STRING:
             return True                 # an owned String frees its buffer when it goes out of scope
+        if self.rc and leaves and k == "slice":
+            return True                 # --rc: a slice holds one count on its block; plain pointers are borrowed (`&x`, `list.at(i)`: no count)
         if k in ("arr", "opt"):
-            return self.has_glue(t.inner)
+            return self.has_glue(t.inner, leaves)
         if k == "clo":
             return True                 # a closure owns its captured environment
         if k != "struct":
             return False
         key = t.key
-        if key in self.glue:
-            return self.glue[key]
-        if key in self.glue_busy:
+        cache = self.glue if leaves else self.glue_nl
+        if key in cache:
+            return cache[key]
+        busy = (key, leaves)
+        if busy in self.glue_busy:
             return False
-        self.glue_busy.add(key)
+        self.glue_busy.add(busy)
         sym = t.sym
-        r = self.drop_fn_of(sym) is not None or any(self.has_glue(ft) for _, ft, _ in sym.fields)
-        self.glue_busy.discard(key)
-        self.glue[key] = r
+        r = self.drop_fn_of(sym) is not None or any(self.field_glue(sym, ft) if leaves else self.has_glue(ft, False) for _, ft, _ in sym.fields)
+        self.glue_busy.discard(busy)
+        cache[key] = r
         return r
 
-    def consume(self, e):
+    def field_glue(self, sym, ft):
+        """Does field `ft` of struct `sym` get destroyed with the struct?  A struct with a destructor manages its raw
+        pointers and slices itself (under --rc too), so only its real owners (Strings, ...) are dropped for it."""
+        if self.rc and self.drop_fn_of(sym) is not None:
+            return self.has_glue(ft, False)
+        return self.has_glue(ft)
+
+    def rc_copyable(self, t):
+        """--rc: a type whose only 'glue' is pointer/slice counts is copied freely (each copy retains)."""
+        return self.rc and self.has_glue(t) and not self.has_glue(t, leaves=False)
+
+    def consume(self, e, move=False):
         """`e` is used by value where ownership is taken: a variable is moved, anything else must be a temporary."""
         t = getattr(e, "ty", None)
-        if t is None or t.poison or not self.has_glue(t) or getattr(e, "coerce", False):
+        if t is None or t.poison or not self.has_glue(t) or (getattr(e, "coerce", False) and t.kind not in ("ptr", "slice")):
             return                      # (a `String` converted to a `str` view is a borrow, not a move)
         k = e.kind
+        if not move and self.rc_copyable(t):
+            # --rc: copying a pointer/slice (or a struct of them) retains it; fresh values pass their count on
+            if k in ("Call", "StructLit", "ArrayLit", "Binary", "Try", "Catch", "Ternary") and \
+                    not (k == "Call" and getattr(e, "builtin", None) in ("slice_of", "from_cstr")):
+                e.owned = True
+            else:
+                e.rc_copy = True
+            return
         if k == "Ident" and getattr(e, "local", None) is not None:
             if e.local.captured:
                 self.d.error(e.span, f"cannot move `{e.name}` out of a closure's captured variables",
@@ -1541,19 +1576,44 @@ class Checker:
         if exp == STR and t == STRING:
             e.coerce = True
             return exp
+        if exp == STRING and t == STR:                       # a str becomes an owned String (a copy is allocated)
+            e.to_string = True
+            e.owned = True
+            return exp
+        if exp.kind == "slice" and t.kind == "arr" and same(t.inner, exp.inner):     # an array lends itself as a slice
+            if not self.is_place(e):
+                self.d.error(e.span, "cannot turn a temporary array into a slice", label="the array would be gone after the call",
+                             help="store it in a variable first")
+                return POISON
+            e.arr_slice = (t.n, exp)
+            return exp
+        if exp.kind == "ptr" and t.kind == "slice" and same(t.inner, exp.inner) and not (exp.inner == VOID):   # C-style decay to the first element
+            self.consume(e)
+            e.slice_decay = True
+            return exp
+        if exp.is_int and (t.kind == "enum" or t == BOOL):   # enums and bools are numbers underneath
+            e.int_cast = exp
+            return exp
         if t.is_numeric and exp.is_numeric and t != exp:
             return exp if self.implicit_conv(e, t, exp) else POISON
         if self.ro_violation(e, t, exp):
             return POISON
         if self.ptr_ok(exp, t):
+            self.consume(e)
             return exp
         if exp.kind == "ptr" and t.kind == "ptr" and same(t, exp) and exp.ro and not t.ro:
+            self.consume(e)
             return exp                                       # `*T` -> `*const T` is always fine
         if not same(t, exp):
             self.mismatch(e, exp, t)
             return POISON
         self.consume(e)
         return t
+
+    def extra_conv(self, t, exp):
+        """The implicit conversions beyond numbers, optionals and pointers (see README): str -> String, [N]T -> []T, []T -> *T, enum/bool -> int."""
+        return ((exp == STRING and t == STR) or (exp.kind == "slice" and t.kind == "arr") or (exp.kind == "ptr" and t.kind == "slice")
+                or (exp.is_int and (t.kind == "enum" or t == BOOL)))
 
     def untyped(self, e):
         k = e.kind
@@ -2793,10 +2853,23 @@ class Checker:
                 return POISON
             return exp
         first = self.check(e.elems[0], elem_exp)
+        tys = [first]
         for x in e.elems[1:]:
             t = self.check(x, first if not first.poison else elem_exp)
-            if not same(t, first):
+            tys.append(t)
+            if not same(t, first) and not (elem_exp is None and t.is_numeric and first.is_numeric):
                 self.mismatch(x, first, t, "array elements must all have the same type")
+        if elem_exp is None and not first.poison and all(t.is_numeric for t in tys) and any(t != first for t in tys):
+            ct = tys[0]                    # mixed numbers: every element converts to the type that holds them all
+            for t in tys[1:]:
+                ct = self.common_type(ct, t) if ct is not None else None
+            if ct is None:
+                self.d.error(e.span, "array elements have numeric types with no common type", help="convert some elements with `as`")
+                return POISON
+            for x, t in zip(e.elems, tys):
+                if t != ct and not self.apply_conv(x, t, ct):
+                    return POISON
+            first = ct
         for x in e.elems:
             self.consume(x)
         return POISON if first.poison else arr(first, len(e.elems))
@@ -2813,7 +2886,9 @@ class Checker:
             self.d.error(e.count.span, "array length must be a positive integer constant")
             return POISON
         e.n = n
-        if not t.poison and self.has_glue(t):
+        if not t.poison and self.rc_copyable(t):
+            self.consume(e.elem)         # --rc: the copies share one block; each holds a count
+        elif not t.poison and self.has_glue(t):
             self.d.error(e.span, f"cannot repeat a value of type `{t}`: it has a destructor and cannot be copied",
                          help="write the elements out one by one, e.g. `[make(), make()]`")
             return POISON
@@ -3019,6 +3094,9 @@ class Checker:
         sig = f"fn {sym.name}({', '.join(f'{p.name}: {t}' for p, t in zip(sym.node.params, sym.params))}{', ...' if sym.variadic else ''})" \
               + (f" -> {sym.ret}" if sym.ret != VOID else "")
         self.check_args(e, sym.params, f"function `{sym.name}`", sig=sig, variadic=sym.variadic)
+        if self.rc and sym.extern:
+            for a in e.args:
+                a.rc_copy = False           # C code does not release what it is given: pass a borrow
         return sym.ret
 
     def find_method(self, e):
@@ -3320,7 +3398,7 @@ class Checker:
         if name == "drop":
             if arity(1):
                 self.check(args[0], None)
-                self.consume(args[0])
+                self.consume(args[0], move=True)
             return VOID
         if name == "drop_at":
             if arity(1):
@@ -3468,7 +3546,7 @@ class Checker:
         t = self.check(s.init, ann)
         # `let buf = alloc(T, n)`: a candidate for being freed automatically at the end of its scope (codegen checks it never escapes)
         s.afree = (s.init.kind == "Call" and getattr(s.init, "builtin", None) == "alloc" and not t.poison
-                   and not self.has_glue(s.init.elem))
+                   and not self.has_glue(s.init.elem) and not self.rc)
         if ann == STR and t == STRING:
             s.init.coerce = True
             t = STR
@@ -3481,7 +3559,9 @@ class Checker:
             elif self.ro_violation(s.init, t, ann):
                 pass
             elif self.ptr_ok(ann, t):
-                pass
+                self.consume(s.init)
+            elif self.extra_conv(t, ann):
+                self.coerce(s.init, t, ann)
             elif not same(t, ann):
                 self.mismatch(s.init, ann, t)
             else:
@@ -3572,7 +3652,7 @@ class Checker:
                 vt = POISON
             elif ot.kind in ("arr", "slice"):
                 vt = ot.inner
-                if self.has_glue(vt):
+                if self.has_glue(vt) and not self.rc_copyable(vt):
                     self.d.error(it.span, f"cannot iterate over `{ot}` by value: `{vt}` has a destructor",
                                  help="iterate over indices (`for i in 0..xs.len`) and borrow with `&xs[i]`")
                     vt = POISON
@@ -3589,6 +3669,8 @@ class Checker:
             if s.var != "_":
                 s.local = self.declare_local(s.var, vt, False, s.var_span)
                 s.local.used = True
+                if self.rc:
+                    s.local.glue = False        # --rc: the loop variable borrows the element; the container still holds its count
             else:
                 s.local = None
             self.check_block(s.body)

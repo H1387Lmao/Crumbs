@@ -1,0 +1,41 @@
+struct P { x: i64 }
+fn main() {
+    let a = 5;
+    let p = P { x: 1 };
+    println("{}", a, a);
+    println("{} {}", a);
+    println("{a} {nope}");
+    println("{a:q}");
+    println("{a:s}");
+    println("{a +}");
+    println("{x}", x = a, y = 3);
+    println("{0}", 1, 2);
+    println("{p}");
+    println("{p:?}");
+    println(p);
+    println("{a:?}", a = 1);
+    let q = format(a);
+    let r = format();
+    let s = string_from(5);
+    let t = to_str(p);
+    let u = alloc(i64);
+    let v = alloc(i64, 2.5);
+    let w = cstr(5);
+    let x = from_cstr(a);
+    let y = slice_of(a, 1);
+    let z = size_of(Missing);
+    free(a);
+    drop_at(a);
+    write_at(a, 1);
+    let rr = read_at(a);
+    exit("x");
+    assert(1);
+    panic(1);
+    println("{a:>}{a:<<>}");
+    println("{a, a}");
+    println("{{}} {a}");
+    gc_collect_gen(1);
+    let ps = [1, 2];
+    println("{a:+d} {a:,}");
+    println("{}", ps);
+}

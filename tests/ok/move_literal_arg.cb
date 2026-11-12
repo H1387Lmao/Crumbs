@@ -1,0 +1,12 @@
+struct A { s: String }
+struct B { a: A }
+
+fn put(mut l: List<B>, a: A) -> i64 {
+    l.push(B { a: a });            // the argument is only inspected for inference first; the move happens once
+    return l.len;
+}
+
+fn main() {
+    let l: List<B> = List.new();
+    println(put(l, A { s: String.from("x") }));
+}

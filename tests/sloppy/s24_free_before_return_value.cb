@@ -1,0 +1,13 @@
+// Sloppy on purpose: frees the buffer and then returns a value read before the free.
+fn pick() -> i64 {
+    let buf = alloc(i64, 3);
+    buf[2] = 12;
+    let v = buf[2];
+    free(buf);
+    return v;
+}
+fn main() {
+    let mut s: i64 = 0;
+    for i in 0..100 { s += pick(); }
+    println("{s}");
+}

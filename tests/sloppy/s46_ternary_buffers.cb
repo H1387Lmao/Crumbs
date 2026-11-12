@@ -1,0 +1,6 @@
+// Sloppy on purpose: picks between two fresh buffers with a ternary and ignores the other.
+fn main() {
+    let flag = false;
+    let b = flag ? alloc(i64, 2) : alloc(i64, 3);
+    println("{b.len}");
+}

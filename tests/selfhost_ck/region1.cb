@@ -1,0 +1,25 @@
+struct Node { next: *Node, v: i64 }
+struct Holder { p: []i64 }
+fn main() {
+    let outside = alloc(i64, 4);
+    let mut keep: []i64 = outside;
+    region r {
+        let a = alloc_in(i64, 8, r);
+        let b = a;
+        let mut h = Holder { p: a };
+        let c = &a[0];
+        region q {
+            let z = alloc_in(i64, 2, q);
+            let w = z;
+            keep = a;
+        }
+    }
+    free(outside);
+}
+fn leak() -> []i64 {
+    region r {
+        let a = alloc_in(i64, 8, r);
+        return a;
+    }
+    return alloc(i64, 1);
+}

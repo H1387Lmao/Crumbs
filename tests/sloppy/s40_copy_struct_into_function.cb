@@ -1,0 +1,12 @@
+// Sloppy on purpose: passes a struct with a buffer by value into a function twice.
+struct Bag { items: []i64 }
+fn total(b: Bag) -> i64 {
+    let mut s: i64 = 0;
+    for i in 0..b.items.len { s += b.items[i]; }
+    return s;
+}
+fn main() {
+    let b = Bag { items: alloc(i64, 3) };
+    b.items[0] = 1; b.items[1] = 2; b.items[2] = 3;
+    println("{total(b)} {total(b)}");
+}

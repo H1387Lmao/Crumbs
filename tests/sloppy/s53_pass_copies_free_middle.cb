@@ -1,0 +1,10 @@
+// Sloppy on purpose: pass copies free middle.
+fn dup(a: []i64) -> []i64 { return a; }
+fn main() {
+    let a = alloc(i64, 2);
+    let b = dup(a);
+    let c = dup(b);
+    free(b);
+    c[0] = 4;
+    println("{a[0]}");
+}

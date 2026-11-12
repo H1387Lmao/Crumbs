@@ -1,0 +1,7 @@
+// Sloppy on purpose: takes a pointer to a local and compares it to a null pointer.
+fn main() {
+    let mut x: i64 = 5;
+    let p = &x;
+    let q = null as *i64;
+    println("{p != q}");
+}

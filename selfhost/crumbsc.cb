@@ -1,0 +1,318 @@
+// The Crumbs compiler, written in Crumbs: `check`, `emit`, `build` and `run` for a single program.
+//   crumbsc check FILE | emit FILE | build FILE [-o OUT] | run FILE [-- args]
+// Options: -O N, --no-warn, --keep-c PATH, --cc CC, --unchecked, --overflow-panic, --std=DIR, --runtime=PATH
+import std.env;
+import std.fs;
+import std.str;
+import loader;
+import sema;
+import cgen;
+import diag;
+
+extern fn system(cmd: *u8) -> i32;
+extern fn write(fd: i32, buf: *u8, n: u64) -> i64;
+
+fn eprint(s: str) { let c = cstr(s); write(2, c, s.len as u64); }
+fn eprintln(s: str) { eprint(s); eprint("\n"); }
+fn copy_extra(a: *diag.Diagnostic) -> List<diag.DExtra> {
+    let mut o: List<diag.DExtra> = List.new();
+    for i in 0..a.extra.len { let x = a.extra.at(i); o.push(diag.DExtra { line: x.line, col: x.col, len: x.len, label: String.from(x.label) }); }
+    return o;
+}
+fn same_diag(a: *diag.Diagnostic) -> diag.Diagnostic {
+    return diag.Diagnostic { level: String.from(a.level), file: String.from(a.file), line: a.line, col: a.col, len: a.len, msg: String.from(a.msg),
+                             label: String.from(a.label), help: String.from(a.help), note: String.from(a.note), extra: copy_extra(a) };
+}
+
+fn expand_tabs(s: str) -> String {
+    let mut o = String.empty();
+    let mut col = 0;
+    for i in 0..s.len {
+        if s[i] == 9 { let n = 4 - (col % 4); for k in 0..n { o.push(' '); } col += n; }
+        else { o.push(s[i]); col += 1; }
+    }
+    return o;
+}
+
+fn width_of(s: str) -> i64 { return expand_tabs(s).len; }
+
+fn repeat(c: u8, n: i64) -> String {
+    let mut o = String.empty();
+    for i in 0..n { o.push(c); }
+    return o;
+}
+
+fn line_of(text: str, n: i64) -> String {
+    let mut line = 1;
+    let mut st = 0;
+    for i in 0..text.len {
+        if text[i] == 10 {
+            if line == n { return String.from(text[st..i]); }
+            line += 1;
+            st = i + 1;
+        }
+    }
+    if line == n { return String.from(text[st..text.len]); }
+    return String.empty();
+}
+
+fn render(items: *List<diag.Diagnostic>, no_warn: bool) -> String {
+    let mut order: List<i64> = List.new();
+    for i in 0..items.len { if !no_warn || items.at(i).level == "error" { order.push(i); } }
+    // stable order: by file, line, column
+    for a in 1..order.len {
+        let mut j = a;
+        while j > 0 {
+            let x = items.at(*order.at(j - 1));
+            let y = items.at(*order.at(j));
+            let gt = str.compare(x.file, y.file) > 0 || (x.file == y.file && (x.line > y.line || (x.line == y.line && x.col > y.col)));
+            if !gt { break; }
+            let t = *order.at(j - 1);
+            *order.at(j - 1) = *order.at(j);
+            *order.at(j) = t;
+            j -= 1;
+        }
+    }
+    let mut out = String.empty();
+    for oi in 0..order.len {
+        let d = items.at(*order.at(oi));
+        let ln = String.from(d.level);
+        out.append(format("{ln}: {d.msg}\n"));
+        let gw = format("{d.line}").len;
+        let mut pad = repeat(32, gw);
+        out.append(format("{pad}--> {d.file}:{d.line}:{d.col}\n"));
+        out.append(format("{pad} |\n"));
+        let text = fs.read_to_string(d.file) catch |_e| { return String.empty(); };
+        let raw = line_of(text, d.line);
+        let shown = expand_tabs(raw);
+        let cb = d.col - 1 < raw.len ? d.col - 1 : raw.len;
+        let start = width_of(raw[0..cb]);
+        let ce = d.col - 1 + d.len < raw.len ? d.col - 1 + d.len : raw.len;
+        let mut w = width_of(raw[0..ce]) - start;
+        let room = shown.len - start > 1 ? shown.len - start : 1;
+        if w > room { w = room; }
+        if w < 1 { w = 1; }
+        out.append(format("{d.line} | {shown}\n"));
+        let sp = repeat(32, start);
+        let car = repeat(94, w);
+        let lab = d.label.len > 0 ? format(" {d.label}") : String.empty();
+        out.append(format("{pad} | {sp}{car}{lab}\n"));
+        let mut pad2 = String.from(pad);
+        let mut gw2 = gw;
+        for xi in 0..d.extra.len {
+            let x = d.extra.at(xi);
+            let xr = line_of(text, x.line);
+            let xshown = expand_tabs(xr);
+            let xcb = x.col - 1 < xr.len ? x.col - 1 : xr.len;
+            let xs = width_of(xr[0..xcb]);
+            let xce = x.col - 1 + x.len < xr.len ? x.col - 1 + x.len : xr.len;
+            let mut xw = width_of(xr[0..xce]) - xs;
+            let xroom = xshown.len - xs > 1 ? xshown.len - xs : 1;
+            if xw > xroom { xw = xroom; }
+            if xw < 1 { xw = 1; }
+            let xgw = format("{x.line}").len;
+            if xgw > gw2 { pad2 = repeat(32, xgw); gw2 = xgw; }
+            let dist = x.line - d.line;
+            let ad = dist < 0 ? 0 - dist : dist;
+            if ad > 1 { out.append(format("{pad2} ...\n")); } else { out.append(format("{pad2} |\n")); }
+            let mut ls = format("{x.line}");
+            while ls.len < gw2 { ls = format(" {ls}"); }
+            out.append(format("{ls} | {xshown}\n"));
+            let xsp = repeat(32, xs);
+            let xd = repeat(45, xw);
+            out.append(format("{pad2} | {xsp}{xd} {x.label}\n"));
+        }
+        if d.extra.len > 0 { pad = pad2; }
+        if d.note.len > 0 {
+            let nt: str = d.note;
+            let mut st = 0;
+            let mut i = 0;
+            while i <= nt.len {
+                if i == nt.len || (i + 4 <= nt.len && nt[i..i + 4] == " ## ") {
+                    let part = String.from(nt[st..i]);
+                    out.append(format("{pad} = note: {part}\n"));
+                    st = i + 4;
+                    i += 4;
+                } else { i += 1; }
+            }
+        }
+        if d.help.len > 0 { out.append(format("{pad} = help: {d.help}\n")); }
+        out.append("\n");
+    }
+    return out;
+}
+
+fn shell_quote(s: str) -> String {
+    let mut o = String.from("'");
+    for i in 0..s.len {
+        if s[i] == 39 { o.append("'\\''"); } else { o.push(s[i]); }
+    }
+    o.push('\'');
+    return o;
+}
+
+fn fail(msg: str) {
+    eprintln(format("error: {msg}"));
+    exit(1);
+}
+
+fn main() -> void! {
+    if env.arg_count() < 3 { fail("usage: crumbsc check|emit|build|run FILE [options]"); }
+    let cmd: str = env.arg(1);
+    let path: str = env.arg(2);
+    let mut std_dir = String.from("src/std");
+    let mut runtime_path = String.from("src/crumbsc/runtime.c");
+    let mut out_path = String.empty();
+    let mut keep_c = String.empty();
+    let mut cc = String.empty();
+    let mut opt = String.from("2");
+    let mut no_warn = false;
+    let mut unchecked = false;
+    let mut overflow = false;
+    let mut run_args = String.empty();
+    let mut gc_flag = -1;            // -1: not given
+    let mut gc_mode = String.from("auto");
+    let mut gc_interval = 100;
+    let mut nostd = false;
+    let mut cflags = String.empty();
+    let mut user_defs: List<loader.Define> = List.new();
+    let mut i = 3;
+    while i < env.arg_count() {
+        let a: str = env.arg(i);
+        if a == "--" {
+            i += 1;
+            while i < env.arg_count() { run_args.append(" "); run_args.append(shell_quote(env.arg(i))); i += 1; }
+            break;
+        }
+        if a == "--no-warn" { no_warn = true; }
+        else if a == "--unchecked" { unchecked = true; }
+        else if a == "--overflow-panic" { overflow = true; }
+        else if a.starts_with("--cflag=") { cflags.append(" "); cflags.append(shell_quote(a[8..a.len])); }
+        else if a == "--gc" { gc_flag = 1; }
+        else if a == "-D" || a == "-U" {
+            if i + 1 < env.arg_count() { i += 1; user_defs.push(parse_def(env.arg(i), a == "-U")); }
+        }
+        else if a.starts_with("-D") && a.len > 2 { user_defs.push(parse_def(a[2..a.len], false)); }
+        else if a.starts_with("-U") && a.len > 2 { user_defs.push(parse_def(a[2..a.len], true)); }
+        else if a == "--no-gc" { gc_flag = 0; }
+        else if a == "--no-stdruntime" { nostd = true; }
+        else if a.starts_with("--gc-mode=") { gc_mode = String.from(a[10..a.len]); }
+        else if a.starts_with("--gc-interval=") { gc_interval = parse_i(a[14..a.len]); }
+        else if a == "-o" && i + 1 < env.arg_count() { i += 1; out_path = String.from(env.arg(i)); }
+        else if a == "-O" && i + 1 < env.arg_count() { i += 1; opt = String.from(env.arg(i)); }
+        else if a == "--keep-c" && i + 1 < env.arg_count() { i += 1; keep_c = String.from(env.arg(i)); }
+        else if a == "--cc" && i + 1 < env.arg_count() { i += 1; cc = String.from(env.arg(i)); }
+        else if a.starts_with("--std=") { std_dir = String.from(a[6..a.len]); }
+        else if a.starts_with("--runtime=") { runtime_path = String.from(a[10..a.len]); }
+        i += 1;
+    }
+    if cmd != "check" && cmd != "emit" && cmd != "build" && cmd != "run" { fail("unknown command `{cmd}`"); }
+    if gc_flag < 0 { gc_flag = gc_mode != "auto" ? 1 : 0; }
+    if gc_interval < 1 || gc_interval > 60000 { fail("--gc-interval must be between 1 and 60000 milliseconds"); }
+    if gc_mode != "auto" && gc_flag == 0 && !nostd { fail(format("`--gc-mode={gc_mode}` needs the collector, but `--no-gc` is set")); }
+    let gc = gc_flag == 1;
+    let mut ld = loader.new_loader(std_dir, nostd);
+    let one = String.from("1");
+    if gc {
+        ld.predefined.push(loader.Define { name: String.from("CB_GC"), value: String.from(one), undef: false });
+        if gc_mode == "manual" { ld.predefined.push(loader.Define { name: String.from("CB_GC_MANUAL"), value: String.from(one), undef: false }); }
+        if gc_mode == "thread" { ld.predefined.push(loader.Define { name: String.from("CB_GC_THREAD"), value: String.from(one), undef: false }); }
+    }
+    for k in 0..user_defs.len { ld.defines.push(loader.Define { name: String.from(user_defs.at(k).name), value: String.from(user_defs.at(k).value), undef: user_defs.at(k).undef }); }
+    if nostd { ld.predefined.push(loader.Define { name: String.from("CB_NO_STDRUNTIME"), value: String.from(one), undef: false }); }
+    if overflow { ld.predefined.push(loader.Define { name: String.from("CB_OVERFLOW_PANIC"), value: String.from("1"), undef: false }); }
+    let mut fatal = false;
+    try {
+        try loader.load_entry(&ld, path);
+    } catch {
+        eprintln(format("error: {ld.fatal}"));
+        fatal = true;
+    }
+    if fatal { exit(1); }
+    let mut ck = sema.new_checker(&ld, nostd);
+    ck.gc_mode = gc ? String.from(gc_mode) : String.from("off");
+    let mut all: List<diag.Diagnostic> = List.new();
+    let mut errors = ck.ld.d.error_count();
+    if errors == 0 {
+        sema.run_decl(&ck);
+        sema.run_sigs(&ck);
+        sema.run_bodies(&ck);
+        sema.finalize_impls(&ck);
+        errors = ck.d.error_count() + ck.ld.d.error_count();
+    }
+    for k in 0..ck.ld.d.items.len { all.push(same_diag(ck.ld.d.items.at(k))); }
+    for k in 0..ck.d.items.len { all.push(same_diag(ck.d.items.at(k))); }
+    let text = render(&all, no_warn);
+    if text.len > 0 { eprint(text); }
+    if errors > 0 {
+        let mut w = 0;
+        for k in 0..all.len { if all.at(k).level != "error" { w += 1; } }
+        let s = errors != 1 ? "s" : "";
+        if w > 0 && !no_warn { eprintln(format("error: aborting due to {errors} error{s} ({w} warning{if_s(w)} emitted)")); }
+        else { eprintln(format("error: aborting due to {errors} error{s}")); }
+        exit(1);
+    }
+    if cmd == "check" {
+        let mut w = 0;
+        for k in 0..all.len { if all.at(k).level != "error" { w += 1; } }
+        if w > 0 && !no_warn { eprintln(format("{w} warning{if_s(w)} emitted")); }
+        return;
+    }
+    let last = *ck.ld.order.at(ck.ld.order.len - 1);
+    let src_name = String.from(ck.ld.mods.at(last).shown);
+    let runtime = try fs.read_to_string(runtime_path);
+    let mut cg = cgen.new_cg(&ck, gc, nostd, overflow, gc_mode, gc_interval);
+    let c_src = cgen.generate(&cg, src_name, runtime);
+    if cmd == "emit" { print("{c_src}"); return; }
+    // link plan
+    let mut flags = String.empty();
+    let mut libs = String.empty();
+    let mut pkgs = String.empty();
+    for oi in 0..ck.ld.order.len {
+        let m = *ck.ld.order.at(oi);
+        for k in 0..ck.ld.mods.at(m).directives.len {
+            let kind: str = ck.ld.mods.at(m).directives.at(k).kind;
+            let val: str = ck.ld.mods.at(m).directives.at(k).value;
+            if kind == "file" { flags.append(" "); flags.append(shell_quote(val)); }
+            else if kind == "lib" { libs.append(" -l"); libs.append(shell_quote(val)); }
+            else if kind == "pkg" { pkgs.append(" "); pkgs.append(shell_quote(val)); }
+            else if kind == "incdir" { flags.append(" -I"); flags.append(shell_quote(val)); }
+        }
+    }
+    let stem = "crumbsc_out";
+    let mut tmpdir = String.from("/tmp/crumbsc-");
+    tmpdir.append(format("{env.arg(0).len}-{c_src.len}"));
+    let mk = format("mkdir -p {shell_quote(tmpdir)}");
+    system(cstr(mk));
+    let c_path = keep_c.len > 0 ? String.from(keep_c) : format("{tmpdir}/{stem}.c");
+    try fs.write(c_path, c_src);
+    let out = out_path.len > 0 ? String.from(out_path) : (cmd == "run" ? format("{tmpdir}/{stem}") : String.from("a.out"));
+    let ccx = cc.len > 0 ? String.from(cc) : String.from("gcc");
+    let mut line = format("{ccx} -std=gnu11 -Uunix -Ulinux -Ui386 -O{opt} -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-value");
+    if unchecked { line = format("{ccx} -DCB_UNCHECKED -fwrapv -std=gnu11 -Uunix -Ulinux -Ui386 -O{opt} -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-value"); }
+    line.append(format("{flags}{cflags} {shell_quote(c_path)}"));
+    line.append(format(" {libs}"));
+    if pkgs.len > 0 { line.append(format(" $(pkg-config --cflags --libs{pkgs})")); }
+    line.append(format(" -o {shell_quote(out)} -lm -pthread"));
+    let rc = system(cstr(line));
+    if rc != 0 { exit(1); }
+    if cmd == "run" {
+        let r = system(cstr(format("{shell_quote(out)}{run_args}")));
+        exit(r / 256);
+    }
+}
+
+fn parse_def(s: str, undef: bool) -> loader.Define {
+    let mut eq = -1;
+    for i in 0..s.len { if eq < 0 && s[i] == 61 { eq = i; } }
+    if undef || eq < 0 { return loader.Define { name: String.from(s), value: String.from(undef ? "" : "1"), undef: undef }; }
+    return loader.Define { name: String.from(s[0..eq]), value: String.from(s[eq + 1..s.len]), undef: false };
+}
+
+fn parse_i(s: str) -> i64 {
+    let mut v = 0;
+    for i in 0..s.len { if s[i] < 48 || s[i] > 57 { fail("--gc-interval needs a number"); } v = v * 10 + (s[i] - 48) as i64; }
+    return v;
+}
+
+fn if_s(n: i64) -> str { return n != 1 ? "s" : ""; }

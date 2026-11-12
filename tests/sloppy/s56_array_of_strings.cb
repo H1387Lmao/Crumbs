@@ -1,0 +1,10 @@
+// Sloppy on purpose: array of strings.
+fn build(n: i64) -> []String {
+    let out = alloc(String, n);
+    for i in 0..n { out[i] = format("s{i}"); }
+    return out;
+}
+fn main() {
+    let v = build(3);
+    println("{v[2]}");
+}

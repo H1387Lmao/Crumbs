@@ -1,0 +1,7 @@
+// Sloppy on purpose: callee frees callers buffer.
+fn fill(buf: []i64) { for i in 0..buf.len { buf[i] = i; } free(buf); }
+fn main() {
+    let b = alloc(i64, 4);
+    fill(b);
+    println("filled");
+}

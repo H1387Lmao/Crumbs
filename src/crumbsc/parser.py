@@ -835,6 +835,9 @@ class Parser:
 
     def parse_for(self):
         t = self.advance()
+        if self.is_op("("):
+            self.fail("expected loop variable, found `(`", label="expected loop variable",
+                      help="loops are written `for i in 0..n { .. }`; there is no C-style `for (;;)`")
         nm = self.expect_ident("loop variable")
         self.expect_kw("in")
         saved = self.no_struct
@@ -914,6 +917,7 @@ class Parser:
 
     def parse_bin(self, minprec):
         start = self.tok
+        start_idx = self.p
         lhs = self.parse_cast()
         while True:
             t = self.tok
@@ -922,13 +926,51 @@ class Parser:
             prec = BIN_PREC[t.val]
             if prec < minprec:
                 break
+            lt_idx = self.p
             self.advance()
             rhs = self.parse_bin(prec + 1)
             lhs = N("Binary", self.sp(start), op=t.val, l=lhs, r=rhs, op_span=t.span)
+            if t.val == "<" and self.tok.kind == "op" and self.tok.val in (">", ","):
+                self.misplaced_type_args(start_idx, lt_idx)
             if t.val in CMP_OPS and self.tok.kind == "op" and self.tok.val in CMP_OPS:
                 self.fail("comparison operators cannot be chained",
                           help="use `&&` to combine comparisons, e.g. `a < b && b < c`")
         return lhs
+
+    def misplaced_type_args(self, start_idx, lt_idx):
+        """`list.List<T>.new()` parses as a chain of comparisons; the type arguments belong after the method name."""
+        def text(toks):
+            out = ""
+            for i, k in enumerate(toks):
+                v = str(k.val)
+                if i and out[-1:].isalnum() and v[:1].isalnum():
+                    out += " "
+                out += v + (" " if v == "," else "")
+            return out.strip()
+        depth, gt = 1, lt_idx + 1                         # find the `>` that closes the type arguments
+        while depth > 0:
+            k = self.toks[gt]
+            if k.kind == "eof" or (k.kind == "op" and k.val in (";", "{", "}", "(", ")", "=")):
+                return
+            if k.kind == "op" and k.val == "<":
+                depth += 1
+            elif k.kind == "op" and k.val == ">":
+                depth -= 1
+            elif k.kind == "op" and k.val == ">>":
+                depth -= 2
+            gt += 1
+        if depth < 0:
+            return
+        gt -= 1                                           # the closing `>`
+        lhs, targs = self.toks[start_idx:lt_idx], self.toks[lt_idx + 1:gt]
+        lt = self.toks[lt_idx]
+        after = self.toks[gt + 1:gt + 4]
+        if lhs and targs and len(after) == 3 and after[0].kind == "op" and after[0].val == "." and after[1].kind == "ident" \
+                and after[2].kind == "op" and after[2].val == "(":
+            call = "()" if self.toks[gt + 4].kind == "op" and self.toks[gt + 4].val == ")" else "(..)"
+            self.fail("type arguments go after the function or method name, not after the type", tok=lt,
+                      label="move these type arguments",
+                      help=f"write `{text(lhs)}.{after[1].val}<{text(targs)}>{call}`")
 
     def parse_cast(self):
         start = self.tok
@@ -1206,7 +1248,8 @@ class Parser:
         if k == "kw" and t.val == "error":
             self.fail("`error` is a keyword; declare errors with `error Name;` and refer to them by name",
                       label="not an expression")
-        self.fail(f"expected an expression, found {self.describe(t)}", label="expected an expression")
+        self.fail(f"expected an expression, found {self.describe(t)}", label="expected an expression",
+                  help="`if` is a statement, not an expression; write a ternary: `cond ? a : b`" if k == "kw" and t.val == "if" else None)
 
     def parse_array_lit(self):
         start = self.advance()

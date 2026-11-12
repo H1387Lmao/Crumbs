@@ -1,0 +1,14 @@
+import std.list;
+import std.map;
+
+struct MyType { a: i32 }
+
+fn a() {
+    let l = list.List<MyType>.new();                // ERROR: type arguments go after the function or method name
+}
+fn b() {
+    let m = map.Map<i32, MyType>.new();             // ERROR: type arguments go after the function or method name
+}
+fn c() {
+    let e = list.List<i64>.with_capacity(8);        // ERROR: type arguments go after the function or method name
+}

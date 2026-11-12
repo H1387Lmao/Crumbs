@@ -1,0 +1,24 @@
+#define F(a, b) a + b
+#define V(a, ...) a __VA_ARGS__
+#define R1 R2
+#define R2 R1
+#define BIG(x) BIG2(x) BIG2(x)
+#define BIG2(x) BIG3(x) BIG3(x)
+#define BIG3(x) x
+#define LOOP(x) LOOP(x) x
+let a = F(1);
+let b = F(1, 2, 3);
+let c = F(1, 2;
+let d = V();
+let e = V(1);
+let f = V(1, 2, 3);
+let g = F((1, 2), [3, 4]) F({1, 2}, 3);
+let h = R1 R2 LOOP(1);
+let i = F(
+let j = F(,);
+#define ZERO() 0
+let k = ZERO() ZERO( ) ZERO(1);
+#define STR(x) #x
+let l = STR() STR(,) STR(a,b);
+let m = __LINE__ __LINE__
+	 __LINE__;

@@ -1,0 +1,11 @@
+// Sloppy on purpose: shadows a buffer variable in an inner block so the first one is unreachable.
+fn main() {
+    let buf = alloc(i64, 2);
+    buf[0] = 1;
+    if true {
+        let buf = alloc(i64, 3);
+        buf[0] = 2;
+        println("{buf[0]} {buf.len}");
+    }
+    println("{buf[0]}");
+}

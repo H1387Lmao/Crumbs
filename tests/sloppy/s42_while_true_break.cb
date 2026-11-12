@@ -1,0 +1,9 @@
+// Sloppy on purpose: writes a loop that only ends through a break.
+fn main() {
+    let mut i: i64 = 0;
+    while true {
+        i += 1;
+        if i > 10 { break; }
+    }
+    println("{i}");
+}

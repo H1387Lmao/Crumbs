@@ -25,7 +25,7 @@ fn main() {
     let p: u8 = 300;                         // ERROR: out of range for `u8`
     let q: u8 = BIGC;                        // ERROR: constant value 1000 does not fit in `u8`
     let r: bool = 1;                         // ERROR: mismatched types
-    let s: i32 = true;                       // ERROR: mismatched types
+    let s: i32 = 1.5;                        // ERROR: mismatched types
     let t = S { v: dbl };                    // ERROR: mismatched types
     let u = 1 + true;                        // ERROR: mismatched types in binary operation
 }

@@ -1,0 +1,9 @@
+// Sloppy on purpose: frees by hand and then lets the scope end release it again.
+fn work() -> i64 {
+    let buf = alloc(i64, 8);
+    buf[1] = 41;
+    let r = buf[1] + 1;
+    free(buf);
+    return r;
+}
+fn main() { println("{work()}"); }

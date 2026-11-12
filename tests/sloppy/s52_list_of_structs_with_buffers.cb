@@ -1,0 +1,14 @@
+// Sloppy on purpose: list of structs with buffers.
+import std.list;
+struct Item { name: String, data: []i64 }
+fn main() {
+    let mut l: list.List<Item> = list.List.new<Item>();
+    for i in 0..5 {
+        let d = alloc(i64, 3);
+        d[0] = i;
+        l.push(Item { name: format("it{i}"), data: d });
+    }
+    let mut s: i64 = 0;
+    for it in l { s += it.data[0]; }
+    println("{s} {l.len}");
+}

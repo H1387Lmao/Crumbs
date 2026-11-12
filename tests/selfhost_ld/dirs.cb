@@ -1,0 +1,14 @@
+link "m";
+link "missing_file.o";
+link "sub/sibling.cb";
+link "/abs/nope.so";
+link "  ";
+link pkg "libpcre2-8";
+include "stdio.h";
+define "FOO=1";
+import std.io;
+#define X 1
+#if X
+import sub.leaf;
+#endif
+fn main() { let é = 1; }

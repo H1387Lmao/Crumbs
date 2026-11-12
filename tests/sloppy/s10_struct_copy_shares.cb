@@ -1,0 +1,9 @@
+// Sloppy on purpose: copies a struct holding a buffer, so two owners share it.
+struct Bag { items: []i64 }
+fn main() {
+    let a = Bag { items: alloc(i64, 2) };
+    a.items[0] = 1;
+    let b = a;
+    b.items[1] = 2;
+    println("{a.items[0]} {a.items[1]}");
+}

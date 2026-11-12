@@ -1,0 +1,8 @@
+// Sloppy on purpose: takes a sub-slice of a buffer and frees the buffer first.
+fn main() {
+    let big = alloc(i64, 10);
+    for i in 0..10 { big[i] = i; }
+    let part = big[2..5];
+    println("{part[0]} {part.len}");
+    free(big);
+}

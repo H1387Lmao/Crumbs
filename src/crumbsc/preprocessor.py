@@ -113,11 +113,11 @@ def tokenize(s, depth=0, base=1):
                 i += 2 if s[i] == "\\" else 1
             i = min(n, i + 1)
             toks.append(Tok("str", s[start:i], start + base))
-        elif c.isalpha() or c == "_":
+        elif (c.isascii() and c.isalpha()) or c == "_":
             m = IDENT.match(s, i)
             i = m.end()
             toks.append(Tok("id", s[start:i], start + base))
-        elif c.isdigit() or (c == "." and i + 1 < n and s[i + 1].isdigit()):
+        elif c in "0123456789" or (c == "." and i + 1 < n and s[i + 1] in "0123456789"):
             m = NUMBER.match(s, i)
             i = m.end()
             toks.append(Tok("num", s[start:i], start + base))

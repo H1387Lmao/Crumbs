@@ -1,0 +1,154 @@
+// File-name helpers (the few os.path functions the loader uses), on '/'-separated paths.
+import std.fs;
+
+extern fn getcwd(buf: *u8, n: u64) -> *u8;
+
+pub fn cwd() -> String {
+    let buf = alloc(u8, 4096);
+    let p = &buf[0];
+    let r = getcwd(p, 4096);
+    if r == null { return String.from("/"); }
+    return String.from(from_cstr(p));
+}
+
+pub fn is_abs(p: str) -> bool { return p.len > 0 && p[0] == '/'; }
+
+// os.path.join for two parts
+pub fn join(a: str, b: str) -> String {
+    if is_abs(b) || a.len == 0 { return String.from(b); }
+    let mut o = String.from(a);
+    if a[a.len - 1] != '/' { o.push('/'); }
+    o.append(b);
+    return o;
+}
+
+fn components(p: str) -> List<String> {
+    let mut o: List<String> = List.new();
+    let mut a = 0 as i64;
+    for i in 0..p.len + 1 {
+        if i == p.len || p[i] == '/' {
+            if i > a && p[a..i] != "." { o.push(String.from(p[a..i])); }
+            a = i + 1;
+        }
+    }
+    return o;
+}
+
+// os.path.normpath for an absolute path (and a relative one, which keeps leading `..`)
+pub fn normpath(p: str) -> String {
+    let abs = is_abs(p);
+    let comps = components(p);
+    let mut out: List<String> = List.new();
+    for i in 0..comps.len {
+        let c: str = *comps.at(i);
+        if c == ".." {
+            if out.len > 0 && *out.at(out.len - 1) != ".." { out.pop() catch { panic("unreachable"); }; }
+            else if !abs { out.push(String.from("..")); }
+        } else {
+            out.push(String.from(c));
+        }
+    }
+    let mut o = String.empty();
+    if abs { o.push('/'); }
+    for i in 0..out.len {
+        if i > 0 { o.push('/'); }
+        o.append(*out.at(i));
+    }
+    if o.len == 0 { o.push('.'); }
+    return o;
+}
+
+pub fn abspath(p: str) -> String {
+    if is_abs(p) { return normpath(p); }
+    let c = cwd();
+    return normpath(join(c, p));
+}
+
+pub fn dirname(p: str) -> String {
+    let mut i = p.len;
+    while i > 0 && p[i - 1] != '/' { i -= 1; }
+    let mut head = p[0..i];
+    // strip trailing slashes unless the head is all slashes
+    let mut e = head.len;
+    while e > 1 && head[e - 1] == '/' { e -= 1; }
+    let mut only = true;
+    for k in 0..head.len { if head[k] != '/' { only = false; } }
+    if only { return String.from(head); }
+    return String.from(head[0..e]);
+}
+
+pub fn basename(p: str) -> String {
+    let mut i = p.len;
+    while i > 0 && p[i - 1] != '/' { i -= 1; }
+    return String.from(p[i..p.len]);
+}
+
+// the file name without its last extension (os.path.splitext(basename(p))[0])
+pub fn stem(p: str) -> String {
+    let b = basename(p);
+    let mut dot = -1 as i64;
+    for i in 0..b.len { if b[i] == '.' { dot = i; } }
+    // a leading dot (".hidden") is not an extension
+    let mut lead = true;
+    for i in 0..dot { if b[i] != '.' { lead = false; } }
+    if dot <= 0 || lead { return b; }
+    return String.from(b[0..dot]);
+}
+
+// os.path.relpath(path): relative to the current directory
+pub fn relpath(p: str) -> String {
+    let a = components(abspath(p));
+    let s = components(cwd());
+    let mut k = 0 as i64;
+    while k < a.len && k < s.len && *a.at(k) == *s.at(k) { k += 1; }
+    let mut o = String.empty();
+    for i in k..s.len {
+        if o.len > 0 { o.push('/'); }
+        o.append("..");
+    }
+    for i in k..a.len {
+        if o.len > 0 { o.push('/'); }
+        o.append(*a.at(i));
+    }
+    if o.len == 0 { o.push('.'); }
+    return o;
+}
+
+// is `p` the directory `dir` or inside it (both absolute and normalised)?
+pub fn is_under(p: str, dir: str) -> bool {
+    let a = components(p);
+    let d = components(dir);
+    if d.len > a.len { return false; }
+    for i in 0..d.len { if *a.at(i) != *d.at(i) { return false; } }
+    return true;
+}
+
+pub fn is_file(p: str) -> bool { return fs.is_file(p); }
+
+pub fn valid_utf8(s: str) -> bool {
+    let mut i = 0 as i64;
+    while i < s.len {
+        let c = s[i] as i64;
+        let mut need = 0 as i64;
+        if c < 128 { need = 0; }
+        else if c >= 194 && c < 224 { need = 1; }
+        else if c >= 224 && c < 240 { need = 2; }
+        else if c >= 240 && c < 245 { need = 3; }
+        else { return false; }
+        for k in 1..need + 1 {
+            if i + k >= s.len { return false; }
+            let d = s[i + k] as i64;
+            let mut lo = 128 as i64;
+            let mut hi = 191 as i64;
+            if k == 1 {
+                if c == 224 { lo = 160; }
+                if c == 237 { hi = 159; }
+                if c == 240 { lo = 144; }
+                if c == 244 { hi = 143; }
+            }
+            if d < lo || d > hi { return false; }
+        }
+        i += need + 1;
+    }
+    return true;
+}

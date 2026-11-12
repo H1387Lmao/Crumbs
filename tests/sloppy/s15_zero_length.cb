@@ -1,0 +1,6 @@
+// Sloppy on purpose: allocates zero elements and uses the empty slice.
+fn main() {
+    let e = alloc(i64, 0);
+    println("{e.len}");
+    free(e);
+}

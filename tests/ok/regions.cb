@@ -1,3 +1,4 @@
+// FLAGS: --gc
 // Regions: lifetimes for allocations. Everything from `alloc_in(T, n, r)` lives exactly as long as the
 // `region r { ... }` block, is freed in one step on every way out, and is never traced by the collector.
 struct Node { value: i32, next: *Node }

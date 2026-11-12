@@ -1,0 +1,10 @@
+// Sloppy on purpose: returns an allocation and the caller never frees it.
+fn make() -> []i64 {
+    let r = alloc(i64, 2);
+    r[0] = 10; r[1] = 20;
+    return r;
+}
+fn main() {
+    let x = make();
+    println("{x[0] + x[1]}");
+}

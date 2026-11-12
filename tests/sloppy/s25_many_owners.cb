@@ -1,0 +1,9 @@
+// Sloppy on purpose: hands the same buffer to a list of structs.
+struct View { data: []i64, start: i64 }
+fn main() {
+    let shared = alloc(i64, 6);
+    for i in 0..6 { shared[i] = i; }
+    let a = View { data: shared, start: 0 };
+    let b = View { data: shared, start: 3 };
+    println("{a.data[a.start]} {b.data[b.start]}");
+}

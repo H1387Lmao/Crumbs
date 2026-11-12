@@ -1,0 +1,9 @@
+// Sloppy on purpose: overwrites a struct field that held a buffer.
+struct Holder { buf: []i64 }
+fn main() {
+    let mut h = Holder { buf: alloc(i64, 2) };
+    h.buf[0] = 1;
+    h.buf = alloc(i64, 5);
+    h.buf[0] = 2;
+    println("{h.buf.len} {h.buf[0]}");
+}

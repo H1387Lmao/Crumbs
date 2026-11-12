@@ -1,0 +1,40 @@
+import std.map;
+import std.io;
+const N: i64 = 4;
+const BIG: i64 = 1 << 40;
+const ZERO: i64 = 0;
+const F: f64 = 1.5;
+const S: str = "x";
+const BAD: List<i64> = 3;
+const SZ: i64 = N * 2 + (3 as i64);
+extern struct Opq;
+struct Cyc { a: Cyc2, n: i64 }
+struct Cyc2 { b: [2]Cyc }
+struct Self1 { s: Self1 }
+struct Dup { a: i64, a: i64 }
+struct Empty { }
+struct Good { xs: [SZ]i64, p: *Good, l: List<i64>, m: map.HashMap<str> }
+struct Wrap { v: Opq }
+struct Arrs { a: [0]i64, b: [BIG]i64, c: [F]i64, d: [S]i64, e: [N / ZERO]i64, f: [Missing]i64, g: [UNK]i64 }
+struct Stack { a: i64?, b: i64!, c: i64??, d: str?!, e: void, f: *void }
+struct Generic<T> { x: T }
+struct Use { a: Generic<i64>, b: Generic<i64, i64>, c: Generic, d: i64<i64>, e: Strng, f: Gooood, g: std.io, h: nomod.T, i: map.Nope, j: a.b.c }
+fn dup(a: i64, a: i64) -> Opq { }
+fn ret_opq() -> Opq { }
+fn arg_opq(o: Opq) { }
+fn with_void(v: void) { }
+fn nested() -> i64!! { }
+fn vp(x: fn(i64) -> void, y: |str| -> i64, z: fn(void)) {}
+extern fn c_str(s: str) -> i32;
+extern fn c_slice(s: []i64);
+extern fn c_ok(p: *i64, n: i64) -> i64;
+extern fn c_eu() -> i64!;
+extern fn c_st(g: Good) -> i32;
+extern fn c_err() -> error;
+extern fn c_string(s: String);
+export fn ex(a: str) -> i32 { return 0; }
+extern struct CS { a: str, b: i64 }
+extern struct CS2 { a: i64, b: [3]i32 }
+extern fn c_cs(a: CS2) -> CS2;
+extern fn c_cs1(a: CS);
+fn main() {}

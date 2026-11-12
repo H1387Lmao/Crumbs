@@ -1,0 +1,22 @@
+struct Acc { n: i64 }
+fn apply(f: |i64| -> i64, x: i64) -> i64 { return f(x); }
+fn twice<T>(f: |T| -> T, x: T) -> T { return f(f(x)); }
+fn mapv<T, U>(x: T, f: |T| -> U) -> U { return f(x); }
+fn maker(n: i64) -> |i64| -> i64 { return move |x| x + n; }
+fn main() {
+    let k = 10;
+    let add = |a: i64, b: i64| -> i64 { return a + b; };
+    let r1 = add(1, 2);
+    let r2 = apply(|x| x * k, 4);
+    let r3 = twice(|x| x + 1, 5);
+    let r4 = mapv(3, |x| x as f64);
+    let mut total = 0;
+    let bump = || { total += 1; };
+    bump();
+    let nested = |a: i64| { let inner = |b: i64| a + b + k; return inner(a); };
+    let m = maker(5);
+    let u = |x: i64| { x; };
+    let s = Acc { n: 1 };
+    let g = move || s.n;
+    let h = |x: i64| -> i64 { if x > 0 { return 1; } else { return 2; } };
+}

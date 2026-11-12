@@ -1,0 +1,6 @@
+// Sloppy on purpose: allocates a buffer and simply never frees it.
+fn main() {
+    let buf = alloc(i64, 4);
+    for i in 0..4 { buf[i] = i * i; }
+    println("{buf[3]}");
+}

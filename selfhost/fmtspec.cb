@@ -1,0 +1,292 @@
+// The mini-language after the colon in an interpolation, and the template splitter (port of src/crumbsc/fmtspec.py).
+error SpecErr;
+
+pub struct SpecError { msg: String, help: String, has_help: bool }
+
+pub struct Spec {
+    fill: String,       // one ASCII character, or "" for the default (space)
+    align: String,      // "<", ">", "^" or ""
+    sign: String,       // "+", " " or ""
+    alt: bool,
+    zero: bool,
+    width: i64,
+    group: String,      // "," "_" or ""
+    prec: i64,          // -1: not given
+    ty: String,         // one of TYPES or ""
+}
+
+// a piece of a template: literal bytes, or an argument
+pub struct Piece {
+    is_arg: bool,
+    lit: String,
+    ref_kind: i64,      // 0 next positional, 1 index, 2 name or dotted path, 3 expression
+    ref_int: i64,
+    ref_text: String,
+    spec: String,
+}
+
+pub struct Checked { ok: bool, msg: String, help: String, has_help: bool }
+
+const MAX_WIDTH: i64 = 1048576;
+const MAX_PREC: i64 = 1000;
+
+pub fn new_spec() -> Spec {
+    return Spec { fill: String.empty(), align: String.empty(), sign: String.empty(), alt: false, zero: false, width: 0,
+                  group: String.empty(), prec: -1, ty: String.empty() };
+}
+
+pub fn is_plain(s: *Spec) -> bool {
+    return s.fill.len == 0 && s.align.len == 0 && s.sign.len == 0 && !s.alt && !s.zero && s.width == 0
+        && s.group.len == 0 && s.prec == -1 && s.ty.len == 0;
+}
+
+fn spec_err(e: *SpecError, msg: str, help: str, has_help: bool) -> void! {
+    e.msg = String.from(msg);
+    e.help = String.from(help);
+    e.has_help = has_help;
+    throw SpecErr;
+}
+
+fn is_digit(c: u8) -> bool { return c >= '0' && c <= '9'; }
+fn in_set(c: u8, set: str) -> bool {
+    for i in 0..set.len { if set[i] == c { return true; } }
+    return false;
+}
+
+// the number in t[a..b] (all digits), saturating well above any limit
+fn digits_val(t: str, a: i64, b: i64) -> i64 {
+    let mut v = 0 as i64;
+    for i in a..b {
+        v = v * 10 + (t[i] - '0') as i64;
+        if v > 1000000000000 { v = 1000000000000; }
+    }
+    return v;
+}
+
+fn char_len_at(t: str, i: i64) -> i64 {
+    let mut e = i + 1;
+    while e < t.len && (t[e] & 192) == 128 { e += 1; }
+    return e - i;
+}
+
+pub fn parse_spec(t: str, e: *SpecError) -> Spec! {
+    let mut s = new_spec();
+    let n = t.len;
+    let mut i = 0 as i64;
+    let fl = n > 0 ? char_len_at(t, 0) : 0;
+    if n > fl && fl > 0 && in_set(t[fl], "<>^") {
+        if t[0] >= 128 || t[0] == '{' || t[0] == '}' {
+            let ch = t[0..fl];
+            try spec_err(e, format("invalid fill character `{ch}`"), "the fill must be a single ASCII character other than `{` and `}`", true);
+        }
+        s.fill = String.from(t[0..1]);
+        s.align = String.from(t[1..2]);
+        i = 2;
+    } else if n >= 1 && in_set(t[0], "<>^") {
+        s.align = String.from(t[0..1]);
+        i = 1;
+    }
+    if i < n && in_set(t[i], "+- ") {
+        s.sign = t[i] == '-' ? String.empty() : String.from(t[i..i + 1]);
+        i += 1;
+    }
+    if i < n && t[i] == '#' { s.alt = true; i += 1; }
+    if i < n && t[i] == '0' { s.zero = true; i += 1; }
+    let mut j = i;
+    while j < n && is_digit(t[j]) { j += 1; }
+    if j > i {
+        s.width = digits_val(t, i, j);
+        if s.width > MAX_WIDTH {
+            // the message prints the exact number, so keep the text
+            let w = t[i..j];
+            try spec_err(e, format("the width {w} is too large"), format("the largest width is {MAX_WIDTH}"), true);
+        }
+    }
+    i = j;
+    if i < n && in_set(t[i], ",_") { s.group = String.from(t[i..i + 1]); i += 1; }
+    if i < n && t[i] == '.' {
+        j = i + 1;
+        while j < n && is_digit(t[j]) { j += 1; }
+        if j == i + 1 {
+            try spec_err(e, "expected digits after `.` in the format spec", "write the number of digits, e.g. `.2`", true);
+        }
+        s.prec = digits_val(t, i + 1, j);
+        if s.prec > MAX_PREC {
+            let w = t[i + 1..j];
+            try spec_err(e, format("the precision {w} is too large"), format("the largest precision is {MAX_PREC}"), true);
+        }
+        i = j;
+    }
+    if i < n && in_set(t[i], "dxXbocfFeEgGs?") { s.ty = String.from(t[i..i + 1]); i += 1; }
+    if i < n {
+        let rest = t[i..n];
+        try spec_err(e, format("unexpected `{rest}` in the format spec `{t}`"),
+                     "the order is [[fill]align][sign][#][0][width][,|_][.precision][type], e.g. `*^12`, `+08.3f`, `#x`, `,d`", true);
+    }
+    return s;
+}
+
+fn ok_check() -> Checked { return Checked { ok: true, msg: String.empty(), help: String.empty(), has_help: false }; }
+fn bad(msg: str, help: str) -> Checked { return Checked { ok: false, msg: String.from(msg), help: String.from(help), has_help: true }; }
+fn bad_nohelp(msg: str) -> Checked { return Checked { ok: false, msg: String.from(msg), help: String.empty(), has_help: false }; }
+
+// checks a parsed spec against the kind of value it formats: int, float, bool, text, enum, ptr, other
+pub fn check_for(spec: *Spec, kind: str) -> Checked {
+    let ty: str = spec.ty;
+    let mut allowed = "?";
+    if kind == "int" { allowed = "dxXbocfFeEgGs?"; }
+    else if kind == "float" { allowed = "fFeEgGs?"; }
+    else if kind == "bool" || kind == "text" || kind == "ptr" { allowed = "s?"; }
+    else if kind == "enum" { allowed = "ds?"; }
+    if ty.len > 0 && !in_set(ty[0], allowed) {
+        let mut what = "this type";
+        let mut good = "? (the automatic representation)";
+        if kind == "int" { what = "an integer"; good = "d x X b o c (or f e g to show it as a float)"; }
+        else if kind == "float" { what = "a float"; good = "f F e E g G"; }
+        else if kind == "bool" { what = "a `bool`"; good = "s"; }
+        else if kind == "text" { what = "text"; good = "s or ?"; }
+        else if kind == "enum" { what = "an enum"; good = "s d ?"; }
+        else if kind == "ptr" { what = "a pointer"; good = "s"; }
+        return bad(format("the format type `{ty}` cannot format {what}"), format("valid types here: {good}"));
+    }
+    let numeric = kind == "int" || kind == "float";
+    if !numeric && kind != "enum" {
+        if spec.sign.len > 0 { return bad("a sign flag only applies to numbers", "remove `+` / space from the spec"); }
+        if spec.zero { return bad("the `0` flag only applies to numbers", "use a fill character instead, e.g. `*>8`"); }
+    }
+    let ty_xbo = ty == "x" || ty == "X" || ty == "b" || ty == "o";
+    if spec.alt && !(kind == "int" && ty_xbo) {
+        return bad("the `#` flag only applies to the types x, X, b and o", "write e.g. `{n:#x}` for `0xff`");
+    }
+    if spec.group.len > 0 {
+        let dec = kind == "float" || (kind == "int" && (ty == "" || ty == "d"));
+        if spec.group == "," && !dec { return bad("`,` grouping only applies to decimal numbers", "use `_` to group hex, binary and octal digits"); }
+        if spec.group == "_" && !(dec || (kind == "int" && ty_xbo)) { return bad_nohelp("`_` grouping only applies to numbers"); }
+    }
+    if spec.prec >= 0 {
+        let tf = ty == "f" || ty == "F" || ty == "e" || ty == "E" || ty == "g" || ty == "G";
+        if kind == "int" && !tf { return bad("a precision does not apply to integers", "to show an integer as a float write e.g. `{n:.2f}`"); }
+        if kind == "float" && spec.prec > 100 { return bad(format("the precision {spec.prec} is too large for a float"), "the largest is 100"); }
+        if kind == "int" && spec.prec > 100 { return bad(format("the precision {spec.prec} is too large for a float"), "the largest is 100"); }
+        if (kind == "bool" || kind == "enum" || kind == "ptr" || kind == "other") && ty != "?" {
+            return bad_nohelp("a precision only applies to floats and text");
+        }
+    }
+    if ty == "c" && (spec.sign.len > 0 || spec.zero || spec.group.len > 0) {
+        return bad_nohelp("the `c` type shows a single character, so sign, `0` and grouping do not apply");
+    }
+    return ok_check();
+}
+
+// From just after a `{`: the index of the matching `}` (-1 if none) and of the top-level `:` that starts the spec
+// (-1 if none). Brackets, string and character literals and `::` are skipped.
+fn scan_placeholder(b: str, start: i64, colon_out: *i64) -> i64 {
+    let mut depth = 0 as i64;
+    let n = b.len;
+    let mut colon = -1 as i64;
+    let mut i = start;
+    while i < n {
+        let c = b[i];
+        if c == '"' || c == '\'' {
+            let q = c;
+            i += 1;
+            while i < n && b[i] != q { i += b[i] == '\\' ? 2 : 1; }
+        } else if c == '(' || c == '[' || c == '{' {
+            depth += 1;
+        } else if c == ')' || c == ']' {
+            depth -= 1;
+        } else if c == '}' {
+            if depth <= 0 { *colon_out = colon; return i; }
+            depth -= 1;
+        } else if c == ':' && depth == 0 && colon == -1 {
+            if i + 1 < n && b[i + 1] == ':' { i += 1; } else { colon = i; }
+        }
+        i += 1;
+    }
+    *colon_out = -1;
+    return -1;
+}
+
+fn is_space_byte(c: u8) -> bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == 12 || c == 11; }
+
+fn strip(s: str) -> str {
+    let mut a = 0 as i64;
+    let mut e = s.len;
+    while a < e && is_space_byte(s[a]) { a += 1; }
+    while e > a && is_space_byte(s[e - 1]) { e -= 1; }
+    return s[a..e];
+}
+
+fn is_ident_part(p: str) -> bool {
+    if p.len == 0 { return false; }
+    if is_digit(p[0]) { return false; }
+    for i in 0..p.len {
+        let c = p[i];
+        let ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || is_digit(c) || c >= 128;
+        if !ok { return false; }
+    }
+    return true;
+}
+
+// Splits a Rust-style format string into pieces (`{{` / `}}` are literal braces).
+pub fn parse_template(b: str, out: *List<Piece>, e: *SpecError) -> void! {
+    let mut buf = String.empty();
+    let mut i = 0 as i64;
+    let n = b.len;
+    while i < n {
+        let c = b[i];
+        if c == '{' {
+            if i + 1 < n && b[i + 1] == '{' { buf.push('{'); i += 2; continue; }
+            let mut colon = -1 as i64;
+            let j = scan_placeholder(b, i + 1, &colon);
+            if j == -1 {
+                try spec_err(e, "unclosed `{` in the format string", "close it with `}`, or write `{{` for a literal brace", true);
+            }
+            let mut refs: str = b[i + 1..j];
+            let mut spec: str = "";
+            if colon != -1 {
+                refs = b[i + 1..colon];
+                spec = b[colon + 1..j];
+            }
+            refs = strip(refs);
+            if buf.len > 0 {
+                out.push(Piece { is_arg: false, lit: buf, ref_kind: 0, ref_int: 0, ref_text: String.empty(), spec: String.empty() });
+                buf = String.empty();
+            }
+            let mut p = Piece { is_arg: true, lit: String.empty(), ref_kind: 0, ref_int: 0, ref_text: String.empty(), spec: String.from(spec) };
+            if refs.len == 0 {
+                p.ref_kind = 0;
+            } else {
+                let mut all_digits = true;
+                for k in 0..refs.len { if !is_digit(refs[k]) { all_digits = false; } }
+                if all_digits {
+                    p.ref_kind = 1;
+                    p.ref_int = digits_val(refs, 0, refs.len);
+                } else {
+                    let mut ident = true;
+                    let mut a = 0 as i64;
+                    for k in 0..refs.len + 1 {
+                        if k == refs.len || refs[k] == '.' {
+                            if !is_ident_part(refs[a..k]) { ident = false; }
+                            a = k + 1;
+                        }
+                    }
+                    p.ref_kind = ident ? 2 : 3;
+                    p.ref_text = String.from(refs);
+                }
+            }
+            out.push(p);
+            i = j + 1;
+            continue;
+        }
+        if c == '}' {
+            if i + 1 < n && b[i + 1] == '}' { buf.push('}'); i += 2; continue; }
+            try spec_err(e, "single `}` in the format string", "write `}}` for a literal brace", true);
+        }
+        buf.push(c);
+        i += 1;
+    }
+    if buf.len > 0 {
+        out.push(Piece { is_arg: false, lit: buf, ref_kind: 0, ref_int: 0, ref_text: String.empty(), spec: String.empty() });
+    }
+}

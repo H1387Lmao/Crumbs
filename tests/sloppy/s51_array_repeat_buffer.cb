@@ -1,0 +1,6 @@
+// Sloppy on purpose: repeats one fresh buffer into an array, so every slot shares it, and never frees it.
+fn main() {
+    let rows = [alloc(i64, 3); 4];
+    rows[0][1] = 7;
+    println("{rows[3][1]} {rows[2].len}");
+}

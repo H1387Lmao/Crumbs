@@ -1,0 +1,8 @@
+// Sloppy on purpose: copies a String over and over for no reason.
+fn main() {
+    let a = String.from("hello");
+    let b = String.from(a);
+    let c = String.from(b);
+    let d = format("{c}");
+    println("{d} {d.len}");
+}

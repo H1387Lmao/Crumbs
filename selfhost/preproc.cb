@@ -1,0 +1,1075 @@
+// The Crumbs preprocessor, written in Crumbs. A port of src/crumbsc/preprocessor.py: same tokens, same macro
+// expansion, same diagnostics. Line numbers never change.
+import diag;
+
+error PPErr;
+
+#if CB_ARCH_AARCH64
+const ARCH_NAME: str = "aarch64";
+#else
+const ARCH_NAME: str = "x86_64";
+#endif
+
+pub enum K { Id, Num, Str, Ws, Op, Com }
+
+pub struct Tok { kind: K, text: String, col: i64 }
+
+struct Macro {
+    name: String,
+    params: List<String>,
+    is_fn: bool,          // function-like (params may still be empty)
+    variadic: bool,
+    body: List<Tok>,
+    has_span: bool,
+    line: i64,
+    col: i64,
+}
+
+struct PPError { msg: String, col: i64, len: i64, label: String, help: String }
+
+struct Group { active: bool, taken: bool, seen_else: bool, parent: bool, line: i64, col: i64 }
+
+pub struct Changed { line: i64, text: String }
+
+struct Define { name: String, value: String, undef: bool }
+
+pub struct PP {
+    macros: List<Macro>,
+    counter: i64,
+    errors: i64,
+    changed: List<Changed>,
+    d: diag.Diags,
+    path: String,
+    pend: PPError,
+    defines: List<Define>,
+}
+
+// ---- tokens ----------------------------------------------------------------------------------------
+
+fn clone_tok(t: *Tok) -> Tok { return Tok { kind: t.kind, text: String.from(t.text), col: t.col }; }
+
+fn clone_toks(ts: *List<Tok>) -> List<Tok> {
+    let mut o: List<Tok> = List.new();
+    for i in 0..ts.len { o.push(clone_tok(ts.at(i))); }
+    return o;
+}
+
+fn slice_toks(ts: *List<Tok>, a: i64, b: i64) -> List<Tok> {
+    let mut o: List<Tok> = List.new();
+    for i in a..b { o.push(clone_tok(ts.at(i))); }
+    return o;
+}
+
+fn mk(kind: K, text: str, col: i64) -> Tok { return Tok { kind: kind, text: String.from(text), col: col }; }
+
+fn chars_in(s: str, a: i64, b: i64) -> i64 {
+    let mut n = 0 as i64;
+    for i in a..b { if (s[i] & 192) != 128 { n += 1; } }
+    return n;
+}
+
+fn clen(s: str) -> i64 { return chars_in(s, 0, s.len); }
+
+fn is_ident_start(c: u8) -> bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'; }
+fn is_digit(c: u8) -> bool { return c >= '0' && c <= '9'; }
+fn is_ident_char(c: u8) -> bool { return is_ident_start(c) || is_digit(c); }
+fn is_ws_byte(c: u8) -> bool { return c == ' ' || c == '\t' || c == '\r' || c == 12 || c == 11; }
+fn starts_at(s: str, i: i64, p: str) -> bool { return i + p.len <= s.len && s[i..i + p.len] == p; }
+
+// splits one line into tokens; returns the block-comment depth at the end of the line
+fn tokenize(s: str, depth_in: i64, base: i64, out: *List<Tok>) -> i64 {
+    let n = s.len;
+    let mut depth = depth_in;
+    let mut i = 0 as i64;
+    let mut cc = 0 as i64;               // characters before byte i
+    while i < n {
+        let c = s[i];
+        let start = i;
+        let mut kind = K.Op;
+        if depth > 0 {
+            while i < n {
+                if starts_at(s, i, "/*") { depth += 1; i += 2; }
+                else if starts_at(s, i, "*/") { depth -= 1; i += 2; if depth == 0 { break; } }
+                else { i += 1; }
+            }
+            kind = K.Com;
+        } else if is_ws_byte(c) {
+            while i < n && is_ws_byte(s[i]) { i += 1; }
+            kind = K.Ws;
+        } else if starts_at(s, i, "//") {
+            i = n;
+            kind = K.Com;
+        } else if starts_at(s, i, "/*") {
+            depth = 1;
+            i += 2;
+            while i < n && depth > 0 {
+                if starts_at(s, i, "/*") { depth += 1; i += 2; }
+                else if starts_at(s, i, "*/") { depth -= 1; i += 2; }
+                else { i += 1; }
+            }
+            kind = K.Com;
+        } else if c == '"' || c == '\'' {
+            i += 1;
+            while i < n && s[i] != c { i += s[i] == '\\' ? 2 : 1; }
+            i = i + 1 < n ? i + 1 : n;
+            kind = K.Str;
+        } else if is_ident_start(c) {
+            while i < n && is_ident_char(s[i]) { i += 1; }
+            kind = K.Id;
+        } else if is_digit(c) || (c == '.' && i + 1 < n && is_digit(s[i + 1])) {
+            if s[i] == '.' { i += 1; }
+            i += 1;
+            while i < n && (is_ident_char(s[i]) || s[i] == '.') { i += 1; }
+            kind = K.Num;
+        } else if starts_at(s, i, "##") {
+            i += 2;
+        } else if starts_at(s, i, "...") {
+            i += 3;
+        } else {
+            i += 1;
+            while i < n && (s[i] & 192) == 128 { i += 1; }     // one whole character
+        }
+        out.push(mk(kind, s[start..i], cc + base));
+        cc += chars_in(s, start, i);
+    }
+    return depth;
+}
+
+fn untokenize(ts: *List<Tok>) -> String {
+    let mut o = String.empty();
+    for i in 0..ts.len { o.append(ts.at(i).text); }
+    return o;
+}
+
+fn is_wsc(t: *Tok) -> bool { return t.kind == K.Ws || t.kind == K.Com; }
+
+fn strip_ws(ts: *List<Tok>) -> List<Tok> {
+    let mut a = 0 as i64;
+    let mut b = ts.len;
+    while a < b && is_wsc(ts.at(a)) { a += 1; }
+    while b > a && is_wsc(ts.at(b - 1)) { b -= 1; }
+    return slice_toks(ts, a, b);
+}
+
+fn is_op_tok(t: *Tok, s: str) -> bool { return t.kind == K.Op && t.text == s; }
+
+fn ends_with_backslash(line: str) -> bool {
+    let mut e = line.len;
+    while e > 0 && line[e - 1] == '\r' { e -= 1; }
+    return e > 0 && line[e - 1] == '\\';
+}
+
+fn rstrip_cr(line: str) -> str {
+    let mut e = line.len;
+    while e > 0 && line[e - 1] == '\r' { e -= 1; }
+    return line[0..e];
+}
+
+fn split_lines(text: str) -> List<String> {
+    let mut o: List<String> = List.new();
+    let mut a = 0 as i64;
+    for i in 0..text.len + 1 {
+        if i == text.len || text[i] == '\n' {
+            o.push(String.from(text[a..i]));
+            a = i + 1;
+        }
+    }
+    return o;
+}
+
+// ---- construction -----------------------------------------------------------------------------------
+
+pub fn new_pp() -> PP {
+    return PP { macros: List.new(), counter: 0, errors: 0, changed: List.new(), d: diag.new_diags(),
+                path: String.empty(), pend: empty_err(), defines: List.new() };
+}
+
+fn empty_err() -> PPError { return PPError { msg: String.empty(), col: 1, len: 1, label: String.empty(), help: String.empty() }; }
+
+// `defs`: -D / -U style definitions applied after the platform ones
+pub fn init_pp(pp: *PP) {
+    pp.set_object("__CRUMBS__", "1");
+    pp.set_object("CB_OS_LINUX", "1");
+    pp.set_object(ARCH_NAME == "aarch64" ? "CB_ARCH_AARCH64" : "CB_ARCH_X86_64", "1");
+}
+
+fn find_macro(pp: *PP, name: str) -> i64 {
+    for i in 0..pp.macros.len { if pp.macros.at(i).name == name { return i; } }
+    return -1;
+}
+
+impl PP {
+    pub fn set_object(mut self, name: str, value: str) {
+        let mut toks: List<Tok> = List.new();
+        tokenize(value, 0, 1, &toks);
+        let mut m = Macro { name: String.from(name), params: List.new(), is_fn: false, variadic: false, body: strip_ws(&toks),
+                        has_span: false, line: 0, col: 0 };
+        self.put_macro(m);
+    }
+    fn put_macro(mut self, m: Macro) {
+        let i = find_macro(self, m.name);
+        if i >= 0 { self.macros.set(i, m); } else { self.macros.push(m); }
+    }
+    pub fn undefine(mut self, name: str) {
+        let i = find_macro(self, name);
+        if i >= 0 { self.macros.remove(i); }
+    }
+    fn defined(self, name: str) -> bool {
+        return find_macro(self, name) >= 0 || name == "__FILE__" || name == "__LINE__" || name == "__COUNTER__";
+    }
+}
+
+// ---- reporting ---------------------------------------------------------------------------------------
+
+fn pp_fail(pp: *PP, msg: str, col: i64, len: i64, label: str, help: str) -> void! {
+    pp.pend = PPError { msg: String.from(msg), col: col, len: len, label: String.from(label), help: String.from(help) };
+    throw PPErr;
+}
+
+fn report(pp: *PP, line: i64) {
+    pp.errors += 1;
+    pp.d.add_error(line, pp.pend.col, pp.pend.len, pp.pend.msg, pp.pend.label, pp.pend.help);
+}
+
+fn warn(pp: *PP, line: i64, col: i64, len: i64, msg: str, label: str) {
+    pp.d.add_warn(line, col, len, msg, label, "");
+}
+
+// ---- the driver ----------------------------------------------------------------------------------------
+
+pub fn process(pp: *PP, text: str, path: str) -> String {
+    pp.path = String.from(path);
+    let lines = split_lines(text);
+    let mut out: List<String> = List.new();
+    let mut depth = 0 as i64;
+    let mut stack: List<Group> = List.new();
+    let mut i = 0 as i64;
+    while i < lines.len {
+        let lineno = i + 1;
+        let raw: str = *lines.at(i);
+        let mut active = true;
+        for g in stack { if !g.active { active = false; } }
+        let mut toks: List<Tok> = List.new();
+        let ndepth = tokenize(raw, depth, 1, &toks);
+        let mut first = -1 as i64;
+        for k in 0..toks.len { if toks.at(k).kind != K.Ws { first = k; break; } }
+        if depth == 0 && first >= 0 && is_op_tok(toks.at(first), "#") {
+            let mut j = i;
+            while j + 1 < lines.len && ends_with_backslash(*lines.at(j)) { j += 1; }
+            let mut joined = String.empty();
+            for k in i..j + 1 {
+                let mut l: str = rstrip_cr(*lines.at(k));
+                if ends_with_backslash(l) && k < j { l = l[0..l.len - 1]; }
+                if k > i { joined.push(' '); }
+                joined.append(l);
+            }
+            directive(pp, joined, lineno, toks.at(first).col, &stack, active);
+            for k in i..j + 1 { out.push(String.empty()); }
+            i = j + 1;
+            depth = 0;
+            continue;
+        }
+        depth = ndepth;
+        if !active {
+            out.push(String.empty());
+        } else {
+            let new = expand_line(pp, &toks, lineno);
+            if new != rstrip_cr(raw) && new != raw { pp.changed.push(Changed { line: lineno, text: String.from(raw) }); }
+            out.push(new);
+        }
+        i += 1;
+    }
+    for k in 0..stack.len {
+        let g = stack.at(k);
+        pp.d.add_error(g.line, g.col, 3, "unterminated conditional directive", "this `#if` is never closed by an `#endif`", "");
+        pp.errors += 1;
+    }
+    let mut res = String.empty();
+    for k in 0..out.len {
+        if k > 0 { res.push('\n'); }
+        res.append(*out.at(k));
+    }
+    return res;
+}
+
+fn all_active(stack: *List<Group>, upto: i64) -> bool {
+    for k in 0..upto { if !stack.at(k).active { return false; } }
+    return true;
+}
+
+fn first_id_text(a: *List<Tok>) -> str { return a.at(0).text; }
+
+fn directive(pp: *PP, text: str, lineno: i64, col: i64, stack: *List<Group>, active: bool) {
+    try {
+        try directive_inner(pp, text, lineno, col, stack, active);
+    } catch {
+        report(pp, lineno);
+    }
+}
+
+fn directive_inner(pp: *PP, text: str, lineno: i64, col: i64, stack: *List<Group>, active: bool) -> void! {
+    let mut all: List<Tok> = List.new();
+    tokenize(text, 0, 1, &all);
+    let mut nc: List<Tok> = List.new();
+    for i in 0..all.len { if all.at(i).kind != K.Com { nc.push(clone_tok(all.at(i))); } }
+    let mut toks = strip_ws(&nc);
+    let mut after = slice_toks(&toks, 1, toks.len);
+    let mut rest = strip_ws(&after);
+    if rest.len == 0 { return; }
+    let mut name_tok = clone_tok(rest.at(0));
+    let name: str = name_tok.text;
+    let mut a0 = 1 as i64;
+    while a0 < rest.len && rest.at(a0).kind == K.Ws { a0 += 1; }
+    let mut args = slice_toks(&rest, a0, rest.len);
+    if name == "if" || name == "ifdef" || name == "ifndef" {
+        if !active {
+            stack.push(Group { active: false, taken: true, seen_else: false, parent: false, line: lineno, col: col });
+            return;
+        }
+        let mut val = false;
+        if name == "if" {
+            let r = eval_if(pp, &args, &name_tok);
+            if r.ok { val = r.v; } else { report(pp, lineno); val = false; }
+        } else {
+            let mut a = strip_ws(&args);
+            if a.len == 0 || a.at(0).kind != K.Id {
+                try pp_fail(pp, format("`#{name}` needs a macro name"), name_tok.col, clen(name) + 1, "", "");
+            }
+            if a.len > 1 { warn(pp, lineno, a.at(1).col, 1, format("extra tokens after `#{name} {first_id_text(&a)}`"), ""); }
+            val = pp.defined(first_id_text(&a));
+            if name == "ifndef" { val = !val; }
+        }
+        stack.push(Group { active: val, taken: val, seen_else: false, parent: true, line: lineno, col: col });
+    } else if name == "elif" {
+        if stack.len == 0 { try pp_fail(pp, "`#elif` without a matching `#if`", name_tok.col, 4, "", ""); }
+        let gi = stack.len - 1;
+        if stack.at(gi).seen_else { try pp_fail(pp, "`#elif` after `#else`", name_tok.col, 4, "", ""); }
+        let parent = all_active(stack, gi);
+        if !parent || stack.at(gi).taken {
+            stack.at(gi).active = false;
+        } else {
+            let r = eval_if(pp, &args, &name_tok);
+            let mut v = false;
+            if r.ok { v = r.v; } else { report(pp, lineno); }
+            stack.at(gi).active = v;
+            stack.at(gi).taken = v;
+        }
+    } else if name == "else" {
+        if stack.len == 0 { try pp_fail(pp, "`#else` without a matching `#if`", name_tok.col, 4, "", ""); }
+        let gi = stack.len - 1;
+        if stack.at(gi).seen_else {
+            try pp_fail(pp, "a second `#else` for the same `#if`", name_tok.col, 4,
+                        format("the group at line {stack.at(gi).line} already has an `#else`"), "");
+        }
+        stack.at(gi).seen_else = true;
+        let parent = all_active(stack, gi);
+        stack.at(gi).active = parent && !stack.at(gi).taken;
+        stack.at(gi).taken = true;
+    } else if name == "endif" {
+        if stack.len == 0 { try pp_fail(pp, "`#endif` without a matching `#if`", name_tok.col, 5, "", ""); }
+        stack.pop() catch { panic("unreachable"); };
+    } else if !active {
+        return;
+    } else if name == "define" {
+        try do_define(pp, &args, lineno, &name_tok);
+    } else if name == "undef" {
+        let mut a = strip_ws(&args);
+        if a.len == 0 || a.at(0).kind != K.Id { try pp_fail(pp, "`#undef` needs a macro name", name_tok.col, 6, "", ""); }
+        pp.undefine(first_id_text(&a));
+    } else if name == "error" {
+        let u = untokenize(&args);
+        try pp_fail(pp, format("#error {u.trim()}"), name_tok.col, 6, "", "");
+    } else if name == "warning" {
+        let u = untokenize(&args);
+        warn(pp, lineno, name_tok.col, 8, format("#warning {u.trim()}"), "");
+    } else if name == "pragma" {
+        let mut p = strip_ws(&args);
+        if p.len == 0 || p.at(0).text != "once" {
+            let u = untokenize(&p);
+            warn(pp, lineno, name_tok.col, 7, format("unknown `#pragma {u.trim()}` ignored"), "");
+        }
+    } else if name == "include" {
+        try pp_fail(pp, "`#include` is not supported", name_tok.col, 8, "",
+                    "use `import a.b;` for Crumbs modules, or the `include \"header.h\";` directive for a C header");
+    } else {
+        let cands = ["define", "undef", "if", "ifdef", "ifndef", "elif", "else", "endif", "error", "warning", "pragma", "include"];
+        let hint = diag.suggest(name, cands[0..12]);
+        try pp_fail(pp, format("unknown preprocessor directive `#{name}`"), name_tok.col, clen(name) + 1, "",
+                    hint.len > 0 ? format("did you mean `#{hint}`?") : String.empty());
+    }
+}
+
+// ---- #define -------------------------------------------------------------------------------------------
+
+fn texts_equal(a: *List<Tok>, b: *List<Tok>) -> bool {
+    let mut x: List<String> = List.new();
+    let mut y: List<String> = List.new();
+    for i in 0..a.len { if a.at(i).kind != K.Ws { x.push(String.from(a.at(i).text)); } }
+    for i in 0..b.len { if b.at(i).kind != K.Ws { y.push(String.from(b.at(i).text)); } }
+    if x.len != y.len { return false; }
+    for i in 0..x.len { if *x.at(i) != *y.at(i) { return false; } }
+    return true;
+}
+
+fn same_macro(a: *Macro, b: *Macro) -> bool {
+    if a.is_fn != b.is_fn || a.variadic != b.variadic { return false; }
+    if a.params.len != b.params.len { return false; }
+    for i in 0..a.params.len { if *a.params.at(i) != *b.params.at(i) { return false; } }
+    return texts_equal(&a.body, &b.body);
+}
+
+fn contains_str(l: *List<String>, s: str) -> bool {
+    for i in 0..l.len { if *l.at(i) == s { return true; } }
+    return false;
+}
+
+fn do_define(pp: *PP, args: *List<Tok>, lineno: i64, name_tok: *Tok) -> void! {
+    if args.len == 0 || args.at(0).kind != K.Id {
+        try pp_fail(pp, "`#define` needs a macro name", name_tok.col, 7, "", "");
+    }
+    let mut nm = clone_tok(args.at(0));
+    let name: str = nm.text;
+    if name == "defined" || name == "__FILE__" || name == "__LINE__" || name == "__COUNTER__" || name == "__VA_ARGS__" || name == "__VA_OPT__" {
+        try pp_fail(pp, format("`{name}` cannot be redefined"), nm.col, clen(name), "", "");
+    }
+    let mut rest = slice_toks(args, 1, args.len);
+    let mut params: List<String> = List.new();
+    let mut variadic = false;
+    let mut is_fn = false;
+    let mut body: List<Tok> = List.new();
+    if rest.len > 0 && is_op_tok(rest.at(0), "(") {
+        is_fn = true;
+        let mut k = 1 as i64;
+        let mut expect_param = true;
+        let mut closed = false;
+        while k < rest.len {
+            let mut t = rest.at(k);
+            k += 1;
+            if t.kind == K.Ws { continue; }
+            if t.text == ")" { closed = true; break; }
+            if t.text == "," { expect_param = true; continue; }
+            if t.text == "..." {
+                variadic = true;
+                params.push(String.from("__VA_ARGS__"));
+                expect_param = false;
+            } else if t.kind == K.Id && expect_param {
+                if contains_str(&params, t.text) {
+                    try pp_fail(pp, format("duplicate macro parameter `{t.text}`"), t.col, clen(t.text), "", "");
+                }
+                params.push(String.from(t.text));
+                expect_param = false;
+                if k < rest.len && rest.at(k).text == "..." {
+                    variadic = true;
+                    k += 1;
+                }
+            } else {
+                try pp_fail(pp, "bad macro parameter list", t.col, clen(t.text), "",
+                            "write `#define NAME(a, b) body` or `#define NAME(a, ...)`");
+            }
+        }
+        if !closed { try pp_fail(pp, "macro parameter list is not closed", nm.col, clen(name), "missing `)`", ""); }
+        let mut tail = slice_toks(&rest, k, rest.len);
+        body = strip_ws(&tail);
+    } else {
+        body = strip_ws(&rest);
+    }
+    let mut m = Macro { name: String.from(name), params: params, is_fn: is_fn, variadic: variadic, body: body,
+                    has_span: true, line: lineno, col: nm.col };
+    let oi = find_macro(pp, name);
+    if oi >= 0 {
+        let old = pp.macros.at(oi);
+        if old.has_span && !same_macro(old, &m) {
+            warn(pp, lineno, nm.col, clen(name), format("`{name}` is redefined"),
+                 format("first defined on line {old.line}; use `#undef {name}` first to silence this"));
+        }
+    }
+    let check = is_fn;
+    pp.put_macro(m);
+    if check { try check_body(pp, name, &nm); }
+}
+
+// `#` must be followed by a parameter; `##` cannot start or end a body
+fn check_body(pp: *PP, name: str, nm: *Tok) -> void! {
+    let mut m = pp.macros.at(find_macro(pp, name));
+    let mut b: List<Tok> = List.new();
+    for i in 0..m.body.len { if m.body.at(i).kind != K.Ws { b.push(clone_tok(m.body.at(i))); } }
+    let mut params: List<String> = List.new();
+    for i in 0..m.params.len { params.push(String.from(*m.params.at(i))); }
+    if b.len > 0 && (b.at(0).text == "##" || b.at(b.len - 1).text == "##") {
+        try pp_fail(pp, "`##` cannot be at the start or end of a macro body", nm.col, clen(name), "", "");
+    }
+    for k in 0..b.len {
+        let mut t = b.at(k);
+        if t.text == "#" && t.kind == K.Op {
+            if k + 1 >= b.len || !contains_str(&params, b.at(k + 1).text) {
+                try pp_fail(pp, "`#` in a macro body must be followed by a parameter name", t.col, 1, "",
+                            "`#x` turns the argument x into a string literal");
+            }
+        }
+    }
+}
+
+// ---- #if expressions -------------------------------------------------------------------------------------
+
+struct EvalR { ok: bool, v: bool }
+
+fn eval_if(pp: *PP, args: *List<Tok>, name_tok: *Tok) -> EvalR {
+    let mut v = false;
+    let mut ok = true;
+    try {
+        v = try eval_if_inner(pp, args, name_tok);
+    } catch {
+        ok = false;
+    }
+    return EvalR { ok: ok, v: v };
+}
+
+fn skip_ws_at(ts: *List<Tok>, j: i64) -> i64 {
+    let mut k = j;
+    while k < ts.len && ts.at(k).kind == K.Ws { k += 1; }
+    return k;
+}
+
+fn eval_if_inner(pp: *PP, args: *List<Tok>, name_tok: *Tok) -> bool! {
+    let mut nc: List<Tok> = List.new();
+    for i in 0..args.len { if args.at(i).kind != K.Com { nc.push(clone_tok(args.at(i))); } }
+    let mut toks = strip_ws(&nc);
+    if toks.len == 0 { try pp_fail(pp, "`#if` with no expression", name_tok.col, 3, "", ""); }
+    let mut pre: List<Tok> = List.new();
+    let mut k = 0 as i64;
+    while k < toks.len {
+        let t = clone_tok(toks.at(k));
+        if t.kind == K.Id && t.text == "defined" {
+            let mut j = skip_ws_at(&toks, k + 1);
+            let paren = j < toks.len && toks.at(j).text == "(";
+            if paren { j = skip_ws_at(&toks, j + 1); }
+            if j >= toks.len || toks.at(j).kind != K.Id { try pp_fail(pp, "`defined` needs a macro name", t.col, 7, "", ""); }
+            let mut nm = String.from(toks.at(j).text);
+            j += 1;
+            if paren {
+                j = skip_ws_at(&toks, j);
+                if j >= toks.len || toks.at(j).text != ")" { try pp_fail(pp, "missing `)` after `defined(`", t.col, 7, "", ""); }
+                j += 1;
+            }
+            pre.push(mk(K.Num, pp.defined(nm) ? "1" : "0", t.col));
+            k = j;
+        } else {
+            pre.push(t);
+            k += 1;
+        }
+    }
+    let mut disabled: List<String> = List.new();
+    let mut budget = 2000 as i64;
+    let expanded = try expand(pp, &pre, 0, &disabled, name_tok.col, &budget);
+    let mut items: List<Tok> = List.new();
+    for i in 0..expanded.len { if !is_wsc(expanded.at(i)) { items.push(clone_tok(expanded.at(i))); } }
+    let mut ep = EP { items: List.new(), pos: 0, col: name_tok.col, pp: pp };
+    // merge two-character operators out of single-character op tokens
+    let mut i = 0 as i64;
+    while i < items.len {
+        let mut t = items.at(i);
+        if t.kind == K.Op {
+            let mut two = String.from(t.text);
+            if i + 1 < items.len && items.at(i + 1).kind == K.Op && items.at(i + 1).col == t.col + 1 { two.append(items.at(i + 1).text); }
+            let tw: str = two;
+            if tw == "||" || tw == "&&" || tw == "==" || tw == "!=" || tw == "<=" || tw == ">=" || tw == "<<" || tw == ">>" {
+                ep.items.push(mk(K.Op, tw, t.col));
+                i += 2;
+                continue;
+            }
+            ep.items.push(clone_tok(t));
+        } else if t.kind == K.Num || t.kind == K.Id || t.kind == K.Str {
+            ep.items.push(clone_tok(t));
+        }
+        i += 1;
+    }
+    let mut v = try ep_parse(&ep);
+    return v != 0;
+}
+
+struct EP { items: List<Tok>, pos: i64, col: i64, pp: *PP }
+
+fn ep_has(ep: *EP) -> bool { return ep.pos < ep.items.len; }
+fn ep_text(ep: *EP) -> str {
+    if ep_has(ep) { return ep.items.at(ep.pos).text; }
+    return "";
+}
+fn ep_col(ep: *EP) -> i64 { return ep_has(ep) ? ep.items.at(ep.pos).col : ep.col; }
+fn ep_is_op(ep: *EP, s: str) -> bool { return ep_has(ep) && ep.items.at(ep.pos).kind == K.Op && ep.items.at(ep.pos).text == s; }
+
+fn ep_parse(ep: *EP) -> i64! {
+    let mut v = try ep_ternary(ep);
+    if ep_has(ep) {
+        let s = String.from(ep_text(ep));
+        try pp_fail(ep.pp, format("unexpected `{s}` in `#if` expression"), ep_col(ep), clen(s), "", "");
+    }
+    return v;
+}
+
+fn ep_ternary(ep: *EP) -> i64! {
+    let c = try ep_binary(ep, 0);
+    if ep_text(ep) == "?" {
+        ep.pos += 1;
+        let mut a = try ep_ternary(ep);
+        if ep_text(ep) != ":" { try pp_fail(ep.pp, "expected `:` in `?:` expression", ep_col(ep), 1, "", ""); }
+        ep.pos += 1;
+        let mut b = try ep_ternary(ep);
+        return c != 0 ? a : b;
+    }
+    return c;
+}
+
+fn level_has(level: i64, op: str) -> bool {
+    if level == 0 { return op == "||"; }
+    if level == 1 { return op == "&&"; }
+    if level == 2 { return op == "|"; }
+    if level == 3 { return op == "^"; }
+    if level == 4 { return op == "&"; }
+    if level == 5 { return op == "==" || op == "!="; }
+    if level == 6 { return op == "<" || op == "<=" || op == ">" || op == ">="; }
+    if level == 7 { return op == "<<" || op == ">>"; }
+    if level == 8 { return op == "+" || op == "-"; }
+    return op == "*" || op == "/" || op == "%";
+}
+
+fn ep_binary(ep: *EP, level: i64) -> i64! {
+    if level == 10 { return try ep_unary(ep); }
+    let mut v = try ep_binary(ep, level + 1);
+    while ep_has(ep) && ep.items.at(ep.pos).kind == K.Op && level_has(level, ep_text(ep)) {
+        let op = String.from(ep_text(ep));
+        let col = ep_col(ep);
+        ep.pos += 1;
+        let r = try ep_binary(ep, level + 1);
+        if op == "||" { v = (v != 0 || r != 0) ? 1 : 0; continue; }
+        if op == "&&" { v = (v != 0 && r != 0) ? 1 : 0; continue; }
+        if (op == "/" || op == "%") && r == 0 {
+            try pp_fail(ep.pp, "division by zero in `#if` expression", col, 1, "", "");
+        }
+        v = apply_op(op, v, r);
+    }
+    return v;
+}
+
+fn apply_op(op: str, a: i64, b: i64) -> i64 {
+    if op == "+" { return a + b; }
+    if op == "-" { return a - b; }
+    if op == "*" { return a * b; }
+    if op == "/" { return a / b; }
+    if op == "%" { return a - b * (a / b); }
+    if op == "<<" { return (b >= 0 && b < 64) ? a << (b as u64) : 0; }
+    if op == ">>" { return (b >= 0 && b < 64) ? a >> (b as u64) : 0; }
+    if op == "<" { return a < b ? 1 : 0; }
+    if op == "<=" { return a <= b ? 1 : 0; }
+    if op == ">" { return a > b ? 1 : 0; }
+    if op == ">=" { return a >= b ? 1 : 0; }
+    if op == "==" { return a == b ? 1 : 0; }
+    if op == "!=" { return a != b ? 1 : 0; }
+    if op == "&" { return a & b; }
+    if op == "^" { return a ^ b; }
+    return a | b;
+}
+
+fn ep_unary(ep: *EP) -> i64! {
+    if ep_has(ep) && ep.items.at(ep.pos).kind == K.Op {
+        let s = ep_text(ep);
+        if s == "!" || s == "~" || s == "-" || s == "+" {
+            ep.pos += 1;
+            let mut v = try ep_unary(ep);
+            if s == "!" { return v == 0 ? 1 : 0; }
+            if s == "~" { return ~v; }
+            if s == "-" { return 0 - v; }
+            return v;
+        }
+    }
+    return try ep_primary(ep);
+}
+
+fn digit_val(c: u8) -> i64 {
+    if c >= '0' && c <= '9' { return (c - '0') as i64; }
+    if c >= 'a' && c <= 'f' { return (c - 'a') as i64 + 10; }
+    if c >= 'A' && c <= 'F' { return (c - 'A') as i64 + 10; }
+    return 99;
+}
+
+// Python's int(text, base): at least one digit, all valid (text has no sign or spaces here)
+fn parse_base(text: str, base: i64, out: *i64) -> bool {
+    if text.len == 0 { return false; }
+    let mut v = 0 as i64;
+    for i in 0..text.len {
+        let d = digit_val(text[i]);
+        if d >= base { return false; }
+        v = v * base + d;
+    }
+    *out = v;
+    return true;
+}
+
+fn ep_primary(ep: *EP) -> i64! {
+    let has = ep_has(ep);
+    let mut t = mk(K.Op, "", ep.col);
+    if has { t = clone_tok(ep.items.at(ep.pos)); }
+    ep.pos += 1;
+    if !has { try pp_fail(ep.pp, "`#if` expression ends unexpectedly", ep.col, 3, "", ""); }
+    if t.kind == K.Num {
+        let mut txt = String.empty();
+        for i in 0..t.text.len { if t.text[i] != '_' { txt.push(t.text[i]); } }
+        let mut e = txt.len;
+        while e > 0 && (txt[e - 1] == 'u' || txt[e - 1] == 'U' || txt[e - 1] == 'l' || txt[e - 1] == 'L') { e -= 1; }
+        let mut body: str = txt[0..e];
+        let mut v = 0 as i64;
+        let mut ok = false;
+        if body.len >= 2 && body[0] == '0' && (body[1] == 'b' || body[1] == 'B') { ok = parse_base(body[2..body.len], 2, &v); }
+        else if body.len >= 2 && body[0] == '0' && (body[1] == 'x' || body[1] == 'X') { ok = parse_base(body[2..body.len], 16, &v); }
+        else if body.len >= 2 && body[0] == '0' && (body[1] == 'o' || body[1] == 'O') { ok = parse_base(body[2..body.len], 8, &v); }
+        else { ok = parse_base(body, 10, &v); }
+        if !ok { try pp_fail(ep.pp, format("`{t.text}` is not an integer"), t.col, clen(t.text), "", "`#if` works on integers only"); }
+        return v;
+    }
+    if t.kind == K.Id { return t.text == "true" ? 1 : 0; }
+    if t.kind == K.Str { try pp_fail(ep.pp, "a string cannot be used in an `#if` expression", t.col, clen(t.text), "", ""); }
+    if t.kind == K.Op && t.text == "(" {
+        let mut v = try ep_ternary(ep);
+        if ep_text(ep) != ")" { try pp_fail(ep.pp, "missing `)` in `#if` expression", t.col, 1, "", ""); }
+        ep.pos += 1;
+        return v;
+    }
+    try pp_fail(ep.pp, format("unexpected `{t.text}` in `#if` expression"), t.col, clen(t.text), "", "");
+    return 0;
+}
+
+// ---- expansion --------------------------------------------------------------------------------------------
+
+fn expand_line(pp: *PP, toks: *List<Tok>, lineno: i64) -> String {
+    let mut any = false;
+    for i in 0..toks.len { if toks.at(i).kind == K.Id { any = true; break; } }
+    if !any { return untokenize(toks); }
+    let mut disabled: List<String> = List.new();
+    let mut budget = 2000 as i64;
+    let mut res = String.empty();
+    let mut ok = true;
+    try {
+        let mut out = try expand(pp, toks, lineno, &disabled, 1, &budget);
+        res = untokenize(&out);
+    } catch {
+        ok = false;
+    }
+    if !ok {
+        report(pp, lineno);
+        return untokenize(toks);
+    }
+    return res;
+}
+
+fn with_name(d: *List<String>, name: str) -> List<String> {
+    let mut o: List<String> = List.new();
+    for i in 0..d.len { o.push(String.from(*d.at(i))); }
+    o.push(String.from(name));
+    return o;
+}
+
+fn extend_toks(out: *List<Tok>, more: *List<Tok>) {
+    for i in 0..more.len { out.push(clone_tok(more.at(i))); }
+}
+
+fn expand(pp: *PP, toks: *List<Tok>, lineno: i64, disabled: *List<String>, callcol: i64, budget: *i64) -> List<Tok>! {
+    let mut out: List<Tok> = List.new();
+    let mut i = 0 as i64;
+    let n = toks.len;
+    while i < n {
+        let mut t = clone_tok(toks.at(i));
+        if t.kind != K.Id {
+            out.push(t);
+            i += 1;
+            continue;
+        }
+        let name = String.from(t.text);
+        if name == "__LINE__" {
+            out.push(mk(K.Num, format("{lineno}"), t.col));
+            i += 1;
+            continue;
+        }
+        if name == "__FILE__" {
+            let mut p = String.empty();
+            for k in 0..pp.path.len {
+                let c = pp.path[k];
+                if c == '\\' { p.push('/'); }
+                else if c == '"' { p.append("\\\""); }
+                else { p.push(c); }
+            }
+            out.push(mk(K.Str, format("\"{p}\""), t.col));
+            i += 1;
+            continue;
+        }
+        if name == "__COUNTER__" {
+            out.push(mk(K.Num, format("{pp.counter}"), t.col));
+            pp.counter += 1;
+            i += 1;
+            continue;
+        }
+        let mi = find_macro(pp, name);
+        if mi < 0 || contains_str(disabled, name) {
+            out.push(t);
+            i += 1;
+            continue;
+        }
+        *budget -= 1;
+        if *budget < 0 {
+            try pp_fail(pp, format("macro expansion of `{name}` is too deep"), t.col, clen(name), "",
+                        "a macro probably expands to itself through another macro");
+        }
+        let is_fn = pp.macros.at(mi).is_fn;
+        if !is_fn {
+            let mut body = paste(&pp.macros.at(mi).body);
+            let mut nd = with_name(disabled, name);
+            let mut ex = try expand(pp, &body, lineno, &nd, t.col, budget);
+            extend_toks(&out, &ex);
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < n && is_wsc(toks.at(j)) { j += 1; }
+        if j >= n || toks.at(j).text != "(" || toks.at(j).kind != K.Op {
+            out.push(t);
+            i += 1;
+            continue;
+        }
+        let mut args: List<List<Tok>> = List.new();
+        let end = try collect_args(pp, toks, j, mi, &t, &args);
+        let mut body = try substitute(pp, mi, &args, lineno, disabled, &t, budget);
+        let mut nd = with_name(disabled, name);
+        let mut ex = try expand(pp, &body, lineno, &nd, t.col, budget);
+        extend_toks(&out, &ex);
+        i = end;
+    }
+    return out;
+}
+
+fn collect_args(pp: *PP, toks: *List<Tok>, j: i64, mi: i64, call: *Tok, res: *List<List<Tok>>) -> i64! {
+    let mut depth = 0 as i64;
+    let mut k = j;
+    let n = toks.len;
+    let mut args: List<List<Tok>> = List.new();
+    let mut cur: List<Tok> = List.new();
+    let mut closed = false;
+    while k < n {
+        let mut t = toks.at(k);
+        let tx: str = t.text;
+        if t.kind == K.Op && (tx == "(" || tx == "[" || tx == "{") {
+            depth += 1;
+            if depth > 1 { cur.push(clone_tok(t)); }
+        } else if t.kind == K.Op && (tx == ")" || tx == "]" || tx == "}") {
+            depth -= 1;
+            if depth == 0 {
+                args.push(cur);
+                cur = List.new();
+                k += 1;
+                closed = true;
+                break;
+            }
+            cur.push(clone_tok(t));
+        } else if t.kind == K.Op && tx == "," && depth == 1 {
+            args.push(cur);
+            cur = List.new();
+        } else {
+            cur.push(clone_tok(t));
+        }
+        k += 1;
+    }
+    let mname = String.from(pp.macros.at(mi).name);
+    if !closed {
+        try pp_fail(pp, format("unterminated argument list for macro `{mname}`"), call.col, clen(mname),
+                    "missing `)` (a macro call must fit on one line)", "");
+    }
+    let mut sargs: List<List<Tok>> = List.new();
+    for a in 0..args.len { sargs.push(strip_ws(args.at(a))); }
+    let want = pp.macros.at(mi).params.len;
+    if want == 0 && sargs.len == 1 && sargs.at(0).len == 0 { sargs = List.new(); }
+    if pp.macros.at(mi).variadic {
+        let fixed = want - 1;
+        if sargs.len < fixed {
+            try pp_fail(pp, format("macro `{mname}` needs at least {fixed} argument{plural(fixed)}, found {sargs.len}"),
+                        call.col, clen(mname), "", "");
+        }
+        let mut va: List<Tok> = List.new();
+        for a in fixed..sargs.len {
+            if va.len > 0 {
+                va.push(mk(K.Op, ",", call.col));
+                va.push(mk(K.Ws, " ", call.col));
+            }
+            extend_toks(&va, sargs.at(a));
+        }
+        let mut fin: List<List<Tok>> = List.new();
+        for a in 0..fixed { fin.push(clone_toks(sargs.at(a))); }
+        fin.push(va);
+        sargs = fin;
+    } else if sargs.len != want {
+        let mut ps = String.empty();
+        for a in 0..want { if a > 0 { ps.append(", "); } ps.append(*pp.macros.at(mi).params.at(a)); }
+        try pp_fail(pp, format("macro `{mname}` takes {want} argument{plural(want)}, found {sargs.len}"),
+                    call.col, clen(mname), "in this macro call", format("defined as `{mname}({ps})`"));
+    }
+    for a in 0..sargs.len { res.push(clone_toks(sargs.at(a))); }
+    return k;
+}
+
+fn plural(n: i64) -> str { return n != 1 ? "s" : ""; }
+
+fn param_index(m: *Macro, name: str) -> i64 {
+    for i in 0..m.params.len { if *m.params.at(i) == name { return i; } }
+    return -1;
+}
+
+fn stringify(ts: *List<Tok>) -> String {
+    let mut stripped = strip_ws(ts);
+    let text = untokenize(&stripped);
+    let mut o = String.empty();
+    let mut in_ws = false;
+    for i in 0..text.len {
+        let c = text[i];
+        if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == 12 || c == 11 {
+            if !in_ws { o.push(' '); }
+            in_ws = true;
+        } else {
+            in_ws = false;
+            if c == '\\' { o.append("\\\\"); }
+            else if c == '"' { o.append("\\\""); }
+            else { o.push(c); }
+        }
+    }
+    return format("\"{o}\"");
+}
+
+fn prev_nonws(out: *List<Tok>) -> i64 {
+    let mut k = out.len;
+    while k > 0 { k -= 1; if out.at(k).kind != K.Ws { return k; } }
+    return -1;
+}
+
+fn is_paste(t: *Tok) -> bool { return t.kind == K.Op && t.text == "##"; }
+
+struct CacheEnt { name: String, toks: List<Tok> }
+
+fn substitute(pp: *PP, mi: i64, args: *List<List<Tok>>, lineno: i64, disabled: *List<String>, call: *Tok, budget: *i64) -> List<Tok>! {
+    let mut body = clone_toks(&pp.macros.at(mi).body);
+    let variadic = pp.macros.at(mi).variadic;
+    let mut params: List<String> = List.new();
+    for i in 0..pp.macros.at(mi).params.len { params.push(String.from(*pp.macros.at(mi).params.at(i))); }
+    let mut out: List<Tok> = List.new();
+    let mut cache: List<CacheEnt> = List.new();
+    let mut i = 0 as i64;
+    let n = body.len;
+    while i < n {
+        let mut t = body.at(i);
+        if t.kind == K.Op && t.text == "#" {
+            let mut j = i + 1;
+            while j < n && body.at(j).kind == K.Ws { j += 1; }
+            if j < n && contains_str(&params, body.at(j).text) {
+                let pi = param_index(pp.macros.at(mi), body.at(j).text);
+                out.push(Tok { kind: K.Str, text: stringify(args.at(pi)), col: t.col });
+                i = j + 1;
+                continue;
+            }
+        }
+        if t.kind == K.Id && t.text == "__VA_OPT__" && variadic {
+            let mut j = i + 1;
+            while j < n && body.at(j).kind == K.Ws { j += 1; }
+            if j < n && body.at(j).text == "(" {
+                let mut depth = 0 as i64;
+                let mut k = j;
+                let mut inner: List<Tok> = List.new();
+                while k < n {
+                    let mut b = body.at(k);
+                    if b.text == "(" && b.kind == K.Op {
+                        depth += 1;
+                        if depth > 1 { inner.push(clone_tok(b)); }
+                    } else if b.text == ")" && b.kind == K.Op {
+                        depth -= 1;
+                        if depth == 0 { break; }
+                        inner.push(clone_tok(b));
+                    } else {
+                        inner.push(clone_tok(b));
+                    }
+                    k += 1;
+                }
+                let vi = param_index(pp.macros.at(mi), "__VA_ARGS__");
+                if vi >= 0 && args.at(vi).len > 0 { extend_toks(&out, &inner); }
+                i = k + 1;
+                continue;
+            }
+        }
+        if t.kind == K.Id && contains_str(&params, t.text) {
+            let pi = param_index(pp.macros.at(mi), t.text);
+            let pv = prev_nonws(&out);
+            let mut nx = i + 1;
+            while nx < n && body.at(nx).kind == K.Ws { nx += 1; }
+            let adjacent = (pv >= 0 && is_paste(out.at(pv))) || (nx < n && is_paste(body.at(nx)));
+            if adjacent {
+                extend_toks(&out, args.at(pi));
+            } else {
+                let mut found = -1 as i64;
+                for c in 0..cache.len { if cache.at(c).name == t.text { found = c; } }
+                if found < 0 {
+                    let mut ex = try expand(pp, args.at(pi), lineno, disabled, call.col, budget);
+                    cache.push(CacheEnt { name: String.from(t.text), toks: ex });
+                    found = cache.len - 1;
+                }
+                extend_toks(&out, &cache.at(found).toks);
+            }
+            i += 1;
+            continue;
+        }
+        out.push(clone_tok(t));
+        i += 1;
+    }
+    return paste(&out);
+}
+
+// applies `##`: glues the neighbours into one token (re-tokenised)
+fn paste(toks: *List<Tok>) -> List<Tok> {
+    let mut any = false;
+    for i in 0..toks.len { if is_paste(toks.at(i)) { any = true; } }
+    if !any { return clone_toks(toks); }
+    let mut out: List<Tok> = List.new();
+    let mut i = 0 as i64;
+    let n = toks.len;
+    while i < n {
+        let mut t = toks.at(i);
+        if is_paste(t) {
+            while out.len > 0 && out.at(out.len - 1).kind == K.Ws { out.pop() catch { panic("unreachable"); }; }
+            let mut j = i + 1;
+            while j < n && toks.at(j).kind == K.Ws { j += 1; }
+            let mut glued = String.empty();
+            if out.len > 0 {
+                let left = out.pop() catch { panic("unreachable"); };
+                glued.append(left.text);
+            }
+            if j < n { glued.append(toks.at(j).text); }
+            let mut nt: List<Tok> = List.new();
+            tokenize(glued, 0, 1, &nt);
+            extend_toks(&out, &nt);
+            i = j + 1;
+            continue;
+        }
+        out.push(clone_tok(t));
+        i += 1;
+    }
+    return out;
+}
+
+// a cheap test: does the text contain a directive or a built-in macro?
+pub fn needs_preprocessing(text: str) -> bool {
+    let n = text.len;
+    let mut line_start = true;
+    let mut i = 0 as i64;
+    while i < n {
+        if line_start {
+            let mut j = i;
+            while j < n && (text[j] == ' ' || text[j] == '\t') { j += 1; }
+            if j < n && text[j] == '#' { return true; }
+        }
+        if text[i] == '_' && (starts_at(text, i, "__LINE__") || starts_at(text, i, "__FILE__") || starts_at(text, i, "__COUNTER__")) { return true; }
+        line_start = text[i] == '\n';
+        i += 1;
+    }
+    return false;
+}

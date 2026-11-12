@@ -1,0 +1,10 @@
+// Sloppy on purpose: makes a pile of Strings and lets them fall out of scope.
+fn main() {
+    let mut total: i64 = 0;
+    for i in 0..200 {
+        let s = format("{i}-{i}-{i}");
+        let t = format("{s}!");
+        total += t.len;
+    }
+    println("{total}");
+}

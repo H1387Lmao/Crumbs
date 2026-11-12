@@ -1,0 +1,87 @@
+#define V 3
+#if V == 3
+yes3
+#elif V == 4
+no4
+#else
+no
+#endif
+#if defined(V) && !defined W && defined ( V )
+defs
+#endif
+#if 0x10 == 16 && 0b101 == 5 && 0o17 == 15 && 10u == 10 && 1_000 == 1000
+numbers
+#endif
+#if (1 ? 2 : 3) == 2 && (0 ? 2 : 3) == 3 && -7 / 2 == -3 && -7 % 3 == -1 && 7 >> 1 == 3 && 1 << 4 == 16
+arith
+#endif
+#if 1 || 1 / 0
+shortcircuit?
+#endif
+#ifdef V
+#ifndef V
+inner no
+#else
+inner else
+#endif
+#elif 1
+bad
+#endif
+#if 0
+#if 1 +
+#else
+#endif
+#else
+outer else
+#endif
+#if
+#endif
+#if 1.5
+#endif
+#if "s"
+#endif
+#if (1
+#endif
+#if 1 2
+#endif
+#if true && unknown_name == 0
+t
+#endif
+#ifdef
+#endif
+#ifdef V extra
+#endif
+#else
+#elif 1
+#endif
+#if 1
+#else
+#else
+#endif
+#if 1
+#else
+#elif 1
+#endif
+#endif
+#define
+#define 1x
+#define F(a, a) a
+#define F2(a, ) a
+#define F3(a b) a
+#define F4(a
+#define F5(a) #b
+#define F6(a) ## a
+#define F7(a) a ##
+#define defined 1
+#define __FILE__ 1
+#pragma once
+#pragma weird thing
+#warning careful now
+#error stop here
+#include "x"
+#frobnicate
+#defin
+#
+# 
+#if 1
+unclosed

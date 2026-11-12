@@ -1,0 +1,15 @@
+// Sloppy on purpose: a method that allocates scratch space on every call.
+struct Calc { base: i64 }
+impl Calc {
+    fn run(self: *Calc, n: i64) -> i64 {
+        let scratch = alloc(i64, n);
+        for i in 0..n { scratch[i] = self.base + i; }
+        return scratch[n - 1];
+    }
+}
+fn main() {
+    let c = Calc { base: 10 };
+    let mut s: i64 = 0;
+    for i in 1..50 { s += c.run(i); }
+    println("{s}");
+}

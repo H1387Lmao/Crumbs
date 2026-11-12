@@ -1,0 +1,14 @@
+// Sloppy on purpose: redeclares a variable with the same name in an inner block on every iteration.
+fn main() {
+    let mut last: i64 = 0;
+    for i in 0..5 {
+        let x = alloc(i64, 1);
+        x[0] = i;
+        if true {
+            let x = alloc(i64, 2);
+            x[0] = i * 2;
+            last = x[0];
+        }
+    }
+    println("{last}");
+}

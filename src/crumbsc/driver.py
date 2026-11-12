@@ -46,7 +46,7 @@ GC_MODES = ("auto", "thread", "manual")
 
 
 def compile_to_c(path, include_dirs=(), color=None, quiet_warnings=False, strict=False, entry="main", gc=True,
-                 nostd=False, overflow_panic=False, defines=None, gc_mode="auto", gc_interval=100, pyext=None, hold=None):
+                 nostd=False, overflow_panic=False, defines=None, gc_mode="auto", gc_interval=100, pyext=None, hold=None, rc=True):
     """Returns (c_source or None, diagnostics, link plan)."""
     d = Diagnostics()
     predefined = {}
@@ -56,6 +56,9 @@ def compile_to_c(path, include_dirs=(), color=None, quiet_warnings=False, strict
             predefined["CB_GC_MANUAL"] = "1"
         elif gc_mode == "thread":
             predefined["CB_GC_THREAD"] = "1"
+    rc = rc and not gc and not nostd        # reference counting is the default memory manager; --gc replaces it
+    if rc:
+        predefined["CB_RC"] = "1"
     if nostd:
         predefined["CB_NO_STDRUNTIME"] = "1"
     if overflow_panic:
@@ -69,10 +72,10 @@ def compile_to_c(path, include_dirs=(), color=None, quiet_warnings=False, strict
     plan = make_plan(mods)
     if d.has_errors:
         return None, d, plan
-    ck = Checker(mods, d, C_RESERVED, strict=strict, entry_name=entry, nostd=nostd, gc_mode=gc_mode if gc else "off").run()
+    ck = Checker(mods, d, C_RESERVED, strict=strict, entry_name=entry, nostd=nostd, gc_mode=gc_mode if gc else "off", rc=rc).run()
     if d.has_errors:
         return None, d, plan
-    cg = CodeGen(ck, gc=gc, nostd=nostd, overflow_panic=overflow_panic, gc_mode=gc_mode, gc_interval=gc_interval, pyext=pyext)
+    cg = CodeGen(ck, gc=gc, nostd=nostd, overflow_panic=overflow_panic, gc_mode=gc_mode, gc_interval=gc_interval, pyext=pyext, rc=rc)
     if hold is not None:
         hold["cg"] = cg
     return cg.generate(mods[-1].src.path), d, plan
@@ -192,7 +195,7 @@ def build(args, run_after=False):
     verbose_header(args)
     c_src, d, plan = compile_to_c(args.file, args.include, strict=args.strict_casts, entry=args.entry, gc=args.gc,
                                  nostd=args.no_stdruntime, overflow_panic=args.overflow_panic, defines=parse_defines(args),
-                                 gc_mode=args.gc_mode, gc_interval=args.gc_interval)
+                                 gc_mode=args.gc_mode, gc_interval=args.gc_interval, rc=args.rc)
     verbose_front(args)
     report(d, args.no_warn)
     if c_src is None:
@@ -355,6 +358,8 @@ def preprocess_only(a):
     from .diag import Source
     src = Source(a.file, text)
     predef = {}
+    if a.rc:
+        predef["CB_RC"] = "1"
     if a.gc:
         predef["CB_GC"] = "1"
         if a.gc_mode == "manual":
@@ -396,6 +401,9 @@ def main(argv=None):
         p.add_argument("--gc", action=argparse.BooleanOptionalAction, default=None,
                        help="conservative garbage collector for alloc()/String/List (default: off; owned memory is the default, see std.own). "
                             "Without it, String/List/Own free themselves at scope end and alloc() memory is freed by hand")
+        p.add_argument("--no-rc", action="store_true",
+                       help="turn off reference counting of alloc()/raw pointers/slices (the default memory manager: every copy of a pointer or slice "
+                            "counts, and the block is freed when the last reference goes away). --gc replaces it too")
         p.add_argument("--gc-mode", choices=GC_MODES, default="auto",
                        help="when the collector runs: auto (default) = the allocator starts a collection when the nursery is full; "
                             "thread = a background collector thread collects every --gc-interval ms (for beginners: nothing to manage); "
@@ -459,6 +467,7 @@ def check_gc_flags(a):
     """Reject flag combinations that cannot work; returns an exit code or None."""
     if a.gc is None:                    # the collector is opt-in; asking for one of its modes turns it on
         a.gc = a.gc_mode != "auto"
+    a.rc = not a.no_rc and not a.gc and not a.no_stdruntime
     if not 1 <= a.gc_interval <= 60000:
         print("error: --gc-interval must be between 1 and 60000 milliseconds", file=sys.stderr)
         return 2
@@ -483,14 +492,14 @@ def _dispatch(a):
     if a.cmd == "check":
         c, d, _ = compile_to_c(a.file, a.include, strict=a.strict_casts, entry=a.entry, gc=a.gc,
                                  nostd=a.no_stdruntime, overflow_panic=a.overflow_panic, defines=parse_defines(a),
-                                 gc_mode=a.gc_mode, gc_interval=a.gc_interval)
+                                 gc_mode=a.gc_mode, gc_interval=a.gc_interval, rc=a.rc)
         verbose_front(a)
         report(d, a.no_warn)
         return 0 if c is not None else 1
     if a.cmd == "emit":
         c, d, _ = compile_to_c(a.file, a.include, strict=a.strict_casts, entry=a.entry, gc=a.gc,
                                  nostd=a.no_stdruntime, overflow_panic=a.overflow_panic, defines=parse_defines(a),
-                                 gc_mode=a.gc_mode, gc_interval=a.gc_interval)
+                                 gc_mode=a.gc_mode, gc_interval=a.gc_interval, rc=a.rc)
         verbose_front(a)
         report(d, a.no_warn)
         if c is None:

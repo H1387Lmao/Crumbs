@@ -79,7 +79,7 @@ def run_all(report):
 
         # an error in the program makes the build fail with the compiler's diagnostics
         with open(os.path.join(proj, "src", "main.cb"), "w") as f:
-            f.write("fn main() { let x: i32 = true; }\n")
+            f.write("fn main() { let x: i32 = 1.5; }\n")
         r = cookie(proj, "build")
         report("cookie/reports compile errors", r.returncode != 0 and "mismatched types" in r.stderr, r.stderr)
 

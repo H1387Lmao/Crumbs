@@ -1,0 +1,25 @@
+struct Cnt { n: i64, max: i64 }
+impl Cnt {
+    pub fn next(mut self) -> i64? {
+        if self.n >= self.max { return null; }
+        self.n += 1;
+        return self.n;
+    }
+}
+struct Bag { xs: [3]i32 }
+impl Bag {
+    pub fn iter(self) -> Cnt { return Cnt { n: 0, max: 3 }; }
+}
+fn main() {
+    let mut t = 0;
+    for i in 0..10 { t += i; }
+    for i in 0..10u8 { t += i as i32; }
+    for i in 0i64..5 { t += i as i32; }
+    let a = [1, 2, 3];
+    for x in a { t += x; }
+    for _ in a { t += 1; }
+    for c in "hello" { t += c as i32; }
+    for k in Cnt { n: 0, max: 4 } { t += k as i32; }
+    for k in Bag { xs: [1, 2, 3] } { t += k as i32; }
+    for _ in Cnt { n: 0, max: 2 } { t += 1; }
+}

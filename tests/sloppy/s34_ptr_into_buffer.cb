@@ -1,0 +1,7 @@
+// Sloppy on purpose: keeps a pointer to an element of a buffer.
+fn main() {
+    let buf = alloc(i64, 4);
+    buf[1] = 77;
+    let p = &buf[1];
+    println("{*p}");
+}

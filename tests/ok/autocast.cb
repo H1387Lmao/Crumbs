@@ -1,0 +1,39 @@
+// NOSELFHOST: implicit conversions the self-hosted checker does not know yet.
+enum C { Red, Green, Blue }
+struct S { name: String, v: i32, ok: u8, xs: []i32 }
+
+fn sum(x: []i32) -> i32 { let mut s = 0; for v in x { s += v; } return s; }
+fn first(p: *i32) -> i32 { return *p; }
+fn own(s: String) -> i64 { return s.len; }
+fn mk() -> String { return "ret"; }
+fn num() -> i64 { return C.Green; }
+
+fn main() {
+    // [N]T -> []T and []T -> *T
+    let a = [1, 2, 3];
+    println("{sum(a)}");
+    let b: [3]i32 = [4, 5, 6];
+    let sl: []i32 = b;
+    println("{sl[2]} {first(sl)}");
+    // str -> String
+    let o = own("hello");
+    let mut s: String = "abc";
+    s.append("def");
+    println("{o} {s} {mk()}");
+    // enum / bool -> integer
+    let n: i32 = C.Blue;
+    let t: i64 = true;
+    println("{n} {t} {num()}");
+    // mixed numeric array literals
+    let x: i64 = 5;
+    let y: u8 = 2;
+    let m = [x, y, 7];
+    println("{m[1]} {m.len}");
+    // fields and assignment
+    let mut st = S { name: "field", v: C.Green, ok: false, xs: a };
+    st.name = "again";
+    st.v = true;
+    let mut k: i64 = 0;
+    k = C.Green;
+    println("{st.name} {st.v} {st.ok} {st.xs[1]} {k}");
+}

@@ -1,0 +1,43 @@
+error Bad;
+enum Color { Red, Green, Blue }
+const K: i32 = 7;
+fn may(n: i32) -> i32! { if n < 0 { throw Bad; } return n; }
+fn nothing() -> void! { }
+fn f1() -> i32 {
+    let a = try may(1);
+    throw Bad;
+    let b = may(2);
+    return 0;
+}
+fn f2() -> i32! {
+    let a = try 5;
+    let b = 5 catch 0;
+    let c = may(1) catch { };
+    let d = nothing() catch 3;
+    throw 5;
+    let e = may(1);
+    may(1);
+    return 1;
+}
+fn f3() {
+    try { let q = 1; } catch { }
+    try { may(1); } catch |e| { }
+    let n = 4;
+    match n { 1 => { } 1 => { } }
+    match n { 1.5 => { } _ => { } }
+    match "s" { _ => { } }
+    let c = Color.Red;
+    match c { Color.Red => { } }
+    match true { true => { } }
+    match c { Color.Red => { } Color.Green => { } Color.Blue => { } Color.Red => { } }
+    match n { n => { } _ => { } }
+    match n { true => { } _ => { } }
+    let z = n ?? 3;
+    let y = n?.x;
+    let w: i32? = null;
+    let v = w ?? "s";
+    let p: *void = null;
+    let u = p?.x;
+    let t = w?.foo;
+}
+fn main() { f1(); }

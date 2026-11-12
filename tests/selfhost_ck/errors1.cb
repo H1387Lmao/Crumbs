@@ -1,0 +1,65 @@
+const A: i32 = 3000000000;
+const B: i64 = A + undefined_name;
+const C: u8 = 256;
+const D: bool = 1;
+enum E { X, Y }
+struct S { a: i32, b: bool }
+fn two(a: i32, b: i64 = 5) -> i32 { return a; }
+fn nores() -> i32 { }
+fn voidret() { return 1; }
+fn needret() -> i32 { return; }
+fn main() {
+    let a: i32 = "s";
+    let b: u8 = 300;
+    let c: i64 = 1.5;
+    let d: f64 = 1;
+    let e = 1 + true;
+    let f = 1 + 2.0;
+    let g: u8 = -1;
+    let h = -5u32;
+    let i = !3;
+    let j = ~1.5;
+    let k = *a;
+    let l = &5;
+    let m = a.foo;
+    let n = undefined;
+    let o = undefined(1, 2);
+    let p = two(1, 2, 3);
+    let q = two();
+    let r = two(1, b = 3, b = 4);
+    let s = two(1, zz = 3);
+    let t = E.Z;
+    let u = E.X.foo;
+    let v = a as bool;
+    let w = 5 as E;
+    let x: i32 = 5;
+    x = 6;
+    x += 1;
+    let y = 10 / 0;
+    let mut z = 1;
+    let z = 2;
+    if 5 { }
+    while "x" { }
+    break;
+    continue;
+    return 3;
+    a++;
+    5 + 3;
+    nores();
+    z.len;
+    let big = 99999999999999999999;
+    let neg = -2147483649;
+    let cmp = 1u8 < 0;
+    let mix = 1u32 < -1i32;
+    let sh = 1.5 << 2;
+    let sz = 1 == 1.5;
+    let q2 = null;
+    let p2: *i32 = null;
+    let uu: u8 = 1;
+    let xx = uu + 300;
+    let un = 1;
+    unreachable_after();
+    return;
+    let dead = 1;
+}
+fn unreachable_after() { }

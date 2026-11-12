@@ -1,0 +1,11 @@
+// Sloppy on purpose: two fields one buffer.
+struct Pair { a: []i64, b: []i64 }
+fn mk() -> Pair {
+    let x = alloc(i64, 2);
+    return Pair { a: x, b: x };
+}
+fn main() {
+    let p = mk();
+    p.a[0] = 1; p.b[1] = 2;
+    println("{p.a[0]} {p.a[1]}");
+}
