@@ -59,7 +59,10 @@
   {
    "title": "Other",
    "modules": [
+    "args",
     "iter",
+    "pcre",
+    "regex",
     "set"
    ]
   }
@@ -7097,12 +7100,539 @@
    ]
   },
   {
+   "id": "args",
+   "name": "args",
+   "import": "std.args",
+   "summary": "a command-line argument parser with flags, options, positionals and nested subcommands.",
+   "description": "`parse` gives a `Matches` that you check with `ok()` (the message is in `message()`); `help` and `--version` are built in:\n`-h` / `--help` print generated help, and `m.wants_help()` / `m.wants_version()` tell you when `parse` stopped for them.\nA bare `--` ends option parsing: everything after it is positional. Values may be repeated (`-I a -I b`): `values(name)`\nlists them all, `value(name)` gives the last. A value starting with `-` is accepted after `=` or as a short attached value.",
+   "example": "import std.args;\nimport std.env;\n\nlet mut app = args.Command.new(\"tool\", \"does useful things\");\napp.version(\"1.2.0\");\napp.flag(\"verbose\", 'v', \"talk more\");                    // -v, --verbose, may repeat: -vv\napp.option(\"config\", 'c', \"FILE\", \"configuration file\");  // -c FILE, -cFILE, --config FILE, --config=FILE\n\nlet mut build = args.Command.new(\"build\", \"compile the project\");\nbuild.option_default(\"jobs\", 'j', \"N\", \"parallel jobs\", \"4\");\nbuild.positional(\"target\", \"what to build\", true);        // required\nbuild.positional_rest(\"extra\", \"more targets\");           // collects whatever is left\napp.subcommand(build);\n\nlet argv = env.args();\nlet m = app.parse_or_exit(argv.view());                    // prints help / errors and exits for you\nif m.flag(\"verbose\") { println(\"verbose\"); }\nif m.subcommand() == \"build\" {\n    let b = m.sub();\n    println(\"jobs {b.value(\\\"jobs\\\")}, target {b.value(\\\"target\\\")}\");\n}",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "Command",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "",
+     "fields": [
+      {
+       "name": "name",
+       "type": "String"
+      },
+      {
+       "name": "about",
+       "type": "String"
+      },
+      {
+       "name": "ver",
+       "type": "String"
+      },
+      {
+       "name": "specs",
+       "type": "List<Spec>"
+      },
+      {
+       "name": "subs",
+       "type": "List<Command>"
+      },
+      {
+       "name": "sub_required",
+       "type": "bool"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str",
+         "doc": "the command's name"
+        },
+        {
+         "name": "about",
+         "type": "str",
+         "doc": "one line shown in help"
+        }
+       ],
+       "returns": "Command",
+       "receiver": null,
+       "doc": "Creates a command (or subcommand) description.",
+       "fallible": false,
+       "returns_doc": "a new `Command`"
+      },
+      {
+       "name": "version",
+       "tparams": [],
+       "params": [
+        {
+         "name": "v",
+         "type": "str",
+         "doc": "the version text"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Sets the version, which enables `-V` / `--version`.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "flag",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        },
+        {
+         "name": "short",
+         "type": "u8"
+        },
+        {
+         "name": "help",
+         "type": "str"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "a switch without a value: `-v`, `--verbose`; `short` 0 for none",
+       "fallible": false
+      },
+      {
+       "name": "option",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        },
+        {
+         "name": "short",
+         "type": "u8"
+        },
+        {
+         "name": "meta",
+         "type": "str"
+        },
+        {
+         "name": "help",
+         "type": "str"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "an option that takes a value",
+       "fallible": false
+      },
+      {
+       "name": "option_default",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str",
+         "doc": "the long name"
+        },
+        {
+         "name": "short",
+         "type": "u8",
+         "doc": "the one-letter form or 0"
+        },
+        {
+         "name": "meta",
+         "type": "str",
+         "doc": "placeholder shown in help"
+        },
+        {
+         "name": "help",
+         "type": "str",
+         "doc": "description"
+        },
+        {
+         "name": "default",
+         "type": "str",
+         "doc": "value used when absent"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Declares an option that takes a value and has a default when not given.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "option_required",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        },
+        {
+         "name": "short",
+         "type": "u8"
+        },
+        {
+         "name": "meta",
+         "type": "str"
+        },
+        {
+         "name": "help",
+         "type": "str"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "an option that must be given",
+       "fallible": false
+      },
+      {
+       "name": "positional",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        },
+        {
+         "name": "help",
+         "type": "str"
+        },
+        {
+         "name": "required",
+         "type": "bool"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "the next positional argument (they are matched in the order declared)",
+       "fallible": false
+      },
+      {
+       "name": "positional_rest",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        },
+        {
+         "name": "help",
+         "type": "str"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "a final positional that collects every remaining argument",
+       "fallible": false
+      },
+      {
+       "name": "subcommand",
+       "tparams": [],
+       "params": [
+        {
+         "name": "c",
+         "type": "Command"
+        }
+       ],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "adds a subcommand (moved in); with `require_subcommand` the parent cannot be used alone",
+       "fallible": false
+      },
+      {
+       "name": "require_subcommand",
+       "tparams": [],
+       "params": [],
+       "returns": "",
+       "receiver": "mut self",
+       "doc": "Makes giving a subcommand mandatory.",
+       "fallible": false,
+       "returns_doc": "nothing"
+      },
+      {
+       "name": "parse",
+       "tparams": [],
+       "params": [
+        {
+         "name": "argv",
+         "type": "[]String"
+        }
+       ],
+       "returns": "Matches",
+       "receiver": "self",
+       "doc": "parses `argv` (element 0 is the program name: pass `env.args().view()`); never exits",
+       "fallible": false
+      },
+      {
+       "name": "parse_or_exit",
+       "tparams": [],
+       "params": [
+        {
+         "name": "argv",
+         "type": "[]String"
+        }
+       ],
+       "returns": "Matches",
+       "receiver": "self",
+       "doc": "parses; on `--help` / `--version` prints and exits 0, on a mistake prints the error and exits 2",
+       "fallible": false
+      },
+      {
+       "name": "help",
+       "tparams": [],
+       "params": [],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "the generated help for this command",
+       "fallible": false
+      }
+     ]
+    },
+    {
+     "name": "Matches",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "",
+     "fields": [
+      {
+       "name": "cmd",
+       "type": "String"
+      },
+      {
+       "name": "err",
+       "type": "String"
+      },
+      {
+       "name": "help",
+       "type": "bool"
+      },
+      {
+       "name": "ver",
+       "type": "bool"
+      },
+      {
+       "name": "help_text",
+       "type": "String"
+      },
+      {
+       "name": "vals",
+       "type": "map.HashMap<List<String>>"
+      },
+      {
+       "name": "pos",
+       "type": "List<String>"
+      },
+      {
+       "name": "sub_name",
+       "type": "String"
+      },
+      {
+       "name": "subm",
+       "type": "List<Matches>"
+      }
+     ],
+     "methods": [
+      {
+       "name": "ok",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Checks that parsing succeeded and did not stop for help or version.",
+       "fallible": false,
+       "returns_doc": "`true` when the result can be used"
+      },
+      {
+       "name": "message",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "The error message of a failed parse.",
+       "fallible": false,
+       "returns_doc": "the message, or an empty string when parsing worked"
+      },
+      {
+       "name": "wants_help",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Tells whether `-h` / `--help` was given.",
+       "fallible": false,
+       "returns_doc": "`true` if help was requested"
+      },
+      {
+       "name": "wants_version",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Tells whether `-V` / `--version` was given.",
+       "fallible": false,
+       "returns_doc": "`true` if the version was requested"
+      },
+      {
+       "name": "help_message",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "the help text to show for a request (`-h`) or a mistake",
+       "fallible": false
+      },
+      {
+       "name": "has",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "was the flag given (or the option / positional supplied)?",
+       "fallible": false
+      },
+      {
+       "name": "flag",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str",
+         "doc": "the flag's long name"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Tells whether a flag was given.",
+       "fallible": false,
+       "returns_doc": "`true` if it appeared at least once"
+      },
+      {
+       "name": "count",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "how many times a flag was given: `-vvv` is 3",
+       "fallible": false
+      },
+      {
+       "name": "value",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        }
+       ],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "the last value given (or the default), \"\" when absent",
+       "fallible": false
+      },
+      {
+       "name": "values",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        }
+       ],
+       "returns": "[]str",
+       "receiver": "self",
+       "doc": "every value given, in order",
+       "fallible": false
+      },
+      {
+       "name": "int",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        },
+        {
+         "name": "fallback",
+         "type": "i64"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "the value parsed as an integer; `fallback` when absent or not a number",
+       "fallible": false
+      },
+      {
+       "name": "positionals",
+       "tparams": [],
+       "params": [],
+       "returns": "*const List<String>",
+       "receiver": "self",
+       "doc": "every positional argument, in order",
+       "fallible": false
+      },
+      {
+       "name": "subcommand",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "the chosen subcommand's name, \"\" when none",
+       "fallible": false
+      },
+      {
+       "name": "sub",
+       "tparams": [],
+       "params": [],
+       "returns": "*Matches",
+       "receiver": "self",
+       "doc": "the chosen subcommand's matches (only valid when `subcommand()` is not empty)",
+       "fallible": false
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "help_text",
+     "tparams": [],
+     "params": [
+      {
+       "name": "c",
+       "type": "*Command"
+      },
+      {
+       "name": "path",
+       "type": "str"
+      }
+     ],
+     "returns": "String",
+     "receiver": null,
+     "doc": "help text for `c`, whose full invocation name (e.g. \"tool build\") is `path`",
+     "fallible": false
+    }
+   ]
+  },
+  {
    "id": "iter",
    "name": "iter",
    "import": "std.iter",
-   "summary": "lazy iterators built from closures. No import is needed.",
-   "description": "An `Iter<T>` produces values one at a time with `next()`, which gives `T?` (nothing when it is exhausted). The adapters\n(`map`, `filter`, `take`, `zip`, ...) consume the iterator and return a new one that does its work only when it is\nasked for the next value; the consumers (`collect`, `fold`, `count`, `any`, ...) drive it to the end. Whatever an\niterator still holds is destroyed with it. `for x in e` accepts an `Iter<T>`, any value with a `next(self) -> T?` method,\nor any value with an `iter()` method, such as a `List`, which yields pointers to its elements.",
-   "example": "let evens = (1..=10)                              // ranges: iter.range(lo, hi) / iter.range_incl(lo, hi)\nfor n in iter.range(0, 10).filter(|n| *n % 2 == 0).map(|n| n * n) { println(n); }\n\nlet words = List.from([\"a\", \"bb\", \"ccc\"]);\nlet lens = words.iter().map(|w| w.len).collect();     // List<i64>\nlet total = words.iter().fold(0, |acc, w| acc + w.len);",
+   "summary": "lazy iterators built from closures. `Iter<T>` and its methods need no import; `import std.iter;` gives the",
+   "description": "constructors such as `iter.range`.\n\nAn `Iter<T>` produces values one at a time with `next()`, which gives `T?` (nothing when it is exhausted). The adapters\n(`map`, `filter`, `take`, `zip`, ...) consume the iterator and return a new one that does its work only when it is\nasked for the next value; the consumers (`collect`, `fold`, `count`, `any`, ...) drive it to the end. Whatever an\niterator still holds is destroyed with it. `for x in e` accepts an `Iter<T>`, any value with a `next(self) -> T?` method,\nor any value with an `iter()` method, such as a `List`, which yields pointers to its elements.",
+   "example": "import std.iter;\n// ranges: iter.range(lo, hi) / iter.range_incl(lo, hi)\nfor n in iter.range(0, 10).filter(|n| *n % 2 == 0).map(|n| n * n) { println(n); }\n\nlet mut words: List<str> = List.new();\nwords.push(\"a\"); words.push(\"bb\"); words.push(\"ccc\");\nlet lens = words.iter().map(|w| w.len).collect();     // List<i64>\nlet total = words.iter().fold(0 as i64, |acc, w| acc + w.len);\nprintln(lens.len + total);",
    "errors": [],
    "consts": [],
    "types": [
@@ -7817,12 +8347,971 @@
    ]
   },
   {
+   "id": "pcre",
+   "name": "pcre",
+   "import": "std.pcre",
+   "summary": "the PCRE2 regex library (with its JIT compiler) behind the same interface as std.regex.",
+   "description": "PCRE2 (https://github.com/PCRE2Project/pcre2) is a mature C engine used by grep, PHP, nginx and many others. Its JIT turns\na pattern into machine code, which is several times faster than `std.regex` on large inputs, and it has the full Perl\nsyntax: backreferences, lookahead and lookbehind, atomic groups, possessive quantifiers, Unicode classes with `(*UTF)`,\n`\\K`, recursion. The price is the usual backtracking one: a pathological pattern can run for a very long time (the JIT stops\nwith an error after a stack or match limit, reported by `message()` of the failed call, and the search then finds nothing).\n\nThe results are the `Match` and `Captures` values of std.regex, so code can switch between the two engines by changing the\nmodule name. It needs libpcre2-8 (`apt install libpcre2-dev`); the link flag comes from this file.",
+   "example": "import std.pcre;\nlet mut re = pcre.Regex.new(\"(?<year>\\\\d{4})-(\\\\d{2})-(\\\\d{2})\");\nif !re.ok() { println(re.message()); }\nlet text = \"released 2024-05-17\";\nlet c = re.captures(text);\nprintln(c.named(text, \"year\"));                       // 2024\nprintln(re.replace_all(text, \"$3/$2/$1\"));            // released 17/05/2024",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "Regex",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "",
+     "fields": [
+      {
+       "name": "code",
+       "type": "*Pcre2Code"
+      },
+      {
+       "name": "md",
+       "type": "*Pcre2MatchData"
+      },
+      {
+       "name": "err",
+       "type": "String"
+      },
+      {
+       "name": "jitted",
+       "type": "bool"
+      },
+      {
+       "name": "ngroups",
+       "type": "i64"
+      },
+      {
+       "name": "names",
+       "type": "List<String>"
+      },
+      {
+       "name": "ov",
+       "type": "[]u64"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [
+        {
+         "name": "pattern",
+         "type": "str"
+        }
+       ],
+       "returns": "Regex",
+       "receiver": null,
+       "doc": "compiles `pattern` (and JIT-compiles it where the CPU allows); check `ok()` before using it",
+       "fallible": false
+      },
+      {
+       "name": "with_options",
+       "tparams": [],
+       "params": [
+        {
+         "name": "pattern",
+         "type": "str"
+        },
+        {
+         "name": "options",
+         "type": "u32"
+        }
+       ],
+       "returns": "Regex",
+       "receiver": null,
+       "doc": "`options`: pcre.CASELESS, pcre.MULTILINE (^ $ match at lines), pcre.DOTALL (`.` matches newline), pcre.EXTENDED, or'ed",
+       "fallible": false
+      },
+      {
+       "name": "ok",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Tells whether the pattern compiled.",
+       "fallible": false,
+       "returns_doc": "`true` when it can be used"
+      },
+      {
+       "name": "message",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "Why compiling failed.",
+       "fallible": false,
+       "returns_doc": "the PCRE2 message with the position, or \"\" when it worked"
+      },
+      {
+       "name": "is_jit",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "true when the pattern was compiled to machine code",
+       "fallible": false
+      },
+      {
+       "name": "group_count",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Counts the capture groups, not counting the whole match.",
+       "fallible": false,
+       "returns_doc": "the number of groups"
+      },
+      {
+       "name": "exec",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str"
+        },
+        {
+         "name": "from",
+         "type": "i64"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "runs the engine from byte `from`; the offsets are left in the match data",
+       "fallible": false
+      },
+      {
+       "name": "is_match",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to search"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Checks whether the pattern matches anywhere.",
+       "fallible": false,
+       "returns_doc": "`true` if it does"
+      },
+      {
+       "name": "find",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to search"
+        }
+       ],
+       "returns": "regex.Match",
+       "receiver": "self",
+       "doc": "Finds the first match.",
+       "fallible": false,
+       "returns_doc": "a `regex.Match`; check `found`"
+      },
+      {
+       "name": "find_from",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to search"
+        },
+        {
+         "name": "from",
+         "type": "i64",
+         "doc": "the first byte to consider"
+        }
+       ],
+       "returns": "regex.Match",
+       "receiver": "self",
+       "doc": "Finds the first match starting at or after byte `from`.",
+       "fallible": false,
+       "returns_doc": "a `regex.Match`; check `found`"
+      },
+      {
+       "name": "captures",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to search"
+        }
+       ],
+       "returns": "regex.Captures",
+       "receiver": "self",
+       "doc": "Finds the first match with its groups.",
+       "fallible": false,
+       "returns_doc": "a `regex.Captures`; check `found`"
+      },
+      {
+       "name": "captures_from",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to search"
+        },
+        {
+         "name": "from",
+         "type": "i64",
+         "doc": "the first byte to consider"
+        }
+       ],
+       "returns": "regex.Captures",
+       "receiver": "self",
+       "doc": "Like `captures`, starting at byte `from`.",
+       "fallible": false,
+       "returns_doc": "a `regex.Captures`; check `found`"
+      },
+      {
+       "name": "find_all",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to search"
+        }
+       ],
+       "returns": "List<regex.Match>",
+       "receiver": "self",
+       "doc": "Finds every non-overlapping match.",
+       "fallible": false,
+       "returns_doc": "a list of `regex.Match`"
+      },
+      {
+       "name": "expand",
+       "tparams": [],
+       "params": [
+        {
+         "name": "out",
+         "type": "*String"
+        },
+        {
+         "name": "s",
+         "type": "str"
+        },
+        {
+         "name": "rep",
+         "type": "str"
+        }
+       ],
+       "returns": "",
+       "receiver": "self",
+       "doc": "`$1`, `${name}` and `$$` in `rep` are expanded from the last match",
+       "fallible": false
+      },
+      {
+       "name": "replace_impl",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text"
+        },
+        {
+         "name": "rep",
+         "type": "str",
+         "doc": "the replacement"
+        },
+        {
+         "name": "all",
+         "type": "bool",
+         "doc": "replace every match"
+        }
+       ],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Shared work of `replace` and `replace_all`.",
+       "fallible": false,
+       "returns_doc": "the new string"
+      },
+      {
+       "name": "replace",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text"
+        },
+        {
+         "name": "rep",
+         "type": "str",
+         "doc": "the replacement"
+        }
+       ],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Replaces the first match; `$1`, `${name}` and `$$` work in `rep`.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "replace_all",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text"
+        },
+        {
+         "name": "rep",
+         "type": "str",
+         "doc": "the replacement"
+        }
+       ],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Replaces every match; `$1`, `${name}` and `$$` work in `rep`.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "split",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to split"
+        }
+       ],
+       "returns": "List<String>",
+       "receiver": "self",
+       "doc": "Splits at every match.",
+       "fallible": false,
+       "returns_doc": "the pieces between matches"
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "matches",
+     "tparams": [],
+     "params": [
+      {
+       "name": "pattern",
+       "type": "str",
+       "doc": "the PCRE2 pattern"
+      },
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the text"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "Checks whether a pattern matches anywhere in a string.",
+     "fallible": false,
+     "returns_doc": "`true` if it does (false for an invalid pattern)"
+    },
+    {
+     "name": "escape",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str",
+       "doc": "the literal text"
+      }
+     ],
+     "returns": "String",
+     "receiver": null,
+     "doc": "Escapes every metacharacter so the text matches itself.",
+     "fallible": false,
+     "returns_doc": "the escaped pattern"
+    },
+    {
+     "name": "caseless",
+     "tparams": [],
+     "params": [],
+     "returns": "u32",
+     "receiver": null,
+     "doc": "The option that ignores letter case.",
+     "fallible": false,
+     "returns_doc": "the flag for `with_options`"
+    },
+    {
+     "name": "multiline",
+     "tparams": [],
+     "params": [],
+     "returns": "u32",
+     "receiver": null,
+     "doc": "The option that lets `^` and `$` match at line breaks.",
+     "fallible": false,
+     "returns_doc": "the flag for `with_options`"
+    },
+    {
+     "name": "dotall",
+     "tparams": [],
+     "params": [],
+     "returns": "u32",
+     "receiver": null,
+     "doc": "The option that lets `.` match a newline.",
+     "fallible": false,
+     "returns_doc": "the flag for `with_options`"
+    },
+    {
+     "name": "extended",
+     "tparams": [],
+     "params": [],
+     "returns": "u32",
+     "receiver": null,
+     "doc": "The option that ignores whitespace and `#` comments in the pattern.",
+     "fallible": false,
+     "returns_doc": "the flag for `with_options`"
+    }
+   ]
+  },
+  {
+   "id": "regex",
+   "name": "regex",
+   "import": "std.regex",
+   "summary": "regular expressions over bytes, matched in time proportional to (pattern size x text size): no pattern can",
+   "description": "blow up exponentially.\n\nSyntax: literals, `.` (any byte but newline), classes `[a-z0-9_]` / `[^\"]`, escapes `\\d \\w \\s \\D \\W \\S \\b \\B \\n \\t \\r`\nand `\\.`-style escapes of punctuation, anchors `^ $`, groups `( )`, non-capturing `(?: )`, named `(?<name> )` or\n`(?P<name> )`, alternation `|`, repeats `* + ? {n} {n,} {n,m}` and their lazy forms `*? +? ?? {n,m}?`. A pattern that\nstarts with `(?i)` ignores ASCII case. Matching is leftmost, with the first alternative / greedy choice winning. There\nare no backreferences or lookaround (they are what makes matching exponential). In replacements `$1` / `${name}` insert a\ngroup and `$$` a dollar sign.",
+   "example": "import std.regex;\nlet re = regex.Regex.new(\"(?<year>\\\\d{4})-(\\\\d{2})-(\\\\d{2})\");\nif !re.ok() { println(re.message()); }\nlet text = \"released 2024-05-17, patched 2024-06-02\";\nlet m = re.find(text);                              // first match: m.found, m.start, m.end\nprintln(m.text(text));                              // 2024-05-17\nlet c = re.captures(text);\nprintln(c.get(text, 2));                            // 05\nprintln(c.named(text, \"year\"));                     // 2024\nprintln(re.replace_all(text, \"$3/$2/$1\"));          // released 17/05/2024, patched 02/06/2024\nprintln(regex.Regex.new(\"[,;] *\").split(\"a, b;c\").len);   // 3",
+   "errors": [],
+   "consts": [],
+   "types": [
+    {
+     "name": "Match",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "",
+     "fields": [
+      {
+       "name": "found",
+       "type": "bool"
+      },
+      {
+       "name": "start",
+       "type": "i64"
+      },
+      {
+       "name": "end",
+       "type": "i64"
+      }
+     ],
+     "methods": [
+      {
+       "name": "text",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str"
+        }
+       ],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "the matched part of `s` (the string that was searched)",
+       "fallible": false
+      },
+      {
+       "name": "len",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "The length of the matched text.",
+       "fallible": false,
+       "returns_doc": "the number of bytes, 0 when nothing matched"
+      }
+     ]
+    },
+    {
+     "name": "Captures",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "",
+     "fields": [
+      {
+       "name": "found",
+       "type": "bool"
+      },
+      {
+       "name": "pos",
+       "type": "List<i64>"
+      },
+      {
+       "name": "names",
+       "type": "List<String>"
+      }
+     ],
+     "methods": [
+      {
+       "name": "len",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "number of groups, counting group 0 (the whole match)",
+       "fallible": false
+      },
+      {
+       "name": "has",
+       "tparams": [],
+       "params": [
+        {
+         "name": "i",
+         "type": "i64"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "did group `i` take part in the match?",
+       "fallible": false
+      },
+      {
+       "name": "start",
+       "tparams": [],
+       "params": [
+        {
+         "name": "i",
+         "type": "i64",
+         "doc": "the group number (0 is the whole match)"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Where a group's text starts.",
+       "fallible": false,
+       "returns_doc": "the byte offset, or -1 if the group did not take part"
+      },
+      {
+       "name": "end",
+       "tparams": [],
+       "params": [
+        {
+         "name": "i",
+         "type": "i64",
+         "doc": "the group number (0 is the whole match)"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "Where a group's text ends.",
+       "fallible": false,
+       "returns_doc": "the byte offset after the last byte, or -1 if the group did not take part"
+      },
+      {
+       "name": "get",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str"
+        },
+        {
+         "name": "i",
+         "type": "i64"
+        }
+       ],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "the text of group `i` (\"\" when it did not take part)",
+       "fallible": false
+      },
+      {
+       "name": "index_of",
+       "tparams": [],
+       "params": [
+        {
+         "name": "name",
+         "type": "str"
+        }
+       ],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "the index of a named group, or -1",
+       "fallible": false
+      },
+      {
+       "name": "named",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the string that was searched"
+        },
+        {
+         "name": "name",
+         "type": "str",
+         "doc": "the group name"
+        }
+       ],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "The text of a named group.",
+       "fallible": false,
+       "returns_doc": "the text, or \"\" when the name is unknown or the group did not take part"
+      }
+     ]
+    },
+    {
+     "name": "Regex",
+     "kind": "struct",
+     "tparams": [],
+     "doc": "",
+     "fields": [
+      {
+       "name": "pattern",
+       "type": "String"
+      },
+      {
+       "name": "err",
+       "type": "String"
+      },
+      {
+       "name": "icase",
+       "type": "bool"
+      },
+      {
+       "name": "ngroups",
+       "type": "i64"
+      },
+      {
+       "name": "op",
+       "type": "List<i64>"
+      },
+      {
+       "name": "xa",
+       "type": "List<i64>"
+      },
+      {
+       "name": "xb",
+       "type": "List<i64>"
+      },
+      {
+       "name": "classes",
+       "type": "List<Class>"
+      },
+      {
+       "name": "names",
+       "type": "List<String>"
+      },
+      {
+       "name": "nodes",
+       "type": "List<Node>"
+      },
+      {
+       "name": "pos",
+       "type": "i64"
+      }
+     ],
+     "methods": [
+      {
+       "name": "new",
+       "tparams": [],
+       "params": [
+        {
+         "name": "pattern",
+         "type": "str"
+        }
+       ],
+       "returns": "Regex",
+       "receiver": null,
+       "doc": "compiles `pattern`; check `ok()` before using it (a failed pattern matches nothing)",
+       "fallible": false
+      },
+      {
+       "name": "ok",
+       "tparams": [],
+       "params": [],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Tells whether the pattern compiled.",
+       "fallible": false,
+       "returns_doc": "`true` when it can be used"
+      },
+      {
+       "name": "message",
+       "tparams": [],
+       "params": [],
+       "returns": "str",
+       "receiver": "self",
+       "doc": "why compiling failed (\"\" when it worked)",
+       "fallible": false
+      },
+      {
+       "name": "group_count",
+       "tparams": [],
+       "params": [],
+       "returns": "i64",
+       "receiver": "self",
+       "doc": "number of capture groups, not counting the whole match",
+       "fallible": false
+      },
+      {
+       "name": "is_match",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to search"
+        }
+       ],
+       "returns": "bool",
+       "receiver": "self",
+       "doc": "Checks whether the pattern matches anywhere.",
+       "fallible": false,
+       "returns_doc": "`true` if it does"
+      },
+      {
+       "name": "find",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to search"
+        }
+       ],
+       "returns": "Match",
+       "receiver": "self",
+       "doc": "Finds the first (leftmost) match.",
+       "fallible": false,
+       "returns_doc": "a `Match`; check `found`"
+      },
+      {
+       "name": "find_from",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str"
+        },
+        {
+         "name": "from",
+         "type": "i64"
+        }
+       ],
+       "returns": "Match",
+       "receiver": "self",
+       "doc": "the first match starting at or after byte `from`",
+       "fallible": false
+      },
+      {
+       "name": "captures",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to search"
+        }
+       ],
+       "returns": "Captures",
+       "receiver": "self",
+       "doc": "Finds the first match with its groups.",
+       "fallible": false,
+       "returns_doc": "a `Captures`; check `found`"
+      },
+      {
+       "name": "captures_from",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text to search"
+        },
+        {
+         "name": "from",
+         "type": "i64",
+         "doc": "the first byte to consider"
+        }
+       ],
+       "returns": "Captures",
+       "receiver": "self",
+       "doc": "Like `captures`, but starts looking at byte `from`.",
+       "fallible": false,
+       "returns_doc": "a `Captures`; check `found`"
+      },
+      {
+       "name": "find_all",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str"
+        }
+       ],
+       "returns": "List<Match>",
+       "receiver": "self",
+       "doc": "every non-overlapping match, left to right (an empty match advances by one byte)",
+       "fallible": false
+      },
+      {
+       "name": "expand",
+       "tparams": [],
+       "params": [
+        {
+         "name": "out",
+         "type": "*String"
+        },
+        {
+         "name": "s",
+         "type": "str"
+        },
+        {
+         "name": "rep",
+         "type": "str"
+        },
+        {
+         "name": "sr",
+         "type": "*Searcher"
+        }
+       ],
+       "returns": "",
+       "receiver": "self",
+       "doc": "`$1`, `${name}` and `$$` in `rep` are expanded from the match",
+       "fallible": false
+      },
+      {
+       "name": "replace_impl",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text"
+        },
+        {
+         "name": "rep",
+         "type": "str",
+         "doc": "the replacement"
+        },
+        {
+         "name": "all",
+         "type": "bool",
+         "doc": "replace every match"
+        }
+       ],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Shared work of `replace` and `replace_all`.",
+       "fallible": false,
+       "returns_doc": "the new string"
+      },
+      {
+       "name": "replace",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text"
+        },
+        {
+         "name": "rep",
+         "type": "str",
+         "doc": "the replacement"
+        }
+       ],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Replaces the first match; `$1`, `${name}` and `$$` work in `rep`.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "replace_all",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str",
+         "doc": "the text"
+        },
+        {
+         "name": "rep",
+         "type": "str",
+         "doc": "the replacement"
+        }
+       ],
+       "returns": "String",
+       "receiver": "self",
+       "doc": "Replaces every match; `$1`, `${name}` and `$$` work in `rep`.",
+       "fallible": false,
+       "returns_doc": "a new `String`"
+      },
+      {
+       "name": "split",
+       "tparams": [],
+       "params": [
+        {
+         "name": "s",
+         "type": "str"
+        }
+       ],
+       "returns": "List<String>",
+       "receiver": "self",
+       "doc": "the pieces of `s` between matches",
+       "fallible": false
+      }
+     ]
+    }
+   ],
+   "traits": [],
+   "functions": [
+    {
+     "name": "matches",
+     "tparams": [],
+     "params": [
+      {
+       "name": "pattern",
+       "type": "str"
+      },
+      {
+       "name": "s",
+       "type": "str"
+      }
+     ],
+     "returns": "bool",
+     "receiver": null,
+     "doc": "`pattern` matches somewhere in `s` (false when the pattern is invalid)",
+     "fallible": false
+    },
+    {
+     "name": "escape",
+     "tparams": [],
+     "params": [
+      {
+       "name": "s",
+       "type": "str"
+      }
+     ],
+     "returns": "String",
+     "receiver": null,
+     "doc": "`s` with every regex metacharacter escaped, so it matches itself literally",
+     "fallible": false
+    }
+   ]
+  },
+  {
    "id": "set",
    "name": "set",
    "import": "std.set",
    "summary": "a set of strings, built on std.map.",
    "description": "",
-   "example": "import std.set;\nlet mut seen = set.HashSet.new();\nif seen.add(\"a\") { println(\"new\"); }     // add says whether the value was new\nprintln(seen.has(\"a\"));\nfor k in seen.iter() { println(*k); }",
+   "example": "import std.set;\nlet mut seen = set.HashSet.new();\nif seen.add(\"a\") { println(\"new\"); }     // add says whether the value was new\nprintln(seen.has(\"a\"));\nlet all = seen.to_list();                 // copies of the members\nprintln(all.len);",
    "errors": [],
    "consts": [],
    "types": [

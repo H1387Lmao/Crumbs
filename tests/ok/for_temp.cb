@@ -1,0 +1,18 @@
+fn words(s: str) -> List<String> {
+    let mut out: List<String> = List.new();
+    for w in s.split(" ") { if w.len > 0 { out.push(String.from(*w)); } }
+    return out;
+}
+
+fn make() -> List<i64> {
+    let mut l: List<i64> = List.new();
+    l.push(1); l.push(2); l.push(3);
+    return l;
+}
+
+fn main() {
+    println(words("a  bc d").len);
+    let mut t = 0 as i64;
+    for x in make() { t += *x; }          // the list built here lives as long as the loop
+    println(t);
+}

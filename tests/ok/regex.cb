@@ -1,0 +1,49 @@
+import std.regex;
+
+fn show(re: *regex.Regex, s: str) {
+    let m = re.find(s);
+    if m.found { println("[{m.text(s)}] {m.start}..{m.end}"); } else { println("no match"); }
+}
+
+fn main() {
+    let mut re = regex.Regex.new("(?<year>\\d{4})-(\\d{2})-(\\d{2})");
+    let text = "released 2024-05-17, patched 2024-06-02";
+    show(&re, text);
+    let c = re.captures(text);
+    println("{c.get(text, 2)} {c.named(text, \"year\")} {c.len()}");
+    println(re.replace_all(text, "$3/$2/${year}"));
+    println(re.replace(text, "<$0>"));
+    println(re.find_all(text).len);
+
+    let mut a = regex.Regex.new("a+?b|x*");
+    show(&a, "caab");
+    let b = regex.Regex.new("^(foo|bar)+$");
+    println(b.is_match("foobarfoo"));
+    println(b.is_match("foobarbaz"));
+    let i = regex.Regex.new("(?i)hello\\s+WORLD");
+    println(i.is_match("Hello   world"));
+    let w = regex.Regex.new("\\bcat\\b");
+    println(w.is_match("a cat sat"));
+    println(w.is_match("concatenate"));
+    let k = regex.Regex.new("[^aeiou\\s]+");
+    println(k.find_all("hello big world").len);
+    let parts = regex.Regex.new("[,;] *").split("a, b;c,  d");
+    println(parts.len);
+    println(*parts.at(3));
+    // no exponential blow-up
+    let evil = regex.Regex.new("(a*)*b");
+    println(evil.is_match("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac"));
+    let e = regex.Regex.new("(a|b");
+    println(e.ok());
+    println(e.message());
+    println(regex.matches("a.c", "xabcx"));
+    println(regex.escape("1+1=2?"));
+    println(regex.Regex.new("a{2,3}").find("caaaat").len());
+    println(regex.Regex.new("x*").replace_all("abc", "-"));
+    for p in ["*a", "[a-", "a{,3}", "\\q", "a**", "(?=x)", "z{3,2}", "^*"] {
+        let r = regex.Regex.new(p);
+        println("{p} -> {r.ok()} {r.message()}");
+    }
+    let lit = regex.Regex.new("a{,3}");
+    println(lit.is_match("a{,3}"));
+}

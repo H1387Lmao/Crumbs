@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#ifdef CB_GC
+#if defined(CB_GC) || defined(CB_PYEXT)
 #include <setjmp.h>
 #endif
 #endif
@@ -37,6 +37,28 @@ CB_COLD static void cb_panic(const char *loc, const char *msg) { (void)loc; (voi
 CB_COLD static void cb_panic_str(const char *loc, cb_str m) { (void)loc; (void)m; __builtin_trap(); }
 CB_COLD static void cb_panic_idx(const char *loc, int64_t i, int64_t n) { (void)loc; (void)i; (void)n; __builtin_trap(); }
 CB_COLD static void cb_panic_rng(const char *loc, int64_t lo, int64_t hi, int64_t n) { (void)loc; (void)lo; (void)hi; (void)n; __builtin_trap(); }
+#elif defined(CB_PYEXT)
+/* a Python extension: a panic unwinds to the wrapper that called into Crumbs, which raises `Panic` (destructors are skipped) */
+static __thread jmp_buf *cb_py_jmp;
+static __thread char cb_py_msg[512];
+CB_COLD static void cb_py_unwind(const char *loc) {
+    size_t n = strlen(cb_py_msg);
+    snprintf(cb_py_msg + n, sizeof cb_py_msg - n, " (at %s)", loc);
+    if (cb_py_jmp) longjmp(*cb_py_jmp, 1);
+    fprintf(stderr, "panic: %s\n", cb_py_msg);
+    exit(101);
+}
+CB_COLD static void cb_panic(const char *loc, const char *msg) { snprintf(cb_py_msg, sizeof cb_py_msg, "%s", msg); cb_py_unwind(loc); }
+CB_COLD static void cb_panic_str(const char *loc, cb_str m) { snprintf(cb_py_msg, sizeof cb_py_msg, "%.*s", (int)m.len, (const char *)m.ptr); cb_py_unwind(loc); }
+CB_COLD static void cb_panic_idx(const char *loc, int64_t i, int64_t n) {
+    snprintf(cb_py_msg, sizeof cb_py_msg, "index out of bounds: the length is %lld but the index is %lld", (long long)n, (long long)i);
+    cb_py_unwind(loc);
+}
+CB_COLD static void cb_panic_rng(const char *loc, int64_t lo, int64_t hi, int64_t n) {
+    if (lo > hi) snprintf(cb_py_msg, sizeof cb_py_msg, "slice start %lld is greater than end %lld", (long long)lo, (long long)hi);
+    else snprintf(cb_py_msg, sizeof cb_py_msg, "slice range %lld..%lld is out of bounds for length %lld", (long long)lo, (long long)hi, (long long)n);
+    cb_py_unwind(loc);
+}
 #else
 CB_COLD static void cb_panic(const char *loc, const char *msg) {
     fflush(stdout);

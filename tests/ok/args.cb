@@ -1,0 +1,52 @@
+import std.args;
+
+fn argv(line: str) -> List<String> {
+    let mut l: List<String> = List.new();
+    l.push(String.from("tool"));
+    let words = line.split(" ");
+    for i in 0..words.len { if words.get(i).len > 0 { l.push(String.from(words.get(i))); } }
+    return l;
+}
+
+fn app() -> args.Command {
+    let mut a = args.Command.new("tool", "demo");
+    a.version("0.1");
+    a.flag("verbose", 'v', "talk more");
+    a.option("config", 'c', "FILE", "config");
+    let mut b = args.Command.new("build", "build it");
+    b.option_default("jobs", 'j', "N", "jobs", "4");
+    b.option_required("out", 'o', "DIR", "output");
+    b.positional("target", "target", true);
+    b.positional_rest("more", "more");
+    a.subcommand(b);
+    return a;
+}
+
+fn main() {
+    let a = app();
+    let x = argv("-vv --config=c.toml build -j 8 -oout app p q");
+    let m = a.parse(x.view());
+    println(m.ok());
+    println(m.count("verbose"));
+    println(m.value("config"));
+    println(m.subcommand());
+    let s = m.sub();
+    println(s.int("jobs", 0));
+    println(s.value("out"));
+    println(s.value("target"));
+    println(s.values("more").len);
+
+    let y = argv("build app");
+    println(a.parse(y.view()).message());
+    let z = argv("build -o d");
+    println(a.parse(z.view()).message());
+    let w = argv("bild");
+    println(a.parse(w.view()).message());
+    let h = argv("build --help");
+    let hm = a.parse(h.view());
+    println(hm.wants_help());
+    let d = argv("build -- -o app");
+    println(a.parse(d.view()).message());
+    let e = argv("--nope");
+    println(a.parse(e.view()).message());
+}

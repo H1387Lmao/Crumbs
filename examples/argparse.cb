@@ -1,0 +1,31 @@
+import std.args;
+import std.env;
+
+fn main() {
+    let mut app = args.Command.new("tool", "does useful things");
+    app.version("1.2.0");
+    app.flag("verbose", 'v', "talk more");
+    app.option("config", 'c', "FILE", "configuration file");
+
+    let mut build = args.Command.new("build", "compile the project");
+    build.option_default("jobs", 'j', "N", "parallel jobs", "4");
+    build.positional("target", "what to build", true);
+    build.positional_rest("extra", "more targets");
+    app.subcommand(build);
+
+    let mut clean = args.Command.new("clean", "remove build output");
+    clean.flag("all", 'a', "also remove caches");
+    app.subcommand(clean);
+
+    let argv = env.args();
+    let m = app.parse_or_exit(argv.view());
+    println("verbosity {m.count(\"verbose\")}, config '{m.value(\"config\")}'");
+    if m.subcommand() == "build" {
+        let b = m.sub();
+        println("build {b.value(\"target\")} with {b.int(\"jobs\", 1)} jobs, extra {b.values(\"extra\").len}");
+    } else if m.subcommand() == "clean" {
+        println("clean all={m.sub().flag(\"all\")}");
+    } else {
+        println("no command");
+    }
+}
