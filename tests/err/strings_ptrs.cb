@@ -7,7 +7,7 @@ fn main() {
     let t = s + 1;                           // ERROR: mismatched types in binary operation
     let u = s - s;                           // ERROR: cannot apply `-` to type `String`
     let f = 1.5 as *i32;                     // ERROR: cannot cast
-    let g: String = "lit";                   // ERROR: mismatched types
+    let g: String = 5;                       // ERROR: mismatched types
     let h = s as str;                        // ERROR: cannot cast `String` to `str`
     string_clear(s);                         // ERROR: `string_clear` expects `*String`
     free(5);                                 // ERROR: `free` expects a slice or a `String`

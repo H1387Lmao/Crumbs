@@ -1576,6 +1576,24 @@ class Checker:
         if exp == STR and t == STRING:
             e.coerce = True
             return exp
+        if exp == STRING and t == STR:                       # a str becomes an owned String (a copy is allocated)
+            e.to_string = True
+            e.owned = True
+            return exp
+        if exp.kind == "slice" and t.kind == "arr" and same(t.inner, exp.inner):     # an array lends itself as a slice
+            if not self.is_place(e):
+                self.d.error(e.span, "cannot turn a temporary array into a slice", label="the array would be gone after the call",
+                             help="store it in a variable first")
+                return POISON
+            e.arr_slice = (t.n, exp)
+            return exp
+        if exp.kind == "ptr" and t.kind == "slice" and same(t.inner, exp.inner) and not (exp.inner == VOID):   # C-style decay to the first element
+            self.consume(e)
+            e.slice_decay = True
+            return exp
+        if exp.is_int and (t.kind == "enum" or t == BOOL):   # enums and bools are numbers underneath
+            e.int_cast = exp
+            return exp
         if t.is_numeric and exp.is_numeric and t != exp:
             return exp if self.implicit_conv(e, t, exp) else POISON
         if self.ro_violation(e, t, exp):
@@ -1591,6 +1609,11 @@ class Checker:
             return POISON
         self.consume(e)
         return t
+
+    def extra_conv(self, t, exp):
+        """The implicit conversions beyond numbers, optionals and pointers (see README): str -> String, [N]T -> []T, []T -> *T, enum/bool -> int."""
+        return ((exp == STRING and t == STR) or (exp.kind == "slice" and t.kind == "arr") or (exp.kind == "ptr" and t.kind == "slice")
+                or (exp.is_int and (t.kind == "enum" or t == BOOL)))
 
     def untyped(self, e):
         k = e.kind
@@ -2830,10 +2853,23 @@ class Checker:
                 return POISON
             return exp
         first = self.check(e.elems[0], elem_exp)
+        tys = [first]
         for x in e.elems[1:]:
             t = self.check(x, first if not first.poison else elem_exp)
-            if not same(t, first):
+            tys.append(t)
+            if not same(t, first) and not (elem_exp is None and t.is_numeric and first.is_numeric):
                 self.mismatch(x, first, t, "array elements must all have the same type")
+        if elem_exp is None and not first.poison and all(t.is_numeric for t in tys) and any(t != first for t in tys):
+            ct = tys[0]                    # mixed numbers: every element converts to the type that holds them all
+            for t in tys[1:]:
+                ct = self.common_type(ct, t) if ct is not None else None
+            if ct is None:
+                self.d.error(e.span, "array elements have numeric types with no common type", help="convert some elements with `as`")
+                return POISON
+            for x, t in zip(e.elems, tys):
+                if t != ct and not self.apply_conv(x, t, ct):
+                    return POISON
+            first = ct
         for x in e.elems:
             self.consume(x)
         return POISON if first.poison else arr(first, len(e.elems))
@@ -3523,7 +3559,9 @@ class Checker:
             elif self.ro_violation(s.init, t, ann):
                 pass
             elif self.ptr_ok(ann, t):
-                pass
+                self.consume(s.init)
+            elif self.extra_conv(t, ann):
+                self.coerce(s.init, t, ann)
             elif not same(t, ann):
                 self.mismatch(s.init, ann, t)
             else:

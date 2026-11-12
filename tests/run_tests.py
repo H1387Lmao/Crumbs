@@ -170,8 +170,8 @@ def test_selfhost(stage, tool_cb, py_tool, patterns, skip_async=False, extra=())
         if r.returncode != 0:
             return report(f"selfhost/{stage}", False, r.stdout + r.stderr)
         files = sorted(f for pat in patterns for f in glob.glob(os.path.join(HERE, "..", pat)))
-        if skip_async:   # the self-hosted parser does not desugar `async fn`
-            files = [f for f in files if not any(w in open(f, encoding="utf-8", errors="replace").read() for w in ("async fn", "import std.async"))]
+        if skip_async:   # the self-hosted parser does not desugar `async fn`; `NOSELFHOST` files use features it lacks (implicit conversions)
+            files = [f for f in files if not any(w in open(f, encoding="utf-8", errors="replace").read() for w in ("async fn", "import std.async", "NOSELFHOST"))]
         bad = []
         for f in files:
             a = subprocess.run([sys.executable, os.path.join(HERE, "..", "tools", py_tool), f, *extra], capture_output=True, text=True)

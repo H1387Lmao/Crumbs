@@ -270,6 +270,19 @@ spelling of `(*p).x` / `(*p).f()` and means exactly that.
 `io.get_line() -> String!` (a line ends at `\n`, `\r`, `\r\n` or Ctrl+D; `io.Eof` only if nothing was read),
 `io.flush()`.
 
+**Other implicit conversions** (arguments, returns, annotated `let`, `=`, struct fields):
+
+| from | to | notes |
+|---|---|---|
+| `String` | `str` | a view |
+| `str` | `String` | copies (allocates), so `let s: String = "abc"` and `takes_string("abc")` work |
+| `[N]T` (a variable) | `[]T` | a view of the array; a temporary array must be stored first |
+| `[]T` | `*T` | C-style decay to the first element (under reference counting the pointer holds its own count) |
+| `*T` | `*void`, `*const T` | as in C; never the other way round |
+| `T` | `T?`, `T!` | `Some(v)` / success |
+| enum, `bool` | any integer type | the variant's number, `0` / `1`; integers never turn into enums or bools |
+| numbers in one array literal | the common type | `[x_i64, y_u8, 7]` is `[3]i64` |
+
 **Numeric conversions.** Numbers convert implicitly where that is safe, with guard rails where it is not.
 Integer literals adapt to their context (`let x: u8 = 200`); `as` is always available for an explicit (truncating) cast.
 

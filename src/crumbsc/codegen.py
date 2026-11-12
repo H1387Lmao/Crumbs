@@ -256,6 +256,15 @@ class CodeGen:
             c = self.try_wrap(c, e.eu_ty)
         if getattr(e, "coerce", False):       # String -> str view
             c = f"cb_string_view({c})"
+        if getattr(e, "to_string", False):    # str -> String: copy
+            c = f"cb_string_from({c}, {self.loc(e.span)})"
+        if getattr(e, "arr_slice", None) is not None:      # [N]T -> []T
+            n, st = e.arr_slice
+            c = f"(({self.ctype(st)}){{ ({self.ctype(st.inner)} *)({c}).v, {n} }})"
+        if getattr(e, "slice_decay", False):  # []T -> *T
+            c = f"(({c}).ptr)"
+        if getattr(e, "int_cast", None) is not None:       # enum / bool -> integer
+            c = f"(({self.ctype(e.int_cast)})({c}))"
         wrap = getattr(e, "wrap_opt", None)
         if wrap is not None:                  # a plain value where an optional is expected
             c = f"(({self.ctype(wrap)}){{1, {c}}})"
