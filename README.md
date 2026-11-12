@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/6%2C000%2B-Lines%20of%20code-white?style=flat&labelColor=black&logo=github" alt="6,000+ lines of code" />
-  <img src="https://img.shields.io/badge/Written%20in-Python-yellow?style=flat&labelColor=blue&logo=python&logoColor=white&logoSize=auto" alt="Written in Python" />
+  <img src="https://img.shields.io/badge/Self--hosted-Crumbs-yellow?style=flat&labelColor=blue&logo=python&logoColor=white&logoSize=auto" alt="Self-hosted" />
   <a href="https://h1387lmao.github.io/Crumbs">
     <img src="https://img.shields.io/badge/View-Documentation-e6820e?style=for-the-badge&labelColor=white&logo=html5" alt="Badge">
   </a>
@@ -12,9 +12,19 @@
 
 A small, statically typed, C-style toy programming language that compiles to C.
 
-Crumbs is implemented in Python, with **8,000+ lines of code**, including approximately
-**6,500+ lines of Python**. It compiles to a single C source file, which is then built
-with GCC or Clang using `-O2`.
+Crumbs is **self-hosted**: the main compiler is written in Crumbs itself (`selfhost/`, about 14,000 lines).
+It compiles to a single C source file, which is then built with GCC or Clang using `-O2`.
+
+`crumbs.py` is a thin launcher. On first use it builds the compiler from the committed C seed
+`bootstrap/crumbsc.c` with plain `gcc` (cached in `.crumbs-cache/`) and runs it, so no Python
+implementation is involved in compiling your programs.
+
+> **The Python implementation (`src/crumbsc/`) is deprecated.** It stays only as a legacy fallback and a parity oracle for the tests.
+> The launcher hands a program to it automatically when it needs something the self-hosted compiler does not implement yet:
+> `async`/`await`, `link "..."` directives, `-l/-L/--link`, `-I`, `--entry`, `--strict-casts`, and `pyext` (Python extensions).
+> Force it with `python3 crumbs.py --legacy ...` or `CRUMBS_LEGACY=1`.
+> After changing anything in `selfhost/`, refresh the seed: `python3 crumbs.py --legacy emit selfhost/crumbsc.cb --no-warn > bootstrap/crumbsc.c`
+> (the test suite checks that the seed is a fixed point).
 
 ```
 python3 crumbs.py run   examples/hello.cb        # compile + run

@@ -21,6 +21,10 @@ pub struct Cg {
     gc_interval: i64,
     polls: bool,
     nostd: bool,
+    rc: bool,                  // reference counting (the default)
+    retain_done: map.HashMap<i64>,
+    retain_n: i64,
+    cur_std: bool,             // generating a function of the standard library
     overflow_panic: bool,
     bufs: List<List<String>>,
     ind: i64,
@@ -50,9 +54,9 @@ pub struct Cg {
     reg_names: List<String>,
 }
 
-pub fn new_cg(ck: *sema.Checker, gc: bool, nostd: bool, overflow_panic: bool, gc_mode: str, gc_interval: i64) -> Cg {
+pub fn new_cg(ck: *sema.Checker, gc: bool, nostd: bool, overflow_panic: bool, gc_mode: str, gc_interval: i64, rc: bool) -> Cg {
     let g = gc && !nostd;
-    let mut cg = Cg { ck: ck, gc: g, gc_mode: String.from(g ? gc_mode : "auto"), gc_interval: gc_interval, polls: false, nostd: nostd,
+    let mut cg = Cg { ck: ck, gc: g, gc_mode: String.from(g ? gc_mode : "auto"), gc_interval: gc_interval, polls: false, nostd: nostd, rc: rc && !g && !nostd, retain_done: map.HashMap.new(), retain_n: 0, cur_std: false,
         overflow_panic: overflow_panic, bufs: List.new(), ind: 1, n: 0, reg: map.HashMap.new(), reg_n: 0, arrs: List.new(), slices: List.new(),
         eus: List.new(), opts: List.new(), fnts: List.new(), dbg_done: map.HashMap.new(), dbg_n: 0, dbg_todo: List.new(),
         glue_done: map.HashMap.new(), glue_n: 0, glue_todo: List.new(), cur_ret: types.VOID, cur_file: String.empty(),
@@ -402,8 +406,9 @@ pub fn ex(cg: *Cg, e: *ast.Node) -> String {
     }
     let k: str = e.kind;
     let et = ety(e);
+    if flag(e, "rc_copy") && cg.rc { c = rc_retain(cg, c, et); }     // a copy of a slice holds its own count
     if cg.has_st && (k == "Call" || k == "StructLit" || k == "ArrayLit" || k == "Binary" || k == "Try" || k == "Catch" || k == "Ternary")
-        && !flag(e, "owned") && et >= 0 && et != types.POISON && tyk(cg, et) != types.K_EU && sema.has_glue(cg.ck, et) {
+        && !flag(e, "owned") && !flag(e, "rc_copy") && et >= 0 && et != types.POISON && tyk(cg, et) != types.K_EU && sema.has_glue(cg.ck, et) {
         let name = tmp(cg, "cb_tmp");
         let d = DEnt { kind: 0, cname: String.from(name), ty: et };
         let ts = cg.st_stack.len - 1;
@@ -413,6 +418,16 @@ pub fn ex(cg: *Cg, e: *ast.Node) -> String {
     }
     if flag(e, "auto_try") { c = try_wrap(cg, c, e.get("eu_ty").i); }
     if flag(e, "coerce") { c = format("cb_string_view({c})"); }
+    if flag(e, "to_string") { let l = loc(cg, e.span); c = format("cb_string_from({c}, {l})"); }                 // str -> String: copy
+    if present(e, "arr_slice_ty") {                                                                              // [N]T -> []T
+        let st = e.get("arr_slice_ty").i;
+        let sct = ctype(cg, st);
+        let ict = ctype(cg, inner_of(cg, st));
+        let n = e.get("arr_slice_n").i;
+        c = format("(({sct}){{ ({ict} *)({c}).v, {n} }})");
+    }
+    if flag(e, "slice_decay") { c = format("(({c}).ptr)"); }                                                    // []T -> *T
+    if present(e, "int_cast") { let ict = ctype(cg, e.get("int_cast").i); c = format("(({ict})({c}))"); }          // enum / bool -> integer
     if present(e, "wrap_opt") {
         let wt = ctype(cg, e.get("wrap_opt").i);
         c = format("(({wt}){{1, {c}}})");
@@ -644,6 +659,10 @@ fn g_closure(cg: *Cg, e: *ast.Node) -> String {
         let proxy = e.get("captures").items.at(i).items.at(1).i;
         let oc = lcname(cg, outer);
         if cg.ck.locals.at(proxy).byref { parts.push(format("{en}->c{i} = &{oc};")); }
+        else if cg.ck.locals.at(outer).glue && cg.rc && !sema.has_glue_l(cg.ck, cg.ck.locals.at(outer).ty, false) {
+            let r = rc_retain(cg, oc, cg.ck.locals.at(outer).ty);
+            parts.push(format("{en}->c{i} = {r};"));          // the closure holds its own count
+        }
         else if cg.ck.locals.at(outer).glue { parts.push(format("{en}->c{i} = ({oc}__live = 0, {oc});")); }
         else { parts.push(format("{en}->c{i} = {oc};")); }
     }
@@ -924,7 +943,12 @@ fn g_arrayrepeat(cg: *Cg, e: *ast.Node) -> String {
     let ict = ctype(cg, inner_of(cg, ety(e)));
     let x = ex(cg, el);
     let n = e.get("n").i;
-    return format("({{ {ict} {t}e = {x}; {ct} {t}; for (int64_t {i} = 0; {i} < {n}; {i}++) {t}.v[{i}] = {t}e; {t}; }})");
+    let mut cp = format("{t}e");
+    if cg.rc && sema.rc_copyable(cg.ck, inner_of(cg, ety(e))) {        // the first element takes the count, the others retain
+        let r = rc_retain(cg, format("{t}e"), inner_of(cg, ety(e)));
+        cp = format("({i} ? {r} : {t}e)");
+    }
+    return format("({{ {ict} {t}e = {x}; {ct} {t}; for (int64_t {i} = 0; {i} < {n}; {i}++) {t}.v[{i}] = {cp}; {t}; }})");
 }
 
 fn el_is_zero(el: *ast.Node) -> bool {
@@ -1064,7 +1088,13 @@ fn builtin(cg: *Cg, e: *ast.Node, b: str) -> String {
         let x = ex(cg, arg(e, 0));
         let ct = ctype(cg, ety(e));
         let l = loc(cg, e.span);
-        return format("({{ int64_t {n} = (int64_t)({x}); ({ct}){{ ({et} *)cb_alloc({n}, (int64_t)sizeof({et}), {atomic}, {l}), {n} }}; }})");
+        let raw = cg.rc && (cg.cur_std || (tyk(cg, elem) == types.K_STRUCT && cg.ck.syms.at(sym_of(cg, elem)).name.ends_with("__Args")));   // std blocks and async frames are managed by hand
+        if cg.rc && !raw && sema.has_glue(cg.ck, elem) {          // the elements own memory: destroy them with the block
+            let g = glue_fn(cg, elem);
+            return format("({{ int64_t {n} = (int64_t)({x}); ({ct}){{ ({et} *)cb_alloc_d({n}, (int64_t)sizeof({et}), {atomic}, {l}, (void (*)(void *)){g}), {n} }}; }})");
+        }
+        let fnn = raw ? "cb_alloc_raw" : "cb_alloc";
+        return format("({{ int64_t {n} = (int64_t)({x}); ({ct}){{ ({et} *){fnn}({n}, (int64_t)sizeof({et}), {atomic}, {l}), {n} }}; }})");
     }
     if b == "alloc_in" {
         let n = tmp(cg, "cb_n");
@@ -1080,6 +1110,14 @@ fn builtin(cg: *Cg, e: *ast.Node, b: str) -> String {
         let a = arg(e, 0);
         let x = ex(cg, a);
         if ety(a) == types.STRING { return format("cb_string_free({x})"); }
+        if cg.rc {
+            if is_place(a) {
+                let pp = tmp(cg, "cb_fp");      // frees the reference this place holds, and clears the place so it is not released twice
+                let x2 = ex(cg, a);
+                return format("({{ __typeof__({x}) *{pp} = &({x2}); cb_rc_free_ptr({pp}->ptr); {pp}->ptr = 0; {pp}->len = 0; (void)0; }})");
+            }
+            return format("cb_rc_free_ptr(({x}).ptr)");
+        }
         return format("cb_mem_free(({x}).ptr)");
     }
     if b == "cstr" { let x = sv(cg, arg(e, 0)); let l = loc(cg, e.span); return format("cb_cstr({x}, {l})"); }
@@ -1184,12 +1222,64 @@ fn glue_fn(cg: *Cg, t: i64) -> String {
     return format("cb_drop_{cg.glue_n}");
 }
 
-fn gen_glue(cg: *Cg, name: str, t: i64) -> String {
+// ---- reference counting: retaining a copy of a slice (or of a struct / array / optional made of them)
+fn rc_retain(cg: *Cg, c: str, t: i64) -> String {
+    let v = tmp(cg, "cb_rv");
+    let ct = ctype(cg, t);
+    if tyk(cg, t) == types.K_SLICE { return format("({{ {ct} {v} = {c}; cb_rc_retain((void *){v}.ptr); {v}; }})"); }
+    let f = retain_fn(cg, t);
+    return format("({{ {ct} {v} = {c}; {f}(&{v}); {v}; }})");
+}
+
+fn retain_fn(cg: *Cg, t: i64) -> String {
+    let key = key_of(cg, t);
+    let p = cg.retain_done.get(key);
+    if p != null { return format("cb_rcr_{*p}"); }
+    cg.retain_n += 1;
+    cg.retain_done.set(key, cg.retain_n);
+    cg.glue_todo.push(Todo { name: format("cb_rcr_{cg.retain_n}"), ty: t });
+    return format("cb_rcr_{cg.retain_n}");
+}
+
+fn gen_retain(cg: *Cg, name: str, t: i64) -> String {
     let ct = ctype(cg, t);
     let mut L: List<String> = List.new();
     L.push(format("static void {name}({ct} *p) {{"));
     let k = tyk(cg, t);
-    if t == types.STRING {
+    if k == types.K_SLICE {
+        L.push(String.from("    cb_rc_retain((void *)p->ptr);"));
+    } else if k == types.K_ARR {
+        let g = retain_fn(cg, inner_of(cg, t));
+        let n = cg.ck.types.tys.at(t).n;
+        L.push(format("    for (int64_t i = 0; i < {n}; i++) {g}(&p->v[i]);"));
+    } else if k == types.K_OPT {
+        let g = retain_fn(cg, inner_of(cg, t));
+        L.push(format("    if (p->has) {g}(&p->v);"));
+    } else {
+        let sy = sym_of(cg, t);
+        let nf = cg.ck.syms.at(sy).fields.len;
+        for i in 0..nf {
+            let ft = cg.ck.syms.at(sy).fields.at(i).ty;
+            if sema.has_glue(cg.ck, ft) {
+                let g = retain_fn(cg, ft);
+                let fl = fld(cg.ck.syms.at(sy).fields.at(i).name);
+                L.push(format("    {g}(&p->{fl});"));
+            }
+        }
+    }
+    L.push(String.from("}"));
+    return join_lines(&L, "\n");
+}
+
+fn gen_glue(cg: *Cg, name: str, t: i64) -> String {
+    if name.starts_with("cb_rcr_") { return gen_retain(cg, name, t); }
+    let ct = ctype(cg, t);
+    let mut L: List<String> = List.new();
+    L.push(format("static void {name}({ct} *p) {{"));
+    let k = tyk(cg, t);
+    if k == types.K_SLICE {
+        L.push(String.from("    cb_rc_release((void *)p->ptr);"));
+    } else if t == types.STRING {
         L.push(String.from("    cb_string_free(*p);"));
         L.push(String.from("    p->ptr = 0; p->len = 0; p->cap = 0;"));
     } else if k == types.K_ARR {
@@ -1208,7 +1298,7 @@ fn gen_glue(cg: *Cg, name: str, t: i64) -> String {
         let nf = cg.ck.syms.at(sy).fields.len;
         for i in 0..nf {
             let ft = cg.ck.syms.at(sy).fields.at(i).ty;
-            if sema.has_glue(cg.ck, ft) {
+            if sema.field_glue(cg.ck, sy, ft) {
                 let g = glue_fn(cg, ft);
                 let fl = fld(cg.ck.syms.at(sy).fields.at(i).name);
                 L.push(format("    {g}(&p->{fl});"));
@@ -1891,6 +1981,7 @@ fn fn_body(cg: *Cg, sid: i64) -> *ast.Node {
 
 fn gen_fn(cg: *Cg, sid: i64) -> String {
     cg.cur_ret = cg.ck.syms.at(sid).ret;
+    cg.cur_std = cg.ck.ld.mods.at(cg.ck.syms.at(sid).mod_idx).is_std;
     let mut fmod = cg.ck.syms.at(sid).mod_idx;
     if cg.ck.syms.at(sid).clo < 0 && cg.ck.nodes.at(cg.ck.syms.at(sid).node).has("src_mod") { fmod = cg.ck.nodes.at(cg.ck.syms.at(sid).node).get("src_mod").i; }
     cg.cur_file = String.from(cg.ck.ld.mods.at(fmod).shown);
@@ -1903,7 +1994,7 @@ fn gen_fn(cg: *Cg, sid: i64) -> String {
     cg.try_stack = List.new();
     poll(cg);
     let body = fn_body(cg, sid);
-    if !cg.gc { find_autofree(cg, body); }
+    if !cg.gc && !cg.rc { find_autofree(cg, body); }
     let cn = scname(cg, sid);
     let isclo = cg.ck.syms.at(sid).clo >= 0;
     if has_caps(cg, sid) { emit(cg, format("struct {cn}_env *cb_e = (struct {cn}_env *)cb_env;")); }
@@ -2066,7 +2157,8 @@ pub fn generate(cg: *Cg, src_name: str, runtime: str) -> String {
     let nf = fns.len;
     for i in 0..nf { chunks.set(scname(cg, *fns.at(i)), i); }
     for i in 0..glue.len {
-        let nm = after_prefix(*glue.at(i), "cb_drop_");
+        let mut nm = after_prefix(*glue.at(i), "cb_drop_");
+        if nm.len == 0 { nm = after_prefix(*glue.at(i), "cb_rcr_"); }
         if nm.len > 0 { chunks.set(nm, nf + i); }
     }
     let mut keep: List<bool> = List.new();
@@ -2159,6 +2251,7 @@ pub fn generate(cg: *Cg, src_name: str, runtime: str) -> String {
         if cg.gc_mode == "manual" { L.push(String.from("#define CB_GC_MANUAL 1")); }
         if cg.gc_mode == "thread" { L.push(String.from("#define CB_GC_THREAD 1")); L.push(format("#define CB_GC_INTERVAL_MS {cg.gc_interval}")); }
     }
+    if cg.rc { L.push(String.from("#define CB_RC 1")); }
     if cg.nostd { L.push(String.from("#define CB_NOSTD 1")); }
     if cg.overflow_panic { L.push(String.from("#define CB_OVERFLOW_PANIC 1")); }
     for i in 0..defines.len { L.push(String.from(*defines.at(i))); }

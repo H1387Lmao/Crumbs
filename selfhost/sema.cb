@@ -147,6 +147,8 @@ pub struct Checker {
     reinit_col: i64,
     glue: List<GlueEnt>,
     glue_busy: List<String>,
+    glue_nl: List<GlueEnt>,       // like `glue`, but ignoring the reference counts on slices
+    rc: bool,                     // reference counting is on (the default)
     strict: bool,
     entry_name: String,
     main_sym: i64,
@@ -160,7 +162,7 @@ pub struct Checker {
     try_stack: List<List<List<MovedEnt>>>,   // per enclosing `try { }`: the moved-sets at each point that can fail
 }
 
-pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
+pub fn new_checker(ld: *loader.Loader, nostd: bool, rc: bool) -> Checker {
     let mut ck = Checker {
         ld: ld, d: diag.new_diags(), nostd: nostd, nodes: List.new(), syms: List.new(), cmods: List.new(),
         errors: List.new(), fns: List.new(), structs: List.new(), enums: List.new(), consts: List.new(),
@@ -169,7 +171,7 @@ pub fn new_checker(ld: *loader.Loader, nostd: bool) -> Checker {
         types: types.new_arena(), tenv: List.new(), cur_mod: 0, inst_cache: map.HashMap.new(), n_inst: 0, pending: List.new(),
         nc: false, nc_mi: 0, nc_span: ast.span(0, 0, 1), nc_msg: String.empty(),
         locals: List.new(), scopes: List.new(), moved: List.new(), has_fn: false, fn_sym: -1, fn_ret: types.VOID, fn_names: List.new(),
-        fn_loops: 0, fn_rdepth: 0, loop_stack: List.new(), reinit_line: 0, reinit_col: 0, glue: List.new(), glue_busy: List.new(),
+        fn_loops: 0, fn_rdepth: 0, loop_stack: List.new(), reinit_line: 0, reinit_col: 0, glue: List.new(), glue_busy: List.new(), glue_nl: List.new(), rc: rc && !nostd,
         strict: false, entry_name: String.from("main"), opt_consumed: List.new(), impl_recs: List.new(), gc_mode: String.from("auto"), recv_wrap: false, clos: List.new(), bck: List.new(), try_stack: List.new(), main_sym: -1, entry_mod: ld.order.len > 0 ? *ld.order.at(ld.order.len - 1) : 0,
     };
     // move every module's items into the node arena; syms and later phases refer to them by index
@@ -2209,25 +2211,47 @@ pub fn drop_fn_of(ck: *Checker, sid: i64) -> i64 {
     return ck.syms.at(sid).tparams.len == 0 ? ck.syms.at(sid).drop_sym : -1;
 }
 
-pub fn has_glue(ck: *Checker, t: i64) -> bool {
+pub fn has_glue(ck: *Checker, t: i64) -> bool { return has_glue_l(ck, t, true); }
+
+// does dropping a value of type `t` run any destructor?  (`leaves = false` ignores the reference counts on slices, leaving only
+// what must be moved: Strings, closures, destructors)
+pub fn has_glue_l(ck: *Checker, t: i64, leaves: bool) -> bool {
     let k = tk(ck, t);
     if t == types.STRING { return true; }
-    if k == types.K_ARR || k == types.K_OPT { return has_glue(ck, ck.types.tys.at(t).inner); }
+    if ck.rc && leaves && k == types.K_SLICE { return true; }
+    if k == types.K_ARR || k == types.K_OPT { return has_glue_l(ck, ck.types.tys.at(t).inner, leaves); }
     if k == types.K_CLO { return true; }
     if k != types.K_STRUCT { return false; }
     let key = String.from(ck.types.tys.at(t).key);
-    for i in 0..ck.glue.len { if ck.glue.at(i).key == key { return ck.glue.at(i).v; } }
-    if has_name(&ck.glue_busy, key) { return false; }
-    ck.glue_busy.push(String.from(key));
+    let cache = leaves ? &ck.glue : &ck.glue_nl;
+    for i in 0..cache.len { if cache.at(i).key == key { return cache.at(i).v; } }
+    let busy = format("{key}|{leaves}");
+    if has_name(&ck.glue_busy, busy) { return false; }
+    ck.glue_busy.push(String.from(busy));
     let sid = ck.types.tys.at(t).sym;
     let mut r = drop_fn_of(ck, sid) >= 0;
     let nf = ck.syms.at(sid).fields.len;
-    for i in 0..nf { if !r && has_glue(ck, ck.syms.at(sid).fields.at(i).ty) { r = true; } }
+    for i in 0..nf {
+        if r { break; }
+        let ft = ck.syms.at(sid).fields.at(i).ty;
+        if leaves { if field_glue(ck, sid, ft) { r = true; } } else { if has_glue_l(ck, ft, false) { r = true; } }
+    }
     let mut keep: List<String> = List.new();
-    for i in 0..ck.glue_busy.len { if *ck.glue_busy.at(i) != key { keep.push(String.from(*ck.glue_busy.at(i))); } }
+    for i in 0..ck.glue_busy.len { if *ck.glue_busy.at(i) != busy { keep.push(String.from(*ck.glue_busy.at(i))); } }
     ck.glue_busy = keep;
-    ck.glue.push(GlueEnt { key: key, v: r });
+    if leaves { ck.glue.push(GlueEnt { key: key, v: r }); } else { ck.glue_nl.push(GlueEnt { key: key, v: r }); }
     return r;
+}
+
+// does field type `ft` of struct `sid` get destroyed with the struct?  A struct with a destructor manages its own slices
+pub fn field_glue(ck: *Checker, sid: i64, ft: i64) -> bool {
+    if ck.rc && drop_fn_of(ck, sid) >= 0 { return has_glue_l(ck, ft, false); }
+    return has_glue_l(ck, ft, true);
+}
+
+// reference counting: a type whose only glue is slice counts is copied freely (each copy retains)
+pub fn rc_copyable(ck: *Checker, t: i64) -> bool {
+    return ck.rc && has_glue_l(ck, t, true) && !has_glue_l(ck, t, false);
 }
 
 pub fn moved_at(l: *List<MovedEnt>, local: i64) -> i64 {
@@ -2259,10 +2283,22 @@ pub fn merge_moved(m0: *List<MovedEnt>, states: *List<List<MovedEnt>>) -> List<M
 }
 
 // `e` is used by value where ownership is taken: a variable is moved, anything else must be a temporary
-pub fn consume(ck: *Checker, e: *ast.Node) {
+pub fn consume(ck: *Checker, e: *ast.Node) { consume_mv(ck, e, false); }
+
+pub fn consume_mv(ck: *Checker, e: *ast.Node, mv: bool) {
     let t = ety(e);
-    if t == -2 || t == types.POISON || !has_glue(ck, t) || flag(e, "coerce") { return; }
+    if t == -2 || t == types.POISON || !has_glue(ck, t) || (flag(e, "coerce") && tk(ck, t) != types.K_SLICE) { return; }
     let k: str = e.kind;
+    if !mv && rc_copyable(ck, t) {
+        // a copy of a slice (or of a struct of them) retains it; fresh values pass their count on
+        let fresh = k == "Call" || k == "StructLit" || k == "ArrayLit" || k == "Binary" || k == "Try" || k == "Catch" || k == "Ternary";
+        if fresh && !(k == "Call" && e.has("builtin") && (e.str_of("builtin") == "slice_of" || e.str_of("builtin") == "from_cstr")) {
+            set_flag(e, "owned", true);
+        } else {
+            set_flag(e, "rc_copy", true);
+        }
+        return;
+    }
     if k == "Ident" && e.has("local") && e.get("local").tag == 12 {
         let loc = e.get("local").i;
         if ck.locals.at(loc).captured {
@@ -2568,6 +2604,12 @@ pub fn binary_conv(ck: *Checker, e: *ast.Node, lt: i64, rt: i64) -> i64 {
     return ct;
 }
 
+// the implicit conversions beyond numbers, optionals and pointers: str -> String, [N]T -> []T, []T -> *T, enum/bool -> int
+pub fn extra_conv(ck: *Checker, t: i64, exp: i64) -> bool {
+    return (exp == types.STRING && t == types.STR) || (tk(ck, exp) == types.K_SLICE && tk(ck, t) == types.K_ARR)
+        || (tk(ck, exp) == types.K_PTR && tk(ck, t) == types.K_SLICE) || (types.is_int(exp) && (tk(ck, t) == types.K_ENUM || t == types.BOOL));
+}
+
 // converts the checked expression `e` (of type `t`) implicitly to `exp`, or reports a mismatch
 pub fn coerce(ck: *Checker, e: *ast.Node, t: i64, exp: i64) -> i64 {
     set_nil(e, "conv");
@@ -2580,6 +2622,31 @@ pub fn coerce(ck: *Checker, e: *ast.Node, t: i64, exp: i64) -> i64 {
     }
     if exp == types.STR && t == types.STRING {
         set_flag(e, "coerce", true);
+        return exp;
+    }
+    if exp == types.STRING && t == types.STR {                 // a str becomes an owned String (a copy is allocated)
+        set_flag(e, "to_string", true);
+        set_flag(e, "owned", true);
+        return exp;
+    }
+    if tk(ck, exp) == types.K_SLICE && tk(ck, t) == types.K_ARR && types.same(&ck.types, ck.types.tys.at(t).inner, ck.types.tys.at(exp).inner) {
+        // an array lends itself as a slice
+        if !is_place(e) {
+            here(ck, e.span, "cannot turn a temporary array into a slice", "the array would be gone after the call", "store it in a variable first");
+            return types.POISON;
+        }
+        set_tyn(e, "arr_slice_ty", exp);
+        e.set("arr_slice_n", ast.v_int(ck.types.tys.at(t).n));
+        return exp;
+    }
+    if tk(ck, exp) == types.K_PTR && tk(ck, t) == types.K_SLICE && types.same(&ck.types, ck.types.tys.at(t).inner, ck.types.tys.at(exp).inner)
+        && ck.types.tys.at(exp).inner != types.VOID {
+        consume(ck, e);                                         // C-style decay to the first element
+        set_flag(e, "slice_decay", true);
+        return exp;
+    }
+    if types.is_int(exp) && (tk(ck, t) == types.K_ENUM || t == types.BOOL) {   // enums and bools are numbers underneath
+        set_tyn(e, "int_cast", exp);
         return exp;
     }
     if types.is_numeric(t) && types.is_numeric(exp) && t != exp {
@@ -3613,6 +3680,9 @@ pub fn ex_call_inner(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
     if ck.syms.at(sid).ret != types.VOID { sig.append(format(" -> {ty_str(ck, ck.syms.at(sid).ret)}")); }
     let mut ps = copy_ids(&ck.syms.at(sid).params);
     check_args(ck, e, &ps, format("function `{sn}`"), sig, ck.syms.at(sid).variadic);
+    if ck.rc && ck.syms.at(sid).is_extern {
+        for i in 0..e.get("args").items.len { set_flag(child(e.get("args"), i), "rc_copy", false); }      // C code does not release what it is given
+    }
     if was_method && flag(e, "method_recv") { sync_receiver(ck, e, wrapped); }
     return ck.syms.at(sid).ret;
 }
@@ -3872,7 +3942,7 @@ pub fn st_let(ck: *Checker, s: *ast.Node) {
     let init = s.node_of("init");
     let mut t = check(ck, init, ann, false);
     let is_alloc = init.kind == "Call" && init.has("builtin") && init.str_of("builtin") == "alloc" && t != types.POISON;
-    set_flag(s, "afree", is_alloc && !has_glue(ck, init.get("elem").i));
+    set_flag(s, "afree", is_alloc && !has_glue(ck, init.get("elem").i) && !ck.rc);
     if has_ann && ann == types.STR && t == types.STRING {
         set_flag(init, "coerce", true);
         t = types.STR;
@@ -3884,6 +3954,7 @@ pub fn st_let(ck: *Checker, s: *ast.Node) {
         else if types.is_numeric(ann) && types.is_numeric(t) && t != ann { apply_conv(ck, init, t, ann); }
         else if ro_violation(ck, init, t, ann) { }
         else if ptr_ok(ck, ann, t) { }
+        else if extra_conv(ck, t, ann) { coerce(ck, init, t, ann); }
         else if !types.same(&ck.types, t, ann) { mismatch(ck, init, ann, t, "mismatched types"); }
         else { consume(ck, init); }
         ty = ann;
@@ -3937,6 +4008,7 @@ pub fn loop_body(ck: *Checker, s: *ast.Node, mode: i64, vt: i64) {
         if var != "_" {
             let loc = declare_local(ck, var, vt, false, s.get("var_span").span, false);
             ck.locals.at(loc).used = true;
+            if ck.rc { ck.locals.at(loc).glue = false; }       // the loop variable borrows the element; the container still holds its count
             s.set("local", ast.v_tag(12, loc));
         } else { set_nil(s, "local"); }
         check_block(ck, s.node_of("body"), true);
@@ -4126,7 +4198,7 @@ pub fn st_for(ck: *Checker, s: *ast.Node) {
         if ot == types.POISON { vt = types.POISON; }
         else if tk(ck, ot) == types.K_ARR || tk(ck, ot) == types.K_SLICE {
             vt = ck.types.tys.at(ot).inner;
-            if has_glue(ck, vt) {
+            if has_glue(ck, vt) && !rc_copyable(ck, vt) {
                 here(ck, it.span, format("cannot iterate over `{ty_str(ck, ot)}` by value: `{ty_str(ck, vt)}` has a destructor"), "",
                      "iterate over indices (`for i in 0..xs.len`) and borrow with `&xs[i]`");
                 vt = types.POISON;
@@ -4912,6 +4984,9 @@ pub fn check_fn_body(ck: *Checker, sid: i64) {
         let p = ck.nodes.at(nid).get("params").items.at(i).node.at(0);
         let pl = declare_local(ck, p.str_of("name"), *ck.syms.at(sid).params.at(i), flag(p, "mut"), p.get("name_span").span, true);
         ck.syms.at(sid).param_locals.push(pl);
+        if ck.rc && (ck.syms.at(sid).is_drop || (ck.syms.at(sid).base >= 0 && ck.syms.at(ck.syms.at(sid).base).is_drop)) {
+            ck.locals.at(pl).glue = false;     // destructors are called on borrowed element addresses: no count held
+        }
     }
     let body = ck.nodes.at(nid).node_of("body");
     let n_err = ck.d.error_count();
@@ -5241,11 +5316,35 @@ pub fn ex_arraylit(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
         }
         return exp;
     }
-    let first = check(ck, child(e.get("elems"), 0), elem_exp, false);
+    let mut first = check(ck, child(e.get("elems"), 0), elem_exp, false);
+    let mut tys: List<i64> = List.new();
+    tys.push(first);
+    let mut mixed = false;
     for i in 1..n {
         let x = child(e.get("elems"), i);
         let t = check(ck, x, first != types.POISON ? first : elem_exp, false);
-        if !types.same(&ck.types, t, first) { mismatch(ck, x, first, t, "array elements must all have the same type"); }
+        tys.push(t);
+        if t != first && types.is_numeric(t) && types.is_numeric(first) { mixed = true; }
+        if !types.same(&ck.types, t, first) && !(elem_exp < 0 && types.is_numeric(t) && types.is_numeric(first)) {
+            mismatch(ck, x, first, t, "array elements must all have the same type");
+        }
+    }
+    if elem_exp < 0 && first != types.POISON && mixed {
+        let mut all_num = true;
+        for i in 0..n { if !types.is_numeric(*tys.at(i)) { all_num = false; } }
+        if all_num {
+            // mixed numbers: every element converts to the type that holds them all
+            let mut ct = *tys.at(0);
+            for i in 1..n { if ct >= 0 { ct = common_type(ct, *tys.at(i)); } }
+            if ct < 0 {
+                here(ck, e.span, "array elements have numeric types with no common type", "", "convert some elements with `as`");
+                return types.POISON;
+            }
+            for i in 0..n {
+                if *tys.at(i) != ct && !apply_conv(ck, child(e.get("elems"), i), *tys.at(i), ct) { return types.POISON; }
+            }
+            first = ct;
+        }
     }
     for i in 0..n { consume(ck, child(e.get("elems"), i)); }
     if first == types.POISON { return types.POISON; }
@@ -5267,7 +5366,9 @@ pub fn ex_arrayrepeat(ck: *Checker, e: *ast.Node, exp: i64) -> i64 {
         return types.POISON;
     }
     e.set("n", ast.v_int(v.i));
-    if t != types.POISON && has_glue(ck, t) {
+    if t != types.POISON && rc_copyable(ck, t) {
+        consume(ck, e.node_of("elem"));       // the copies share one block; each holds a count
+    } else if t != types.POISON && has_glue(ck, t) {
         let ts = ty_str(ck, t);
         here(ck, e.span, format("cannot repeat a value of type `{ts}`: it has a destructor and cannot be copied"), "",
              "write the elements out one by one, e.g. `[make(), make()]`");
@@ -6117,7 +6218,7 @@ pub fn builtin(ck: *Checker, e: *ast.Node, name: String) -> i64 {
         if arity(ck, e, name, 1, 1) {
             let a = child(e.get("args"), 0);
             check(ck, a, -1, false);
-            consume(ck, a);
+            consume_mv(ck, a, true);
         }
         return types.VOID;
     }

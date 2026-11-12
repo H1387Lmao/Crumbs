@@ -190,10 +190,13 @@ def test_bootstrap():
     src = os.path.join(HERE, "..", "selfhost", "crumbsc.cb")
     try:
         s1 = os.path.join(tmp, "stage1")
-        r = run(["build", src, "-o", s1, "--no-warn"])
+        r = subprocess.run(CRUMBS + ["--legacy", "build", src, "-o", s1, "--no-warn"], capture_output=True, text=True)
         if r.returncode != 0:
             return report("bootstrap: stage 1 (built by the Python compiler)", False, r.stdout + r.stderr)
-        want = subprocess.run([sys.executable, os.path.join(HERE, "..", "crumbs.py"), "emit", "--no-rc", src], capture_output=True, text=True).stdout
+        want = subprocess.run([sys.executable, os.path.join(HERE, "..", "crumbs.py"), "--legacy", "emit", src], capture_output=True, text=True).stdout
+        seed = os.path.join(HERE, "..", "bootstrap", "crumbsc.c")
+        report("bootstrap: committed seed bootstrap/crumbsc.c is up to date", open(seed).read() == want,
+               "regenerate: python3 crumbs.py --legacy emit selfhost/crumbsc.cb --no-warn > bootstrap/crumbsc.c")
         exe = s1
         for n in (2, 3):
             c_path = os.path.join(tmp, f"stage{n}.c")
@@ -215,7 +218,7 @@ def test_bootstrap():
         for f in errs:
             rel = os.path.relpath(f, root)
             a = subprocess.run([exe, "check", rel], capture_output=True, text=True, cwd=root)
-            b = subprocess.run([sys.executable, os.path.join(root, "crumbs.py"), "check", rel], capture_output=True, text=True, cwd=root)
+            b = subprocess.run([sys.executable, os.path.join(root, "crumbs.py"), "--legacy", "check", rel], capture_output=True, text=True, cwd=root)
             if a.stdout + a.stderr != b.stdout + b.stderr:
                 bad.append(os.path.basename(f))
         report(f"bootstrap: crumbsc check prints the same diagnostics as the Python compiler on {len(errs)} error programs", not bad, ", ".join(bad))
