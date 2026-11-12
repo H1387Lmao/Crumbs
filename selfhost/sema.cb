@@ -4032,10 +4032,23 @@ pub fn mk_block(sp: ast.Span, stmts: List<ast.Node>) -> ast.Node {
     return b;
 }
 
+fn if_src(sp: ast.Span, it: ast.Node, proto: i64, hidden: bool, pre: *List<ast.Node>) -> ast.Node {
+    if proto == 1 { return it; }
+    if hidden {
+        pre.push(mk_let(sp, "cb_src", false, it, sp));
+        return mk_mcall(sp, mk_ident(sp, "cb_src"), "iter");
+    }
+    return mk_mcall(sp, it, "iter");
+}
+
 pub fn desugar_for(ck: *Checker, s: *ast.Node, proto: i64) {
     let sp = s.span;
     let it = ast.clone_node(s.node_of("iter"));
-    let src = proto == 1 ? it : mk_mcall(sp, it, "iter");
+    // a temporary (`for w in text.split(" ")`) is kept alive in a hidden local, since the iterator borrows it
+    let hidden = proto != 1 && !(it.kind == "Ident" || it.kind == "Field" || it.kind == "Index");
+    let off: i64 = hidden ? 1 : 0;
+    let mut pre: List<ast.Node> = List.new();
+    let src = if_src(sp, it, proto, hidden, &pre);
     let mut var = String.from(s.str_of("var"));
     if var == "_" { var = String.from("cb_x"); }
     let mut brk: List<ast.Node> = List.new();
@@ -4053,15 +4066,17 @@ pub fn desugar_for(ck: *Checker, s: *ast.Node, proto: i64) {
     let mut lp = ast.new_node("Loop", sp);
     lp.set("body", ast.v_node(body));
     let mut os: List<ast.Node> = List.new();
+    if hidden { os.push(ast.clone_node(pre.at(0))); }
     os.push(mk_let(sp, "cb_it", true, src, sp));
     os.push(lp);
     let mut outer = mk_block(sp, os);
     check_block(ck, &outer, true);
     // the user's body is shared between the loop and the desugared form
-    let checked = ast.clone_node(outer.get("stmts").items.at(1).node.at(0).node_of("body").get("stmts").items.at(3).node.at(0));
+    let checked = ast.clone_node(outer.get("stmts").items.at(1 + off).node.at(0).node_of("body").get("stmts").items.at(3).node.at(0));
     s.set("body", ast.v_node(checked));
-    let init0 = outer.get("stmts").items.at(0).node.at(0).node_of("init");
+    let init0 = outer.get("stmts").items.at(off).node.at(0).node_of("init");
     if proto == 1 { s.set("iter", ast.v_node(ast.clone_node(init0))); }
+    else if hidden { s.set("iter", ast.v_node(ast.clone_node(outer.get("stmts").items.at(0).node.at(0).node_of("init")))); }
     else { s.set("iter", ast.v_node(ast.clone_node(init0.node_of("callee").node_of("obj")))); }
     s.set("desugared", ast.v_node(outer));
 }

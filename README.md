@@ -628,16 +628,15 @@ Without `--gc` memory is owned: values are freed deterministically at the end of
 `String` and `List` already work this way; `std.own` gives the same thing to any value. Programs that would rather not think about who frees
 what can build with `--gc` (the conservative collector below).
 
-**Reference counting (default, `--no-rc` turns it off).** Raw `alloc()` memory frees itself too: every pointer and slice that points at the start of an
-`alloc()` block holds one count on it. Copying one (`let b = a;`, passing it, storing it in a struct or closure) retains the block; a variable, field or
+**Reference counting (default, `--no-rc` turns it off).** Raw `alloc()` memory frees itself too: every slice that starts at the beginning of an
+`alloc()` block (the type `alloc` returns) holds one count on it; plain pointers (`&x`, `&buf[i]`, what `list.at(i)` returns) are borrowed and hold none. Copying one (`let b = a;`, passing it, storing it in a struct or closure) retains the block; a variable, field or
 temporary that goes away releases it, and the block is freed when the last count goes. So code that forgets `free`, frees twice, frees and keeps using a
 copy, or returns buffers nobody reads still runs and does not leak (`tests/sloppy/` has 50 such programs, each checked under AddressSanitizer).
 `free(p)` frees at once and clears `p`; copies are then dangling-safe only if they never touch the block again, so prefer letting counts do the work.
-Limits: pointers into the middle of a block, to locals and to arenas/regions are not counted; reference cycles are not collected; blocks made by `alloc` in your
+Limits: a pointer does not keep its block alive, so keep the slice around while pointers into it are in use (`--gc` has no such rule); slices into the middle of a block, of locals and of arenas/regions are not counted; reference cycles are not collected; blocks made by `alloc` in your
 own code destroy their elements (Strings, counted slices, ...) when the last count goes, but blocks you resize by hand with `realloc` keep the
 element count they were allocated with. Every counted block costs a hash-table entry, so allocation-heavy
-inner loops are faster with `--no-rc`. `--gc` replaces counting, and `--no-stdruntime` has none. The self-hosted compiler in `selfhost/` does not implement
-counting yet (its parity tests build with `--no-rc`).
+inner loops are faster with `--no-rc`. `--gc` replaces counting, and `--no-stdruntime` has none. Blocks allocated by the standard library and async frames are never counted.
 
 * `own.new(v)` returns an `Own<T>`, the single owner of a heap value. Owners move like `String`s, and the value is destroyed and its memory
   freed at the end of the owner's scope, so allocation costs what `malloc` costs. Nothing pauses and nothing is traced.

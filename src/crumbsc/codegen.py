@@ -742,12 +742,14 @@ class CodeGen:
         n = self.tmp("cb_n")
         et = self.ctype(e.elem)
         atomic = 1 if self.pointer_free(e.elem) else 0
-        if self.rc and not self.cur_std and self.ck.has_glue(e.elem):        # the elements own memory: destroy them with the block
+        raw = self.rc and (self.cur_std or (e.elem.kind == "struct" and e.elem.sym.name.endswith("__Args")))   # std blocks and async frames are managed by hand
+        if self.rc and not raw and self.ck.has_glue(e.elem):        # the elements own memory: destroy them with the block
             return (f"({{ int64_t {n} = (int64_t)({self.ex(e.args[0])}); "
                     f"({self.ctype(e.ty)}){{ ({et} *)cb_alloc_d({n}, (int64_t)sizeof({et}), {atomic}, {self.loc(e.span)}, "
                     f"(void (*)(void *)){self.glue_fn(e.elem)}), {n} }}; }})")
+        fn = "cb_alloc_raw" if raw else "cb_alloc"      # std containers move their elements by hand: uncounted blocks
         return (f"({{ int64_t {n} = (int64_t)({self.ex(e.args[0])}); "
-                f"({self.ctype(e.ty)}){{ ({et} *)cb_alloc({n}, (int64_t)sizeof({et}), {atomic}, {self.loc(e.span)}), {n} }}; }})")
+                f"({self.ctype(e.ty)}){{ ({et} *){fn}({n}, (int64_t)sizeof({et}), {atomic}, {self.loc(e.span)}), {n} }}; }})")
 
     def pointer_free(self, t):
         """True if values of type `t` can never contain a pointer (so the collector need not scan them)."""

@@ -1407,8 +1407,8 @@ class Checker:
         k = t.kind
         if t == STRING:
             return True                 # an owned String frees its buffer when it goes out of scope
-        if self.rc and leaves and k in ("ptr", "slice"):
-            return True                 # --rc: a pointer or slice holds one count on its block
+        if self.rc and leaves and k == "slice":
+            return True                 # --rc: a slice holds one count on its block; plain pointers are borrowed (`&x`, `list.at(i)`: no count)
         if k in ("arr", "opt"):
             return self.has_glue(t.inner, leaves)
         if k == "clo":

@@ -364,7 +364,7 @@ static void *cb_mem_realloc(void *p, size_t old, size_t n) {
     }
     return q;
 }
-static void cb_mem_free(void *p) { cb_rc_ent s; if (p) { if (cb_rc_drop_ref(p, 1, &s)) cb_rc_destroy(p, &s); else free(p); } }
+static void cb_mem_free(void *p) { cb_rc_ent s; if (p) { cb_rc_drop_ref(p, 1, &s); free(p); } }   /* an explicit free hands elements back to the caller: hand-written containers move them by hand first */
 /* free(x): give back the reference x holds; a block the table does not know is freed outright */
 static void cb_rc_free_ptr(void *p) {
     if (!p) return;
@@ -373,7 +373,7 @@ static void cb_rc_free_ptr(void *p) {
     int gone = 0, known = e != 0;
     if (e && --e->n <= 0) { snap = *e; e->p = CB_RC_DEAD; cb_rc_live--; cb_rc_dead++; gone = 1; }
     CB_RC_UNLOCK();
-    if (gone) cb_rc_destroy(p, &snap);
+    if (gone) free(p);           /* explicit free(): the elements are the caller's business (see cb_mem_free) */
     else if (!known) free(p);
 }
 #else
@@ -1070,14 +1070,15 @@ static void cb_gc_collector_start(void) {
 #undef cb_rc_register
 #define cb_rc_register(p) (p)
 #endif
-static inline void *cb_alloc(int64_t n, int64_t size, int atomic, const char *l) {
+static inline void *cb_alloc_raw(int64_t n, int64_t size, int atomic, const char *l) {    /* never counted: the standard library manages its own blocks */
     if (CB_UNLIKELY(n < 0)) cb_panic(l, "negative allocation size");
     size_t total;
     if (CB_UNLIKELY(__builtin_mul_overflow((size_t)n, (size_t)size, &total))) cb_panic(l, "allocation size overflow");
     void *p = cb_mem_alloc(total, atomic);
     if (CB_UNLIKELY(!p)) cb_panic(l, "out of memory");
-    return cb_rc_register(p);
+    return p;
 }
+static inline void *cb_alloc(int64_t n, int64_t size, int atomic, const char *l) { return cb_rc_register(cb_alloc_raw(n, size, atomic, l)); }
 
 #if defined(CB_RC) && !defined(CB_GC)
 /* a block whose elements own something (Strings, counted slices, ...): they are destroyed when the block's last count goes */
