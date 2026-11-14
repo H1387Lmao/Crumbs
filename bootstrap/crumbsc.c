@@ -209,7 +209,7 @@ static inline bool cb_str_eq(cb_str a, cb_str b) {
 #ifndef CB_NOSTD
 /* the string arena (see below): per thread, so string temporaries need no lock. It lives up here because the collector
    must treat each thread's current chunk as a root (thread-local data is not part of the data segment). */
-static __thread struct { uint8_t *top, *end; } cb_arena;
+static __thread struct { uint8_t *top, *end, *base; } cb_arena;
 /* ---- memory: plain malloc, or a conservative mark-and-sweep collector (--gc) ----------------
    cb_mem_alloc(n, atomic)  zeroed memory; `atomic` = contains no pointers, so the collector never scans it
    cb_mem_realloc / cb_mem_free  explicit release is always allowed (and optional under --gc)       */
@@ -1136,10 +1136,17 @@ static void cb_print_f32(float v) {
 
 static uint8_t *cb_arena_alloc(size_t n, const char *loc) {
     if (CB_UNLIKELY((size_t)(cb_arena.end - cb_arena.top) < n)) {
-        size_t cap = n > ((size_t)1 << 19) ? n * 2 : ((size_t)1 << 20);
+        size_t cap = n > ((size_t)1 << 19) ? n * 2 + 16 : ((size_t)1 << 20);
         uint8_t *chunk = (uint8_t *)cb_mem_alloc(cap, 1);
         if (CB_UNLIKELY(!chunk)) cb_panic(loc, "out of memory");
+#ifndef CB_GC
+        /* keep every chunk reachable (the first word links to the previous one): arena strings live for the whole run,
+           and leak checkers should not report them. Under --gc the collector reclaims dead chunks instead. */
+        *(uint8_t **)chunk = cb_arena.base; cb_arena.base = chunk;
+        cb_arena.top = chunk + sizeof(uint8_t *);
+#else
         cb_arena.top = chunk;
+#endif
         cb_arena.end = chunk + cap;
     }
     uint8_t *p = cb_arena.top;

@@ -1,0 +1,18 @@
+// Sloppy on purpose: grows a buffer by allocating a bigger one each time and abandoning the old one.
+fn main() {
+    let mut cap: i64 = 8;
+    let mut buf = alloc(i64, cap);
+    for i in 0..8 { buf[i] = i; }
+    let mut n: i64 = 8;
+    while n < 4096 {
+        if n < cap { buf[n] = n; n += 1; continue; }
+        let bigger = alloc(i64, cap * 2);
+        for k in 0..n { bigger[k] = buf[k]; }
+        buf = bigger;
+        cap *= 2;
+        bigger[n] = n;
+        n += 1;
+        if n % 512 == 0 { buf[n - 1] = n; }
+    }
+    println("{n} {cap}");
+}

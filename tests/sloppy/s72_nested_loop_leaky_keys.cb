@@ -1,0 +1,12 @@
+// Sloppy on purpose: builds a "key" String in the inner loop and drops the reference by overwriting it.
+fn main() {
+    let mut key = String.empty();
+    let mut hits: i64 = 0;
+    for a in 0..200 {
+        for b in 0..200 {
+            key = format("{a}:{b}");
+            if key.len == 7 { hits += 1; }
+        }
+    }
+    println("{hits} {key.len}");
+}

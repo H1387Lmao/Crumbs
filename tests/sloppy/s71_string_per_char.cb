@@ -1,0 +1,12 @@
+// Sloppy on purpose: turns every character into its own heap String just to compare it.
+fn main() {
+    let text = "the quick brown fox jumps over the lazy dog";
+    let mut vowels: i64 = 0;
+    for r in 0..2000 {
+        for i in 0..text.len {
+            let one = String.from(text[i..i + 1]);
+            if one == "a" || one == "e" || one == "i" || one == "o" || one == "u" { vowels += 1; }
+        }
+    }
+    println("{vowels}");
+}

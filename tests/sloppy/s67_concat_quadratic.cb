@@ -1,0 +1,10 @@
+// Sloppy on purpose: `s = s + x` style quadratic concatenation, every step copies the whole string.
+fn main() {
+    let mut s = String.empty();
+    for i in 0..3000 {
+        let mut t = String.from(s);
+        t.append("xy");
+        s = t;
+    }
+    println("{s.len}");
+}

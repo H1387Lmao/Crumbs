@@ -1,0 +1,10 @@
+// Sloppy on purpose: formats a throwaway string to measure a number's width, 100k times.
+fn width(n: i64) -> i64 {
+    let s = format("{n}");
+    return s.len;
+}
+fn main() {
+    let mut w: i64 = 0;
+    for i in 0..100000 { w += width(i); }
+    println("{w}");
+}

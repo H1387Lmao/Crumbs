@@ -1,0 +1,7 @@
+// Sloppy on purpose: a "cache" list that keeps every string ever produced, never evicted.
+import std.list;
+fn main() {
+    let mut cache: list.List<String> = list.List.new<String>();
+    for i in 0..30000 { cache.push(format("entry-number-{i}-with-padding-padding-padding")); }
+    println("{cache.len}");
+}
