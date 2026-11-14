@@ -1,0 +1,12 @@
+// Sloppy on purpose: allocates a 1 MB scratch buffer per call and forgets about it (would eat 50 GB if leaked).
+fn touch(n: i64) -> i64 {
+    let scratch = alloc(u8, 1048576);
+    scratch[0] = 1;
+    scratch[1048575] = 2;
+    return n + scratch[0] + scratch[1048575];
+}
+fn main() {
+    let mut s: i64 = 0;
+    for i in 0..50000 { s = touch(s); }
+    println("{s}");
+}

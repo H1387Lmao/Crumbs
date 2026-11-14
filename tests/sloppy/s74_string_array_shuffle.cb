@@ -1,0 +1,15 @@
+// Sloppy on purpose: copies the whole word list into fresh Strings on every "sort" pass.
+import std.list;
+fn main() {
+    let words = ["pear", "fig", "apple", "kiwi", "plum"];
+    let mut best = String.empty();
+    for pass in 0..5000 {
+        let mut copy: list.List<String> = list.List.new<String>();
+        for w in words { copy.push(String.from(w)); }
+        let v = copy.view();
+        let mut m: i64 = 0;
+        for i in 1..v.len { if v[i].len > v[m].len { m = i; } }
+        best = String.from(v[m]);
+    }
+    println("{best}");
+}

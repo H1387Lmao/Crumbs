@@ -1,0 +1,17 @@
+// Sloppy on purpose: reverses a string by prepending into a brand new String per character.
+fn rev(s: str) -> String {
+    let mut out = String.empty();
+    for i in 0..s.len {
+        let mut t = String.from(s[i..i + 1]);
+        t.append(out);
+        out = t;
+    }
+    return out;
+}
+fn main() {
+    let r = rev("hello, sloppy world");
+    println("{r}");
+    let mut n: i64 = 0;
+    for i in 0..3000 { n += rev("abcdefghijklmnopqrstuvwxyz").len; }
+    println("{n}");
+}

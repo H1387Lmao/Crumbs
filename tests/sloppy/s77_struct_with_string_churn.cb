@@ -1,0 +1,10 @@
+// Sloppy on purpose: replaces a struct's String field in a loop, the old one is simply dropped on the floor.
+struct Person { name: String, age: i64 }
+fn main() {
+    let mut p = Person { name: String.from("start"), age: 0 };
+    for i in 0..50000 {
+        p.name = format("person-{i}-with-a-rather-long-name");
+        p.age += 1;
+    }
+    println("{p.name} {p.age}");
+}

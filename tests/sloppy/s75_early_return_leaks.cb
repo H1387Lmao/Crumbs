@@ -1,0 +1,13 @@
+// Sloppy on purpose: allocates before an early return and never cleans up on that path.
+fn find(n: i64) -> i64 {
+    let tmp = format("probe-{n}-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+    if n % 2 == 0 { return -1; }
+    let more = alloc(i64, 64);
+    more[0] = tmp.len;
+    return more[0];
+}
+fn main() {
+    let mut s: i64 = 0;
+    for i in 0..40000 { s += find(i); }
+    println("{s}");
+}

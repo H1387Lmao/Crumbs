@@ -1,0 +1,10 @@
+// Sloppy on purpose: builds a fresh big String every iteration and never frees any of them.
+fn main() {
+    let mut total: i64 = 0;
+    for i in 0..200000 {
+        let mut s = String.empty();
+        for j in 0..500 { s.append("abcdefghij"); }
+        total += s.len + (i % 3);
+    }
+    println("{total}");
+}
